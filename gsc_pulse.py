@@ -367,7 +367,7 @@ def sync_history(gsc_service, sheets_service, run: SiteRun, started_at: float, o
     print()
 
 
-def sync_reports(gsc_service, sheets_service, run: SiteRun):
+def sync_reports(gsc_service, sheets_service, run: SiteRun, rebuild_alarms: bool = False):
     """Phase 1b: the report tabs of one site (skipped when it has no reports sheet)."""
     site = run.site
     site_header(run, "Reports")
@@ -392,7 +392,8 @@ def sync_reports(gsc_service, sheets_service, run: SiteRun):
         print("reports: no final Search Console data available yet\n")
         return
     try:
-        result = reports.run_reports(sheets_service, site.reports_sheet_id, site, fetch, final, today)
+        result = reports.run_reports(sheets_service, site.reports_sheet_id, site, fetch, final,
+                                     today, rebuild_alarms=rebuild_alarms)
     except Exception:
         run.reports_text = "failed"
         raise
@@ -514,6 +515,7 @@ def main():
     # ---- Page type discovery: its own command, nothing else runs ------------
     discover_name = (args.discover_page_types or os.environ.get("DISCOVER_SITE") or "").strip()
     discover_site = pick_discovery_site(site_list, discover_name) if discover_name else None
+    rebuild_alarms = os.environ.get("REBUILD_ALARMS", "").strip().lower() in ("1", "true", "yes")
 
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
     enabled = [r for r in runs if r.status != "disabled"]
@@ -557,7 +559,7 @@ def main():
         if not r.v1_done:
             continue
         try:
-            sync_reports(gsc_service, sheets_service, r)
+            sync_reports(gsc_service, sheets_service, r, rebuild_alarms)
         except Exception as e:
             fail_site(r, e)
             print()

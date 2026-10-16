@@ -9,6 +9,11 @@ on:
         description: "Page type discovery only: site name from SITES_JSON (leave empty for the normal sync)"
         required: false
         default: ""
+      rebuild_alarms:
+        description: "Recompute R Alarms for all past periods with the current rules (normal sync otherwise)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # only used by the keep-alive step below
@@ -40,6 +45,7 @@ jobs:
           HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
           SITES_JSON: ${{ secrets.SITES_JSON }}
           DISCOVER_SITE: ${{ inputs.discover_site }}
+          REBUILD_ALARMS: ${{ inputs.rebuild_alarms }}
         run: python gsc_pulse.py
 
       # Public repos pause scheduled runs after 60 days without activity.

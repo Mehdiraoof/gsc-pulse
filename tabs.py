@@ -82,3 +82,11 @@ def number(cell):
     except (TypeError, ValueError):
         return cell
     return int(f) if f == int(f) else f
+
+
+def add_columns(sheets, spreadsheet_id: str, sheet_id: int, count: int):
+    """Widens a tab's grid by `count` columns."""
+    history._write(sheets.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{"appendDimension": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                                                 "length": count}}]}))

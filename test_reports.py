@@ -134,9 +134,9 @@ class ReportsTestCase(unittest.TestCase):
             rows.extend(page)
         return rows
 
-    def run_reports(self, site=None, final=FINAL, today=TODAY):
+    def run_reports(self, site=None, final=FINAL, today=TODAY, rebuild=False):
         return reports.run_reports(self.sheets, RID, site or site_with(), self.fetch,
-                                   final, today, self.logs.append)
+                                   final, today, self.logs.append, rebuild_alarms=rebuild)
 
     def tab(self, name):
         return self.sheets.books[RID][name].data
@@ -518,38 +518,87 @@ class KeywordPageEngineTests(ReportsTestCase):
 class AlarmTests(unittest.TestCase):
     TH = {k: v for k, v in sites.THRESHOLD_DEFAULTS.items()}
 
-    def test_segment_change_thresholds_and_severity(self):
+    def test_defaults(self):
+        self.assertEqual(self.TH["alarm_page_loss_min_clicks"], 30)
+        self.assertEqual(self.TH["alarm_page_loss_shown"], 5)
+        self.assertEqual(self.TH["alarm_max_per_period"], 10)
+
+    def test_segment_change_thresholds_severity_and_impact(self):
         f = lambda c, p: alarms.segment_change("2026-09", "2026-08", "All", c, p, self.TH)   # noqa: E731
         self.assertEqual(f(119, 100), [])                         # +19%
         self.assertEqual(f(100, 100), [])
         medium = f(120, 100)
-        self.assertEqual(medium[0][:3], ["2026-09", "medium", "Segment clicks"])
-        self.assertIn("rose by 20.0%", medium[0][3])
-        self.assertEqual(f(60, 100)[0][1], "high")                 # -40%
-        self.assertIn("fell by 40.0%", f(60, 100)[0][3])
-        self.assertEqual(f(70, 100)[0][1], "medium")
+        self.assertEqual((medium[0].period, medium[0].severity, medium[0].area),
+                         ("2026-09", "medium", "Segment clicks"))
+        self.assertIn("rose by 20.0%", medium[0].message)
+        self.assertEqual(medium[0].impact, 20)
+        self.assertEqual(f(60, 100)[0].severity, "high")           # -40%
+        self.assertIn("fell by 40.0%", f(60, 100)[0].message)
+        self.assertEqual(f(60, 100)[0].impact, 40)
+        self.assertEqual(f(70, 100)[0].severity, "medium")
         self.assertEqual(f(10, 0), [])                            # no base
         self.assertEqual(f(60, 29), [])                           # below alarm_min_clicks (30)
         self.assertEqual(f(2, 1), [])
 
-    def test_lost_keyword_needs_ten_clicks(self):
+    def test_lost_keyword_needs_ten_clicks_and_carries_its_clicks_as_impact(self):
         out = alarms.lost_keywords("2026-09", "2026-08", [("big", 10), ("small", 9)], self.TH)
         self.assertEqual(len(out), 1)
-        self.assertEqual(out[0][2], "Lost keyword")
-        self.assertIn("big", out[0][3])
-        self.assertIn("10 clicks in 2026-08", out[0][3])
+        self.assertEqual(out[0].area, "Lost keyword")
+        self.assertIn("big", out[0].message)
+        self.assertIn("10 clicks in 2026-08", out[0].message)
+        self.assertEqual(out[0].impact, 10)
 
-    def test_page_loss_needs_50_percent_and_20_clicks(self):
-        pages = [("https://x.test/a", 10, 20), ("https://x.test/b", 11, 20), ("https://x.test/c", 0, 19),
-                 ("https://x.test/d", 0, 40)]
-        out = alarms.page_losses("2026-09", "2026-08", pages, self.TH)
-        self.assertEqual([r[3].split()[2] for r in out], ["https://x.test/a", "https://x.test/d"])
-        self.assertIn("lost 50.0% of its clicks", out[0][3])
+    def losses(self, pages, **th):
+        return alarms.page_losses("2026-09", "2026-08", pages, {**self.TH, **th})
+
+    def test_only_the_five_biggest_losses_are_listed_then_one_summary_line(self):
+        pages = [(f"https://x.test/p{i:02d}", 0, 40 + i) for i in range(12)]      # 12 pages lost everything
+        out = self.losses(pages)
+        self.assertEqual(len(out), 6)
+        self.assertEqual([a.impact for a in out[:5]], [51, 50, 49, 48, 47])        # most clicks lost first
+        self.assertIn("https://x.test/p11", out[0].message)
+        summary = out[5]
+        self.assertEqual(summary.message, "and 7 more pages lost 50%+ of their clicks")
+        self.assertEqual((summary.severity, summary.area), ("medium", "Page loss"))
+        self.assertTrue(summary.is_summary)
+        self.assertTrue(46 < summary.impact < 47)                  # sorts right after the pages it counts
+        self.assertFalse(any(a.is_summary for a in out[:5]))
+
+    def test_no_summary_line_when_five_or_fewer(self):
+        for n in (1, 5):
+            out = self.losses([(f"https://x.test/p{i}", 0, 40) for i in range(n)])
+            self.assertEqual(len(out), n)
+            self.assertFalse(any(a.is_summary for a in out))
+
+    def test_summary_line_in_the_singular(self):
+        out = self.losses([(f"https://x.test/p{i}", 0, 40) for i in range(6)])
+        self.assertEqual(out[-1].message, "and 1 more page lost 50%+ of its clicks")
+
+    def test_a_page_needs_30_clicks_last_month(self):
+        self.assertEqual(self.losses([("https://x.test/a", 0, 29)]), [])
+        self.assertEqual(len(self.losses([("https://x.test/a", 0, 30)])), 1)
+        self.assertEqual(len(self.losses([("https://x.test/a", 0, 20)], alarm_page_loss_min_clicks=20)), 1)
+
+    def test_a_page_needs_to_lose_half_its_clicks(self):
+        self.assertEqual(self.losses([("https://x.test/a", 21, 40)]), [])     # -47.5%
+        out = self.losses([("https://x.test/a", 20, 40)])                      # -50%
+        self.assertIn("lost 50.0% of its clicks compared with 2026-08 (40 to 20)", out[0].message)
+        self.assertEqual(out[0].impact, 20)
+
+    def test_equal_losses_are_ordered_by_page_so_output_is_stable(self):
+        out = self.losses([("https://x.test/b", 0, 40), ("https://x.test/a", 0, 40)])
+        self.assertIn("https://x.test/a", out[0].message)
+
+    def test_how_many_are_listed_and_the_wording_follow_the_settings(self):
+        pages = [(f"https://x.test/p{i}", 0, 40) for i in range(4)]
+        out = self.losses(pages, alarm_page_loss_shown=2, alarm_page_loss_pct=60)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(out[2].message, "and 2 more pages lost 60%+ of their clicks")
 
     def test_aio_drop(self):
         f = lambda a, p: alarms.aio_drop("2026-09", "2026-08", a, p, self.TH)    # noqa: E731
         self.assertEqual(f(71, 100), [])
-        self.assertEqual(f(70, 100)[0][2], "AI Overviews")
+        self.assertEqual(f(70, 100)[0].area, "AI Overviews")
         self.assertEqual(f(None, 100), [])
         self.assertEqual(f(10, None), [])
         self.assertEqual(f(0, 0), [])
@@ -559,8 +608,8 @@ class AlarmTests(unittest.TestCase):
         out = alarms.new_url_patterns("2026-09", urls("news", 5) + urls("misc", 4),
                                       urls("news", 2), self.TH)
         self.assertEqual(len(out), 1)
-        self.assertIn("first folder", out[0][3])
-        self.assertIn("5 pages", out[0][3])
+        self.assertIn("first folder", out[0].message)
+        self.assertIn("5 pages", out[0].message)
         # the group was already big last month: not new any more
         self.assertEqual(alarms.new_url_patterns("2026-09", urls("news", 6), urls("news", 5), self.TH), [])
 
@@ -569,8 +618,8 @@ class AlarmTests(unittest.TestCase):
         shop = [f"https://shop.x.test/p{i}" for i in range(5)]
         out = alarms.new_url_patterns("2026-09", main + shop, main, self.TH)
         self.assertEqual(len(out), 1)
-        self.assertIn("subdomain", out[0][3])
-        self.assertIn("shop.x.test", out[0][3])
+        self.assertIn("subdomain", out[0].message)
+        self.assertIn("shop.x.test", out[0].message)
 
     def test_thresholds_come_from_the_site(self):
         site = sites.Site(name="s", thresholds={"alarm_clicks_change_pct": 10})
@@ -578,7 +627,77 @@ class AlarmTests(unittest.TestCase):
         self.assertEqual(len(alarms.segment_change("p", "q", "All", 112, 100, th)), 1)
 
 
+class CapTests(unittest.TestCase):
+
+    @staticmethod
+    def A(severity, impact, area="Segment clicks", message=None, period="2026-09"):
+        return alarms.Alarm(period, severity, area, message or f"{severity}-{impact}-{area}", impact)
+
+    def test_high_severity_first_then_the_biggest_impact(self):
+        out = alarms.cap_period([self.A("medium", 5), self.A("low", 999), self.A("high", 1),
+                                 self.A("medium", 50)], 10)
+        self.assertEqual([(a.severity, a.impact) for a in out],
+                         [("high", 1), ("medium", 50), ("medium", 5), ("low", 999)])
+
+    def test_cut_to_the_cap(self):
+        many = [self.A("medium", i) for i in range(30)] + [self.A("high", 0.5), self.A("high", 0.4)]
+        out = alarms.cap_period(many, 10)
+        self.assertEqual(len(out), 10)
+        self.assertEqual([a.severity for a in out[:2]], ["high", "high"])
+        self.assertEqual([a.impact for a in out[2:]], [29, 28, 27, 26, 25, 24, 23, 22])
+
+    def test_duplicates_are_counted_once(self):
+        out = alarms.cap_period([self.A("high", 5, message="same"), self.A("high", 5, message="same")], 10)
+        self.assertEqual(len(out), 1)
+
+    def test_the_summary_line_stays_with_the_page_losses_it_counts(self):
+        highs = [self.A("high", 900 + i) for i in range(5)]
+        pages = [self.A("medium", 100 - i, area="Page loss", message=f"The page p{i} lost") for i in range(5)]
+        summary = self.A("medium", 95.99, area="Page loss", message="and 3 more pages lost 50%+ of their clicks")
+        out = alarms.cap_period(highs + pages + [summary], 10)
+        self.assertEqual(len(out), 10)
+        self.assertIn(summary, out)                           # kept ...
+        self.assertTrue(all(p in out for p in pages))         # ... with every listed page
+        self.assertEqual(len([a for a in out if a.severity == "high"]), 4)   # the lowest other row went
+
+    def test_import_problems_always_come_first(self):
+        problem = alarms.import_problem("2026-09", "tab not imported")
+        out = alarms.cap_period([self.A("high", 5000), problem, self.A("medium", 10 ** 6)], 10)
+        self.assertEqual(out[0], problem)
+        self.assertEqual(problem.area, "AIO import")
+
+    def test_row_and_back(self):
+        a = self.A("medium", 372.4, message="x")
+        self.assertEqual(a.row(), ["2026-09", "medium", "Segment clicks", "x", 372])
+        back = alarms.from_row([str(c) for c in a.row()])
+        self.assertEqual((back.period, back.severity, back.area, back.message, back.impact),
+                         ("2026-09", "medium", "Segment clicks", "x", 372))
+        self.assertEqual(alarms.from_row(["2026-09", "low", "Old rows", "m"]).impact, 0)   # old 4-column row
+
+
 class AlarmEngineTests(ReportsTestCase):
+
+    def alarm_rows(self, period):
+        return [r for r in self.rows(reports.ALARMS) if r[0] == period]
+
+    def losers(self, prev_label, label, threshold=30, pct=50):
+        """Pages that lost at least `pct`% of their clicks, computed straight from the traffic."""
+        def clicks(span):
+            out = {}
+            for r in self.records:
+                if span[0] <= r["date"] <= span[1]:
+                    url = r["page"].split("#")[0]
+                    out[url] = out.get(url, 0) + r["clicks"]
+            return out
+        prev, cur = clicks(month_span(prev_label)), clicks(month_span(label))
+        found = [(p - cur.get(u, 0), u) for u, p in prev.items()
+                 if p >= threshold and (p - cur.get(u, 0)) / p * 100 >= pct]
+        return sorted(found, key=lambda f: (-f[0], f[1]))
+
+    def test_alarms_have_an_impact_column(self):
+        self.run_reports()
+        self.assertEqual(self.tab(reports.ALARMS)[0],
+                         ["Period", "Severity", "Area", "Message", "Impact (clicks)"])
 
     def test_alarms_are_written_once(self):
         self.run_reports()
@@ -591,15 +710,105 @@ class AlarmEngineTests(ReportsTestCase):
         self.run_reports()
         self.assertEqual(self.rows(reports.ALARMS), first)
 
-    def test_a_big_drop_raises_a_high_alarm(self):
+    def test_every_period_is_capped_and_ordered(self):
+        self.run_reports()
+        periods_seen = {r[0] for r in self.rows(reports.ALARMS)}
+        self.assertTrue(periods_seen)
+        rank = {"high": 0, "medium": 1, "low": 2}
+        for p in periods_seen:
+            rows = self.alarm_rows(p)
+            self.assertLessEqual(len(rows), 10, p)
+            keys = [(rank[r[1]], -float(r[4])) for r in rows]
+            self.assertEqual(keys, sorted(keys), p)
+
+    def test_many_page_losses_become_five_pages_and_one_summary_line(self):
+        for i in range(20):                                        # 20 pages that vanish in September
+            for d in range(31):
+                self.records.append({"date": date(2026, 8, 1) + timedelta(days=d), "query": "en_a q0",
+                                     "page": f"https://www.alpha.test/gone/p{i:02d}", "clicks": 2,
+                                     "impressions": 40, "position": 5.0, "device": "DESKTOP",
+                                     "country": "usa"})
+        self.run_reports()
+        expected = self.losers("2026-08", "2026-09")
+        self.assertGreaterEqual(len(expected), 20)
+        rows = self.alarm_rows("2026-09")
+        page_rows = [r for r in rows if r[2] == "Page loss"]
+        listed = [r for r in page_rows if not r[3].startswith("and ")]
+        summary = [r for r in page_rows if r[3].startswith("and ")]
+        self.assertEqual(len(listed), 5)
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0][3], f"and {len(expected) - 5} more pages lost 50%+ of their clicks")
+        for lost, url in expected[:5]:                            # the five with the most clicks lost
+            self.assertTrue(any(url in r[3] and float(r[4]) == lost for r in listed), url)
+        self.assertLessEqual(len(rows), 10)
+        # the complete list of page losses lives in R Pages
+        declining = {r[2] for r in self.rows(reports.PAGES) if r[0] == "2026-09" and r[1] == "Declining"}
+        self.assertTrue(all(url in declining for _, url in expected))
+
+    def test_a_big_drop_is_high_and_comes_first(self):
         for r in self.records:
             if date(2026, 9, 1) <= r["date"] <= date(2026, 9, 30):
                 r["clicks"] = 1
         self.run_reports()
-        high = [r for r in self.rows(reports.ALARMS)
-                if r[0] == "2026-09" and r[2] == "Segment clicks" and r[1] == "high"]
-        self.assertTrue(high)
-        self.assertIn("fell by", high[0][3])
+        rows = self.alarm_rows("2026-09")
+        self.assertEqual(rows[0][1], "high")
+        self.assertEqual(rows[0][2], "Segment clicks")
+        self.assertIn("fell by", rows[0][3])
+        rank = {"high": 0, "medium": 1, "low": 2}
+        self.assertEqual([rank[r[1]] for r in rows], sorted(rank[r[1]] for r in rows))
+
+    def test_impact_is_the_clicks_involved(self):
+        self.run_reports()
+        lost = [r for r in self.alarm_rows("2026-09") if r[2] == "Lost keyword" and "seasonal" in r[3]][0]
+        self.assertEqual(float(lost[4]), 12 * 31)
+
+    def test_old_alarms_without_an_impact_column_are_rebuilt_automatically(self):
+        self.run_reports()
+        wanted = [list(r) for r in self.rows(reports.ALARMS)]
+        data_before = {n: [list(r) for r in self.sheets.books[RID][n].data]
+                       for n in (reports.MONTHLY, reports.WEEKLY, reports.KEYWORDS, reports.PAGES)}
+        appends = self.sheets.append_calls
+        tab = self.sheets.books[RID][reports.ALARMS]
+        tab.data = [["Period", "Severity", "Area", "Message"]] + [
+            ["2026-09", "medium", "Page loss", f"old uncapped alarm {i}"] for i in range(40)]
+        tab.col_count = 4
+        self.logs.clear()
+        self.run_reports()
+        self.assertEqual(self.tab(reports.ALARMS)[0], ["Period", "Severity", "Area", "Message", "Impact (clicks)"])
+        self.assertEqual(self.rows(reports.ALARMS), wanted)
+        self.assertEqual(tab.col_count, 5)
+        self.assertTrue(any("R Alarms rebuilt for all periods" in l for l in self.logs))
+        for n, data in data_before.items():                       # no data rows were touched
+            self.assertEqual(self.sheets.books[RID][n].data, data, n)
+        self.assertEqual(self.sheets.append_calls, appends)
+
+    def test_a_forced_rebuild_replaces_stale_rows_and_keeps_data_rows(self):
+        self.run_reports()
+        wanted = [list(r) for r in self.rows(reports.ALARMS)]
+        monthly = [list(r) for r in self.rows(reports.MONTHLY)]
+        self.sheets.books[RID][reports.ALARMS].data.append(["2026-05", "high", "Segment clicks", "stale", "999"])
+        result = self.run_reports(rebuild=True)
+        self.assertEqual(self.rows(reports.ALARMS), wanted)
+        self.assertEqual(self.rows(reports.MONTHLY), monthly)
+        self.assertEqual(sum(result.alarm_counts.values()), len(wanted))
+        self.assertTrue(any("Page loss" in l and "R Alarms rebuilt" in l for l in self.logs))
+
+    def test_rebuild_applies_changed_thresholds_to_past_periods(self):
+        self.run_reports()
+        before = len(self.rows(reports.ALARMS))
+        site = site_with(thresholds={"alarm_max_per_period": 2, "alarm_page_loss_shown": 1})
+        self.run_reports(site, rebuild=True)
+        rows = self.rows(reports.ALARMS)
+        self.assertLess(len(rows), before)
+        for p in {r[0] for r in rows}:
+            self.assertLessEqual(len(self.alarm_rows(p)), 2)
+
+    def test_periods_without_new_alarms_are_left_exactly_as_they_are(self):
+        self.run_reports()
+        before = [list(r) for r in self.rows(reports.ALARMS)]
+        self.run_reports(final=date(2026, 10, 31), today=date(2026, 11, 5))
+        rows = self.rows(reports.ALARMS)
+        self.assertEqual([r for r in rows if r[0] != "2026-10"], before)
 
 
 class NotesTests(ReportsTestCase):

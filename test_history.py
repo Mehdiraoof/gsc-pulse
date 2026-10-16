@@ -179,6 +179,12 @@ class FakeSheets:
                     book[p["title"]] = t
                     replies.append({"addSheet": {"properties": {
                         "sheetId": t.sheet_id, "title": p["title"]}}})
+                elif "appendDimension" in req:
+                    ad = req["appendDimension"]
+                    for t in book.values():
+                        if t.sheet_id == ad["sheetId"] and ad["dimension"] == "COLUMNS":
+                            t.col_count += ad["length"]
+                    replies.append({})
                 elif "deleteSheet" in req:
                     sid = req["deleteSheet"]["sheetId"]
                     for title in [k for k, t in book.items() if t.sheet_id == sid]:

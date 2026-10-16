@@ -198,6 +198,18 @@ class ReportConfigTests(unittest.TestCase):
         self.fails(thresholds={"lost_new_min_impressions": True})
         self.fails(thresholds=[1])
 
+    def test_alarm_limits(self):
+        s = self.parse(thresholds={"alarm_max_per_period": 7, "alarm_page_loss_shown": 0,
+                                   "alarm_page_loss_min_clicks": 25})
+        self.assertEqual((s.threshold("alarm_max_per_period"), s.threshold("alarm_page_loss_shown"),
+                          s.threshold("alarm_page_loss_min_clicks")), (7, 0, 25))
+        self.assertEqual((sites.THRESHOLD_DEFAULTS["alarm_max_per_period"],
+                          sites.THRESHOLD_DEFAULTS["alarm_page_loss_shown"],
+                          sites.THRESHOLD_DEFAULTS["alarm_page_loss_min_clicks"]), (10, 5, 30))
+        self.fails(thresholds={"alarm_max_per_period": 0})
+        self.fails(thresholds={"alarm_max_per_period": 2.5})
+        self.fails(thresholds={"alarm_page_loss_shown": 1.5})
+
     def test_weekly_segments_must_be_boolean(self):
         self.fails(weekly_segments="yes")
 

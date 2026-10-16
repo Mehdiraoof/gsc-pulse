@@ -29,6 +29,7 @@ LEGACY_NAME    = "site-1"
 TYPE_NAME_PATTERN = re.compile(r"[\w][\w \-]{0,39}")  # letters (any script), digits, space, - _
 RESERVED_SEGMENTS = ("all", "other")
 MAX_PAGE_TYPES = 20
+WHOLE_NUMBER_MIN = {"movers_top_n": 1, "alarm_max_per_period": 1, "alarm_page_loss_shown": 0}
 
 # Report thresholds (all optional in SITES_JSON, per site)
 THRESHOLD_DEFAULTS = {
@@ -39,7 +40,9 @@ THRESHOLD_DEFAULTS = {
     "alarm_min_clicks":            30,   # ignore segments smaller than this (noise)
     "alarm_lost_keyword_clicks":   10,   # a lost keyword had at least this many clicks
     "alarm_page_loss_pct":         50,   # a page lost this much of its clicks
-    "alarm_page_loss_min_clicks":  20,   # ... having had at least this many
+    "alarm_page_loss_min_clicks":  30,   # ... having had at least this many in the month before
+    "alarm_page_loss_shown":        5,   # page losses listed per period (the rest become one line)
+    "alarm_max_per_period":        10,   # R Alarms rows per period, all types together
     "alarm_aio_drop_pct":          30,   # AIO impressions fell this much month on month
     "alarm_new_pattern_pages":      5,   # pages in Other that share a first path segment or host
 }
@@ -123,9 +126,9 @@ def _parse_thresholds(value, where: str) -> dict:
                                    f"{', '.join(THRESHOLD_DEFAULTS)})")
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
             raise SitesConfigError(f"{where}: threshold '{key}' must be a number, 0 or more")
-        if key == "movers_top_n" and (int(v) != v or v < 1):
-            raise SitesConfigError(f"{where}: threshold 'movers_top_n' must be a whole number "
-                                   f"of at least 1")
+        if key in WHOLE_NUMBER_MIN and (int(v) != v or v < WHOLE_NUMBER_MIN[key]):
+            raise SitesConfigError(f"{where}: threshold '{key}' must be a whole number "
+                                   f"of at least {WHOLE_NUMBER_MIN[key]}")
         out[key] = v
     return out
 

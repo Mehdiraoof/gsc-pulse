@@ -314,5 +314,51 @@ class AioPagesTests(AioTestCase):
         self.assertEqual(sep, [["2026-09", "Growing", a, 150, 50, 100]])
 
 
+class LateAioAlarmTests(AioTestCase):
+    QUIET = {"alarm_min_clicks": 10 ** 9, "alarm_lost_keyword_clicks": 10 ** 9,
+             "alarm_page_loss_min_clicks": 10 ** 9, "alarm_new_pattern_pages": 10 ** 9}
+
+    def test_an_aio_drop_found_after_the_month_closed_is_added_to_its_period(self):
+        site = site_with(thresholds=self.QUIET)
+        self.run_reports(site)
+        self.assertEqual(self.rows(reports.ALARMS), [])
+        self.add_month("2026-08", 200, {PAGES["en_a"]: 100})
+        self.add_month("2026-09", 100, {PAGES["en_a"]: 100})
+        self.run_reports(site)
+        rows = self.rows(reports.ALARMS)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][:3], ["2026-09", "medium", "AI Overviews"])
+        self.assertIn("fell by 51.6%", rows[0][3])
+        self.run_reports(site)                                       # and only once
+        self.assertEqual(self.rows(reports.ALARMS), rows)
+
+    def test_the_aio_alarm_is_kept_next_to_the_alarms_the_month_already_had(self):
+        site = site_with(thresholds={"alarm_lost_keyword_clicks": 10 ** 9,
+                                     "alarm_page_loss_min_clicks": 10 ** 9})
+        for r in self.records:                                   # September collapses: a segment alarm
+            if date(2026, 9, 1) <= r["date"] <= date(2026, 9, 30):
+                r["clicks"] = 1
+        self.run_reports(site)
+        before = [r for r in self.rows(reports.ALARMS) if r[0] == "2026-09"]
+        self.assertTrue(before)
+        self.add_month("2026-08", 200, {PAGES["en_a"]: 100})
+        self.add_month("2026-09", 100, {PAGES["en_a"]: 100})
+        self.run_reports(site)
+        after = [r for r in self.rows(reports.ALARMS) if r[0] == "2026-09"]
+        self.assertEqual(len(after), len(before) + 1)
+        for r in before:
+            self.assertIn(r, after)
+
+    def test_a_forced_rebuild_keeps_the_aio_alarms(self):
+        site = site_with(thresholds=self.QUIET)
+        self.add_month("2026-08", 200, {PAGES["en_a"]: 100})
+        self.add_month("2026-09", 100, {PAGES["en_a"]: 100})
+        self.run_reports(site)
+        first = [list(r) for r in self.rows(reports.ALARMS)]
+        self.assertEqual(len(first), 1)
+        self.run_reports(site, rebuild=True)
+        self.assertEqual(self.rows(reports.ALARMS), first)
+
+
 if __name__ == "__main__":
     unittest.main()

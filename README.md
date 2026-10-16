@@ -229,7 +229,7 @@ Google permissions are needed.
 | `R Keywords` | Per month vs the previous month: `Lost`, `New`, `Growing` and `Declining` keywords. |
 | `R Pages` | Per month: `Growing` / `Declining` pages vs the previous month and `YoY Growing` / `YoY Declining` vs the same month last year, with the page type(s) of each page. |
 | `R AIO Pages` | `Growing` / `Declining` pages by AI Overview impressions. |
-| `R Alarms` | Plain-English alarms (see below). |
+| `R Alarms` | Plain-English alarms, at most 10 per period, with the clicks involved (see below). |
 | `Notes` | Fixed explanations of how to read the numbers. |
 | `AIO Raw` | The imported AI Overview data (you never edit it). |
 
@@ -270,17 +270,31 @@ segments (and, for flat sites, the first word of the slug) with page counts, cli
 impressions and example URLs. Rules are never written automatically; you decide which
 patterns become page types.
 
-**Alarms** (`R Alarms`: `Period, Severity, Area, Message`). Each is a fixed rule with a
-threshold you can change under `thresholds`:
+**Alarms** (`R Alarms`: `Period, Severity, Area, Message, Impact (clicks)`). Each is a fixed rule
+with a threshold you can change under `thresholds`:
 
 - a segment's clicks changed by 20% or more vs the previous month (`high` from 40%), if the
   segment has at least 30 clicks (`alarm_clicks_change_pct`, `alarm_clicks_high_pct`, `alarm_min_clicks`)
 - a lost keyword that had 10 or more clicks the month before (`alarm_lost_keyword_clicks`)
-- a page that lost 50% or more of its clicks, having had 20 or more (`alarm_page_loss_pct`, `alarm_page_loss_min_clicks`)
+- a page that lost 50% or more of its clicks, having had 30 or more the month before
+  (`alarm_page_loss_pct`, `alarm_page_loss_min_clicks`)
 - AI Overview impressions down 30% or more (`alarm_aio_drop_pct`)
 - a possible new section: 5 or more pages in `Other` sharing the first folder or a subdomain
   (`alarm_new_pattern_pages`), only for sites with page types
-- an AI Overview import that could not be read
+- an AI Overview import that could not be read (always `high`, always first)
+
+**Keeping the list short.** The last column, *Impact*, is the number of clicks involved. Per period
+R Alarms keeps at most **10 rows** (`alarm_max_per_period`), high severity first and then the
+biggest impact. Page losses are the noisiest rule, so only the **5 pages with the most clicks lost**
+are listed (`alarm_page_loss_shown`), followed by one line such as *"and 12 more pages lost 50%+
+of their clicks"*. The full list of page changes is in `R Pages`.
+
+A period's alarms are written when the period is first reported; if something new turns up
+later for it (for example an AI Overview import), it is merged in and the period is cut to 10
+again. To recompute **R Alarms for every past period** with the current rules, for example after
+changing a threshold, run the workflow manually with *rebuild_alarms* ticked. This rewrites only
+R Alarms; the data tabs are never touched. (An R Alarms tab written by an older version, without
+the Impact column, is rebuilt automatically on the next run.)
 
 Other thresholds: `lost_new_min_impressions` (10) and `movers_top_n` (100).
 

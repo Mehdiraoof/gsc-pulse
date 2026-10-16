@@ -64,7 +64,7 @@ AIO_PAGES_HEADER = ["Period", "Type", "Page", "AIO Impr", "AIO Impr prev", "AIO 
 
 TABS = [(MONTHLY, MONTHLY_HEADER, "Q"), (WEEKLY, WEEKLY_HEADER, "Q"),
         (KEYWORDS, KEYWORDS_HEADER, "L"), (PAGES, PAGES_HEADER, "M"),
-        (AIO_PAGES, AIO_PAGES_HEADER, "F"), (ALARMS, alarms.HEADER, "D"),
+        (AIO_PAGES, AIO_PAGES_HEADER, "F"), (ALARMS, alarms.HEADER, "E"),
         (NOTES, ["Topic", "Explanation"], "B"), (aio_import.RAW_TAB, aio_import.RAW_HEADER, "D")]
 
 AIO_COLS = (6, 11, 12)      # AIO Impressions, AIO change, AIO change % (0-based)
@@ -77,6 +77,7 @@ class ReportsResult:
     keyword_periods: int = 0
     page_periods: int = 0
     alarms: int = 0
+    alarm_counts: dict = field(default_factory=dict)      # area -> rows in R Alarms
     aio_months: int = 0
     patched_cells: int = 0
     note: str = ""
@@ -300,7 +301,7 @@ def aio_page_rows(period: str, cur: dict, prev: dict, top_n: int) -> list:
 # Notes
 # --------------------------------------------------------------------------- #
 
-def notes_rows(segments: list) -> list:
+def notes_rows(segments: list, th: dict) -> list:
     types = [s.name for s in segments if s.kind == "type"]
     defined = (", ".join(types) + (", Other (pages that match none of these)" if types else "")
                if types else "None. Only the All segment is reported.")
@@ -323,7 +324,12 @@ def notes_rows(segments: list) -> list:
                     "with the same month (or ISO week) a year earlier. Percentages are empty when "
                     "the comparison base is 0 or when Search Console no longer holds that period "
                     "(it keeps about 16 months)."],
-        ["AI Overviews", "Search Console has no API for the Generative AI report. Each month its "
+        ["Alarms", f"R Alarms keeps at most {int(th['alarm_max_per_period'])} rows per period: high "
+                   f"severity first, then the biggest impact (the clicks involved, in the last "
+                   f"column). Only the {int(th['alarm_page_loss_shown'])} page losses with the "
+                   f"most clicks lost are listed, followed by one line that counts the others. "
+                   f"The complete list of page changes is in R Pages."],
+        ["AI Overviews","Search Console has no API for the Generative AI report. Each month its "
                          "export is copied into this sheet as 'AIO YYYY-MM Pages' and 'AIO "
                          "YYYY-MM Dates' tabs. They are read on the next run, stored in AIO Raw "
                          "and removed. Months without an import have empty AIO columns."],
@@ -339,12 +345,14 @@ def _pad(row, n):
     return list(row) + [""] * (n - len(row))
 
 
-def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=print) -> ReportsResult:
+def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=print,
+                rebuild_alarms: bool = False) -> ReportsResult:
     """
     sheets      authorised Sheets service           reports_id  the site's Reports spreadsheet
     site        sites.Site (page_types, thresholds, weekly_segments)
     gsc_fetch   callable(dimensions, first_date, last_date, filter_groups=None) -> list of rows
     final       last final date in Search Console   today       date of the run
+    rebuild_alarms  recompute R Alarms for every past period with the current rules
     """
     th = {k: site.threshold(k) for k in sites.THRESHOLD_DEFAULTS}
     segments = build_segments(site.page_types)
@@ -360,7 +368,15 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     aio_daily, aio_pages = aio_import.load_raw(sheets, reports_id)
     aio = AioData(aio_daily, aio_pages)
 
-    new_alarms = [[p, "medium", "AIO import", msg] for p, msg in imp.problems]
+    new_alarms = [alarms.import_problem(p, msg) for p, msg in imp.problems]
+
+    # R Alarms written by older rules has no Impact column: rebuild it for all past periods
+    old_header = tabs.read_rows(sheets, reports_id, ALARMS, "E", first_row=1)[:1]
+    migrate = bool(old_header) and old_header[0] != alarms.HEADER
+    rebuild = rebuild_alarms or migrate
+    if migrate and len(old_header[0]) < len(alarms.HEADER) and titles.get(ALARMS) is not None:
+        tabs.add_columns(sheets, reports_id, titles[ALARMS], len(alarms.HEADER) - len(old_header[0]))
+    cap = int(th["alarm_max_per_period"])
 
     # ---- Periods ------------------------------------------------------------
     cache = {}
@@ -377,7 +393,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     if not active:
         log("  reports: no Search Console data in range yet")
         result.note = "no data yet"
-        _finish(sheets, reports_id, segments, new_alarms, result, log)
+        _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log)
         return result
     first_data = active[0]
 
@@ -473,24 +489,28 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
             continue
         pfirst, plast = month_by_label[prev_label][1:]
 
-        if label not in kw_done:
+        # Alarms are worked out for the periods written in this run, or for every period
+        # when R Alarms is being rebuilt (that needs the data again, but writes no data rows).
+        if label not in kw_done or rebuild:
             cur = by_key(fetch(["query"], first, last))
             prev = by_key(fetch(["query"], pfirst, plast))
             rows, lost = keyword_rows(label, cur, prev, th)
-            tabs.append(sheets, reports_id, KEYWORDS, rows, log)
-            result.keyword_periods += 1
+            if label not in kw_done:
+                tabs.append(sheets, reports_id, KEYWORDS, rows, log)
+                result.keyword_periods += 1
             new_alarms += alarms.lost_keywords(label, prev_label, lost, th)
 
-        if label not in pg_done:
+        if label not in pg_done or rebuild:
             cur = by_page(fetch(["page"], first, last))
             prev = by_page(fetch(["page"], pfirst, plast))
-            ylabel = periods.month_label(periods.add_months(first, -12))
-            yoy = None
-            if ylabel in month_by_label:
-                yoy = by_page(fetch(["page"], *month_by_label[ylabel][1:]))
-            tabs.append(sheets, reports_id, PAGES,
-                        page_rows(label, cur, prev, yoy, segments, th), log)
-            result.page_periods += 1
+            if label not in pg_done:
+                ylabel = periods.month_label(periods.add_months(first, -12))
+                yoy = None
+                if ylabel in month_by_label:
+                    yoy = by_page(fetch(["page"], *month_by_label[ylabel][1:]))
+                tabs.append(sheets, reports_id, PAGES,
+                            page_rows(label, cur, prev, yoy, segments, th), log)
+                result.page_periods += 1
             new_alarms += alarms.page_losses(
                 label, prev_label,
                 [(u, cur.get(u, (0,))[0], v[0]) for u, v in sorted(prev.items())], th)
@@ -500,15 +520,14 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
                     label, [u for u in cur if other.matches(u)],
                     [u for u in prev if other.matches(u)], th)
 
-    # ---- Alarms from the totals of months written in this run --------------
-    for label in sorted({r[0] for r in monthly_new}):
+    # ---- Alarms from the totals of the months in question ------------------
+    segment_months = sorted(month_by_label) if rebuild else sorted({r[0] for r in monthly_new})
+    for label in segment_months:
         prev_label = periods.month_label(periods.add_months(month_by_label[label][1], -1))
         if prev_label not in month_by_label:
             continue
         for seg in segments:
-            s = series.get(seg.name)            # loaded: this month's rows were just built from it
-            if s is None:
-                continue
+            s = segment_series(seg)
             first, last = month_by_label[label][1:]
             pfirst, plast = month_by_label[prev_label][1:]
             new_alarms += alarms.segment_change(
@@ -518,8 +537,10 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     # ---- R AIO Pages and the AIO alarm -------------------------------------
     _aio_pages(sheets, reports_id, aio, existing[AIO_PAGES], int(th["movers_top_n"]), log)
     all_seg = segments[0]
-    for label in sorted(imp.changed | {periods.month_label(periods.add_months(
-            periods.parse_month(m), 1)) for m in imp.changed}):
+    aio_months = ({periods.month_label(d) for d in aio.daily} | set(aio.pages)) if rebuild \
+        else imp.changed
+    for label in sorted(aio_months | {periods.month_label(periods.add_months(
+            periods.parse_month(m), 1)) for m in aio_months}):
         first = periods.parse_month(label)
         pfirst = periods.add_months(first, -1)
         new_alarms += alarms.aio_drop(
@@ -527,7 +548,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
             aio.month(label, first, periods.month_end(first), all_seg),
             aio.month(periods.month_label(pfirst), pfirst, periods.month_end(pfirst), all_seg), th)
 
-    _finish(sheets, reports_id, segments, new_alarms, result, log)
+    _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log)
     return result
 
 
@@ -557,17 +578,48 @@ def _aio_pages(sheets, reports_id, aio: AioData, existing: list, top_n: int, log
     tabs.rewrite(sheets, reports_id, AIO_PAGES, AIO_PAGES_HEADER, table)
 
 
-def _finish(sheets, reports_id, segments, new_alarms: list, result: ReportsResult, log):
-    """Appends alarms that are not in R Alarms yet and refreshes the Notes tab."""
-    seen = {(r[0], r[2], r[3]) for r in tabs.read_rows(sheets, reports_id, ALARMS, "D")
-            if len(r) >= 4}
-    fresh = []
-    for row in new_alarms:
-        key = (row[0], row[2], row[3])
-        if key not in seen:
-            seen.add(key)
-            fresh.append(row)
-    tabs.append(sheets, reports_id, ALARMS, fresh, log)
-    result.alarms = len(fresh)
-    tabs.rewrite(sheets, reports_id, NOTES, ["Topic", "Explanation"], notes_rows(segments))
+def _save_alarms(sheets, reports_id, candidates: list, rebuild: bool, cap: int,
+                 result: ReportsResult):
+    """
+    Merges the new alarms into R Alarms, period by period: a period that gets new alarms is
+    re-sorted (high severity first, then the biggest impact) and cut to `cap` rows. Periods
+    without new alarms stay as they are. With `rebuild` the tab is made from the candidates
+    alone (they cover every past period). The tab is rewritten only when something changed.
+    """
+    old = [] if rebuild else [alarms.from_row(r)
+                              for r in tabs.read_rows(sheets, reports_id, ALARMS, "E") if len(r) >= 4]
+    by_old, by_new = {}, {}
+    for a in old:
+        by_old.setdefault(a.period, []).append(a)
+    for a in candidates:
+        by_new.setdefault(a.period, []).append(a)
+
+    final = {}
+    for period in set(by_old) | set(by_new):
+        if period in by_new:
+            final[period] = alarms.cap_period(by_old.get(period, []) + by_new[period], cap)
+        else:
+            final[period] = by_old[period]
+
+    ordered = [a for p in sorted(final) for a in final[p]]
+    old_rows = [a.row() for p in sorted(by_old) for a in by_old[p]]
+    new_rows = [a.row() for a in ordered]
+    same_rows = len(old_rows) == len(new_rows) and all(
+        all(tabs.same(x, y) for x, y in zip(r1, r2)) for r1, r2 in zip(old_rows, new_rows))
+    if rebuild or not same_rows:
+        tabs.rewrite(sheets, reports_id, ALARMS, alarms.HEADER, new_rows)
+    known = {a.key for a in old}
+    result.alarms = sum(1 for a in ordered if a.key not in known)
+    for a in ordered:
+        result.alarm_counts[a.area] = result.alarm_counts.get(a.area, 0) + 1
+
+
+def _finish(sheets, reports_id, segments, new_alarms: list, rebuild: bool, cap: int, th: dict,
+            result: ReportsResult, log):
+    """Saves the alarms and refreshes the Notes tab."""
+    _save_alarms(sheets, reports_id, new_alarms, rebuild, cap, result)
+    tabs.rewrite(sheets, reports_id, NOTES, ["Topic", "Explanation"], notes_rows(segments, th))
     log(f"  reports: {result.summary()}")
+    if rebuild:
+        log("  R Alarms rebuilt for all periods: " + ", ".join(
+            f"{area} {n}" for area, n in sorted(result.alarm_counts.items())))
