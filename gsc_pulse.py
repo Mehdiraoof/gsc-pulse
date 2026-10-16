@@ -6,7 +6,7 @@ Built for SEO teams who want live, always-updated keyword + page data
 without manual exports or third-party tools.
 
 Author : Mehdi Raoof — https://linkedin.com/in/mehdiraoof/
-Version: 1.0.0
+Version: 1.1.0
 
 Usage:
     python gsc_pulse.py                        # uses config.yaml
@@ -18,6 +18,8 @@ Usage:
 import os
 import sys
 import json
+import time
+import functools
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,6 +40,8 @@ try:
 except ImportError:
     print("Missing dependencies. Run: pip install -r requirements.txt")
     sys.exit(1)
+
+import history
 
 
 # --------------------------------------------------------------------------- #
@@ -88,6 +92,13 @@ def scrub(text: str) -> str:
 # Auth
 # --------------------------------------------------------------------------- #
 
+def describe_error(e: Exception) -> str:
+    """One-line, traceback-free description of an exception (not yet scrubbed)."""
+    if isinstance(e, HttpError):
+        return f"Google API error ({e.resp.status}): {e.reason}"
+    return f"{type(e).__name__}: {e}"
+
+
 def get_credentials(oauth_client_file: str):
     """
     Returns valid Google credentials.
@@ -132,13 +143,14 @@ def get_credentials(oauth_client_file: str):
 # GSC data fetching
 # --------------------------------------------------------------------------- #
 
-def fetch_gsc(service, site_url: str, start_date: str, end_date: str,
-              dimensions: list, row_limit: int = DEFAULT_ROW_LIMIT) -> list:
+def iter_gsc_pages(service, site_url: str, start_date: str, end_date: str,
+                   dimensions: list, row_limit: int = DEFAULT_ROW_LIMIT,
+                   data_state: str = None, num_retries: int = 0):
     """
-    Fetches all rows from the GSC Search Analytics API for the given dimensions.
-    Paginates automatically to retrieve more than 5,000 rows.
+    Yields the rows of the GSC Search Analytics API one page at a time.
+    Paginates automatically to retrieve more than one page of rows.
+    data_state: None keeps the API default (final data only).
     """
-    all_rows = []
     start_row = 0
 
     while True:
@@ -149,19 +161,35 @@ def fetch_gsc(service, site_url: str, start_date: str, end_date: str,
             "rowLimit":   row_limit,
             "startRow":   start_row,
         }
+        if data_state:
+            body["dataState"] = data_state
         try:
-            resp = service.searchanalytics().query(siteUrl=site_url, body=body).execute()
+            resp = service.searchanalytics().query(siteUrl=site_url, body=body).execute(
+                num_retries=num_retries)
         except HttpError as e:
             raise GscPulseError(f"Search Console API error ({e.resp.status}): {e.reason}") from None
 
         rows = resp.get("rows", [])
-        all_rows.extend(rows)
+        if rows:
+            yield rows
 
         if len(rows) < row_limit:
             break  # last page
 
         start_row += row_limit
 
+
+def fetch_gsc(service, site_url: str, start_date: str, end_date: str,
+              dimensions: list, row_limit: int = DEFAULT_ROW_LIMIT,
+              data_state: str = None) -> list:
+    """
+    Fetches all rows from the GSC Search Analytics API for the given dimensions.
+    Paginates automatically to retrieve more than 5,000 rows.
+    """
+    all_rows = []
+    for page in iter_gsc_pages(service, site_url, start_date, end_date,
+                               dimensions, row_limit, data_state):
+        all_rows.extend(page)
     return all_rows
 
 
@@ -258,7 +286,10 @@ def main():
     parser.add_argument("--site",  help="Override: GSC site URL")
     parser.add_argument("--sheet", help="Override: Google Sheet ID")
     parser.add_argument("--days",  type=int, help="Override: number of days to pull")
+    parser.add_argument("--history-sheet",
+                        help="Override: Google Sheet ID of the permanent history store")
     args = parser.parse_args()
+    started_at = time.monotonic()
 
     # ---- Load config -------------------------------------------------------
     # Priority: command-line flags > environment variables > config.yaml
@@ -272,6 +303,9 @@ def main():
     sheet_id   = args.sheet or os.environ.get("SHEET_ID") or cfg.get("sheet_id")
     oauth_file = cfg.get("oauth_client_file", "credentials.json")
     days       = args.days  or int(os.environ.get("DAYS") or cfg.get("days", 90))
+    # Optional: leave empty to skip the history step entirely
+    history_id = (args.history_sheet or os.environ.get("HISTORY_SHEET_ID")
+                  or cfg.get("history_sheet_id"))
 
     if not site_url or not sheet_id:
         print("\n  ERROR: site_url and sheet_id are required.")
@@ -280,6 +314,8 @@ def main():
         sys.exit(1)
 
     _SENSITIVE.extend([site_url, sheet_id])
+    if history_id:
+        _SENSITIVE.append(history_id)
 
     # GSC data runs ~2-3 days behind, so stop 3 days ago to avoid half-empty days
     end_dt     = datetime.today() - timedelta(days=3)
@@ -323,6 +359,26 @@ def main():
         table = rows_to_table(rows, dimensions)
         write_tab(sheets_service, sheet_id, tab_name, table)
 
+    # ---- History (append-only, separate sheet) -----------------------------
+    history_meta   = []
+    history_failure = None
+    print()
+    if not history_id:
+        print("History: off (no HISTORY_SHEET_ID)")
+    else:
+        print(f"History: on  ({show('https://docs.google.com/spreadsheets/d/' + history_id)})")
+        try:
+            result = history.run_history(
+                sheets_service, history_id,
+                functools.partial(iter_gsc_pages, gsc_service, site_url, num_retries=history.RETRIES),
+                started_at=started_at,
+            )
+            history_meta = result.meta_rows()
+        except Exception as e:  # v1 tabs are already written; report and fail at the end
+            history_failure = scrub(describe_error(e))
+            print(f"  ❌  History: {history_failure}")
+            history_meta = [["History status", "error (see run log)"]]
+
     # ---- Meta tab ----------------------------------------------------------
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     meta_data = [
@@ -330,9 +386,13 @@ def main():
         ["Date range",      f"{start_date} → {end_date}"],
         ["Days",            days],
         ["Last updated",    now_str],
+    ] + history_meta + [
         ["Built with",      "GSC Pulse by Mehdi Raoof — linkedin.com/in/mehdiraoof/"],
     ]
     write_tab(sheets_service, sheet_id, "Meta", meta_data)
+
+    if history_failure:
+        raise GscPulseError(f"History step failed: {history_failure}")
 
     # ---- Done --------------------------------------------------------------
     print()
@@ -345,10 +405,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:  # clean, scrubbed message instead of a raw traceback
-        if isinstance(e, HttpError):
-            msg = f"Google API error ({e.resp.status}): {e.reason}"
-        else:
-            msg = f"{type(e).__name__}: {e}"
+        msg = describe_error(e)
         print(f"\n  ❌  {scrub(msg)}")
         print("  Tip: check that the service account has access to the property and the sheet,")
         print("  and that the site URL matches the GSC property exactly.")

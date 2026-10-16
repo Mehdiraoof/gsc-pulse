@@ -38,7 +38,7 @@ Runs every Monday on GitHub's servers, even when your computer is off.
    account email → **Restricted**.
 3. **Google Sheet:** create a blank sheet and share it with the service account
    email as **Editor**.
-4. **GitHub:** create a private repo and upload `gsc_pulse.py`, `requirements.txt`
+4. **GitHub:** create a private repo and upload `gsc_pulse.py`, `history.py`, `requirements.txt`
    and `.github/workflows/gsc_pulse.yml`.
 5. **GitHub Secrets** (repo Settings → Secrets and variables → Actions):
 
@@ -47,6 +47,7 @@ Runs every Monday on GitHub's servers, even when your computer is off.
    | `GSC_SERVICE_ACCOUNT_JSON` | the full contents of the service account JSON key |
    | `SITE_URL` | your GSC property, e.g. `sc-domain:example.com` or `https://www.example.com/` |
    | `SHEET_ID` | the ID from the sheet URL (between `/d/` and `/edit`) |
+   | `HISTORY_SHEET_ID` | *(optional)* a second sheet that keeps every day forever, see [History](#history-keep-every-day-forever) |
 
 6. **Actions tab → GSC Pulse weekly sync → Run workflow** to test. After that it
    runs every Monday at 07:00 Istanbul time on its own.
@@ -136,6 +137,65 @@ crontab -e
 2. Create Basic Task → name it "GSC Pulse"
 3. Trigger: Weekly, Monday
 4. Action: Start a program → `python` → Arguments: `C:\path\to\gsc_pulse.py`
+
+---
+
+## History: keep every day forever
+
+Search Console only keeps about 16 months of data. With history switched on, GSC Pulse
+also appends every finished day to a **separate** Google Sheet, once, and never
+overwrites it. The main sheet stays small and fast to read; the history sheet grows.
+
+| Tab | One row per |
+|---|---|
+| `H Daily` | date |
+| `H Queries` | date + query |
+| `H Pages` | date + page |
+| `H Device` | date + device |
+| `H Country` | date + country |
+| `State` | history tab: last date stored, rows total, when it was updated |
+
+**Set it up**
+
+1. Create a blank Google Sheet (a *new, separate one*, not the main sheet).
+2. Share it with the service account email as **Editor**. The service account cannot
+   create spreadsheets itself, so this has to be done by hand.
+3. Add its ID as the repo secret `HISTORY_SHEET_ID` (or `history_sheet_id` in
+   `config.yaml` / `--history-sheet` when running locally).
+
+Without `HISTORY_SHEET_ID` the history step is skipped and everything else works as before.
+
+**How it behaves**
+
+- The first run is a **backfill** of everything Search Console still has (about 16 months).
+  It works one calendar month at a time and stops starting new months after about
+  10 minutes, so on a big site it may take a few runs. The next run simply continues
+  from the `State` tab; nothing needs to be done by hand.
+- After that, each run appends only the days that are new. The last day stored is the
+  latest day Search Console reports as final, not "today minus 3".
+- `State` is only moved forward after a month's rows are written. If a run is cut off
+  in between, the next run removes the unrecorded rows and fetches that month again,
+  so nothing is stored twice and no day is skipped.
+- Rows are never edited or deleted in normal operation. Do not sort or insert rows
+  in the `H ...` tabs, and do not edit `State`; the script relies on both.
+- The main sheet's `Meta` tab shows the history status, the oldest and newest stored
+  date (newest = the date all history tabs are complete through) and the total rows.
+
+**The 10 million cell limit**
+
+A Google spreadsheet holds at most 10,000,000 cells. The history tabs grow forever
+(query rows are the biggest), so a busy site will eventually reach it. Before every
+append GSC Pulse checks the size of the history spreadsheet and **stops appending at
+9,000,000 cells**. The sync still succeeds; it writes a warning to the log and to the
+`Meta` tab: *"History sheet almost full: create a new history sheet and update
+HISTORY_SHEET_ID"*.
+
+The fix is one new history sheet per year (or whenever the warning appears):
+
+1. Create a new blank sheet and share it with the service account as Editor.
+2. Replace the `HISTORY_SHEET_ID` secret with the new ID.
+3. The next run starts the new sheet from scratch; it backfills only what Search
+   Console still has. Keep the old sheet as the archive.
 
 ---
 

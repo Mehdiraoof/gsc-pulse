@@ -20,3 +20,8 @@ oauth_client_file: "credentials.json"
 # Number of days of data to pull (rolling window from today).
 # 90 is a good default for trend analysis. Max 480 days via the API.
 days: 90
+
+# Optional: a SEPARATE Google Sheet that keeps every day of data forever
+# (append-only). Share it with the same Google account / service account as
+# the main sheet. Leave commented out to skip the history step.
+# history_sheet_id: "YOUR_HISTORY_SHEET_ID_HERE"
