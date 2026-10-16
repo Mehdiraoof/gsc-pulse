@@ -22,6 +22,7 @@ service and a page-fetching callable, and returns a small result object.
 """
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -54,7 +55,10 @@ FINAL_LOOKBACK_DAYS = 10         # window used to find the last final date
 TIME_BUDGET_S       = 600        # stop starting new chunks after this runtime
 CELL_LIMIT          = 10_000_000 # Google Sheets hard limit per spreadsheet
 CELL_WARN           = 9_000_000  # never append past this many cells
-RETRIES             = 5          # transient API errors (429 / 5xx) are retried
+RETRIES             = 5          # transient API errors (5xx) are retried
+CALLS_PER_MINUTE    = 45         # own limit, below Sheets' 60 reads / 60 writes per minute
+QUOTA_WAITS         = 3          # times a 429 is waited out before giving up
+QUOTA_WAIT_S        = 65
 
 FULL_WARNING = ("History sheet almost full: create a new history sheet "
                 "and update HISTORY_SHEET_ID")
@@ -92,9 +96,46 @@ class HistoryResult:
 # Small helpers
 # --------------------------------------------------------------------------- #
 
-def _exec(request):
-    """Executes a Google API request, retrying transient errors."""
-    return request.execute(num_retries=RETRIES)
+_sleep = time.sleep             # replaced in tests
+_now   = time.monotonic         # replaced in tests
+_calls = {"read": deque(), "write": deque()}      # recent call times, per kind
+
+
+def _throttle(kind: str):
+    """Keeps this run under the Sheets API per-minute quotas (60 reads and 60 writes
+    per minute per user). Waits when the last minute is already used up."""
+    recent = _calls[kind]
+    now = _now()
+    while recent and now - recent[0] >= 60:
+        recent.popleft()
+    if len(recent) >= CALLS_PER_MINUTE:
+        _sleep(60 - (now - recent[0]) + 0.5)
+        now = _now()
+        while recent and now - recent[0] >= 60:
+            recent.popleft()
+    recent.append(now)
+
+
+def _exec(request, kind: str):
+    """Executes a Google API request: throttled, transient errors (5xx) retried,
+    and a quota error (429) waited out, since the quota resets every minute."""
+    for attempt in range(QUOTA_WAITS + 1):
+        _throttle(kind)
+        try:
+            return request.execute(num_retries=RETRIES)
+        except HttpError as e:
+            if e.resp.status != 429 or attempt == QUOTA_WAITS:
+                raise
+            print(f"  History: Sheets API quota reached, waiting {QUOTA_WAIT_S}s")
+            _sleep(QUOTA_WAIT_S)
+
+
+def _read(request):
+    return _exec(request, "read")
+
+
+def _write(request):
+    return _exec(request, "write")
 
 
 def _iso(d: date) -> str:
@@ -147,7 +188,7 @@ def last_final_date(fetch_pages, today: date):
 
 def grid_info(sheets, spreadsheet_id: str):
     """Returns ({tab title: sheetId}, total grid cells of the spreadsheet)."""
-    resp = _exec(sheets.spreadsheets().get(
+    resp = _read(sheets.spreadsheets().get(
         spreadsheetId=spreadsheet_id,
         fields="sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))",
     ))
@@ -163,7 +204,7 @@ def grid_info(sheets, spreadsheet_id: str):
 def create_tab(sheets, spreadsheet_id: str, title: str, header: list, rows: int = 2):
     """Creates a tab with a bold, frozen header row. Grid is kept tiny on purpose:
     every grid cell counts toward the 10M cell limit."""
-    resp = _exec(sheets.spreadsheets().batchUpdate(
+    resp = _write(sheets.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": [{"addSheet": {"properties": {
             "title": title,
@@ -172,11 +213,11 @@ def create_tab(sheets, spreadsheet_id: str, title: str, header: list, rows: int 
         }}}]},
     ))
     sheet_id = resp["replies"][0]["addSheet"]["properties"]["sheetId"]
-    _exec(sheets.spreadsheets().values().update(
+    _write(sheets.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id, range=f"'{title}'!A1",
         valueInputOption="RAW", body={"values": [header]},
     ))
-    _exec(sheets.spreadsheets().batchUpdate(
+    _write(sheets.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": [{"repeatCell": {
             "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
@@ -189,7 +230,7 @@ def create_tab(sheets, spreadsheet_id: str, title: str, header: list, rows: int 
 def read_cell(sheets, spreadsheet_id: str, tab: str, cell: str) -> str:
     """Value of one cell ('' when empty, or when it lies outside the tab's grid)."""
     try:
-        resp = _exec(sheets.spreadsheets().values().get(
+        resp = _read(sheets.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id, range=f"'{tab}'!{cell}:{cell}"))
     except HttpError as e:
         if e.resp.status == 400:   # "range exceeds grid limits": nothing is there
@@ -201,7 +242,7 @@ def read_cell(sheets, spreadsheet_id: str, tab: str, cell: str) -> str:
 
 def read_state(sheets, spreadsheet_id: str) -> dict:
     """{tab: {"row": sheet row number, "last": 'YYYY-MM-DD', "rows": int}}"""
-    resp = _exec(sheets.spreadsheets().values().get(
+    resp = _read(sheets.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"'{STATE_TAB}'!A2:D"))
     state = {}
     for i, row in enumerate(resp.get("values", []), start=2):
@@ -224,7 +265,7 @@ def write_state(sheets, spreadsheet_id: str, state: dict, tab: str, last: str, r
         state[tab] = {"row": next_state_row(state), "last": "", "rows": 0}
     row = state[tab]["row"]
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _exec(sheets.spreadsheets().values().update(
+    _write(sheets.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id, range=f"'{STATE_TAB}'!A{row}:D{row}",
         valueInputOption="RAW", body={"values": [[tab, last, rows, now_str]]},
     ))
@@ -236,7 +277,7 @@ def append_rows(sheets, spreadsheet_id: str, tab: str, rows: list, log):
     for i in range(0, len(rows), APPEND_BATCH):
         batch = rows[i:i + APPEND_BATCH]
         try:
-            _exec(sheets.spreadsheets().values().append(
+            _write(sheets.spreadsheets().values().append(
                 spreadsheetId=spreadsheet_id, range=f"'{tab}'!A1",
                 valueInputOption="RAW", insertDataOption="INSERT_ROWS",
                 body={"values": batch},
@@ -305,7 +346,7 @@ def run_history(sheets, history_id: str, fetch_pages, started_at: float = None,
                 # A previous run crashed after appending a chunk but before State moved on.
                 # Those rows are not counted anywhere, so remove them: the chunk is fetched
                 # again below and nothing ends up stored twice.
-                _exec(sheets.spreadsheets().values().clear(
+                _write(sheets.spreadsheets().values().clear(
                     spreadsheetId=history_id,
                     range=f"'{tab}'!A{counted + 2}:{chr(64 + ncols)}", body={}))
                 log(f"  ⚠  History: {tab} had rows below the {counted} that State counts "

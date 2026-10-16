@@ -262,6 +262,30 @@ class FakeValues:
 # Helpers
 # --------------------------------------------------------------------------- #
 
+class FakeTime:
+    """Stands in for history._now / history._sleep so rate-limit waits cost nothing."""
+    def __init__(self):
+        self.t, self.sleeps = 0.0, []
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.t += s
+
+
+def patch_time(case):
+    ft = FakeTime()
+    for name, fn in (("_now", ft.now), ("_sleep", ft.sleep)):
+        p = mock.patch.object(history, name, fn)
+        p.start()
+        case.addCleanup(p.stop)
+    history._calls["read"].clear()
+    history._calls["write"].clear()
+    return ft
+
+
 class Clock:
     def __init__(self, step=1.0):
         self.t, self.step = 0.0, step
@@ -304,6 +328,7 @@ def expected_days(gsc, today=TODAY):
 class HistoryTests(unittest.TestCase):
 
     def setUp(self):
+        self.time = patch_time(self)
         self.sheets = FakeSheets()
         self.sheets.add_book(HID)
 
@@ -513,6 +538,80 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(list(history.month_chunks(date(2026, 3, 6), date(2026, 3, 5))), [])
 
 
+class RateLimitTests(unittest.TestCase):
+    """Sheets allows 60 reads and 60 writes per minute per user; a backfill must stay under."""
+
+    def setUp(self):
+        self.time = patch_time(self)
+
+    def test_calls_are_spread_over_minutes(self):
+        stamps = []
+        for _ in range(200):
+            history._exec(Req(lambda: stamps.append(self.time.now())), "write")
+        self.assertTrue(self.time.sleeps)
+        for i, t in enumerate(stamps):
+            in_window = [s for s in stamps[: i + 1] if t - s < 60]
+            self.assertLessEqual(len(in_window), history.CALLS_PER_MINUTE)
+
+    def test_reads_and_writes_are_counted_separately(self):
+        for _ in range(history.CALLS_PER_MINUTE):
+            history._exec(Req(lambda: None), "write")
+        history._exec(Req(lambda: None), "read")
+        self.assertEqual(self.time.sleeps, [])
+
+    def test_quota_error_is_waited_out_and_retried(self):
+        attempts = []
+
+        def flaky():
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise http_error(429, "Quota exceeded")
+            return {"ok": True}
+
+        self.assertEqual(history._exec(Req(flaky), "write"), {"ok": True})
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual([s for s in self.time.sleeps if s >= 60], [history.QUOTA_WAIT_S] * 2)
+
+    def test_persistent_quota_error_is_raised(self):
+        def always():
+            raise http_error(429, "Quota exceeded")
+
+        with self.assertRaises(HttpError):
+            history._exec(Req(always), "write")
+
+    def test_other_errors_are_not_retried(self):
+        attempts = []
+
+        def forbidden():
+            attempts.append(1)
+            raise http_error(403, "no access")
+
+        with self.assertRaises(HttpError):
+            history._exec(Req(forbidden), "read")
+        self.assertEqual(len(attempts), 1)
+
+    def test_full_backfill_respects_the_limits(self):
+        sheets = FakeSheets()
+        sheets.add_book(HID)
+        stamps = {"w": [], "r": []}
+        real = history._exec
+
+        def spy(request, kind):
+            result = real(request, kind)          # returns after any throttle wait
+            stamps["w" if kind == "write" else "r"].append(self.time.now())
+            return result
+
+        gsc = FakeGsc(first=date(2025, 6, 1), final=date(2026, 10, 13))
+        with mock.patch.object(history, "_exec", spy):
+            history.run_history(sheets, HID, fetcher(gsc), today=TODAY, log=lambda m: None)
+        for series in stamps.values():
+            for i, t in enumerate(series):
+                self.assertLessEqual(len([s for s in series[: i + 1] if t - s < 60]),
+                                     history.CALLS_PER_MINUTE)
+        self.assertGreater(len(stamps["w"]), history.CALLS_PER_MINUTE)
+        self.assertTrue(self.time.sleeps)                                # so it did have to wait
+
+
 class MainWiringTests(unittest.TestCase):
     """gsc_pulse.main() end to end with fakes: history off, history on, history failing."""
 
@@ -539,6 +638,7 @@ class MainWiringTests(unittest.TestCase):
         return out.getvalue(), error
 
     def setUp(self):
+        self.time = patch_time(self)
         self.sheets = FakeSheets()
         self.sheets.add_book(MAIN)
         today = date.today()
