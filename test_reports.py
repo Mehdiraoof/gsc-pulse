@@ -166,7 +166,7 @@ class MonthlyTests(ReportsTestCase):
                              (reports.KEYWORDS, reports.KEYWORDS_HEADER),
                              (reports.PAGES, reports.PAGES_HEADER),
                              (reports.AIO_PAGES, reports.AIO_PAGES_HEADER),
-                             (reports.ALARMS, ["Period", "Severity", "Area", "Message"]),
+                             (reports.ALARMS, ["Period", "Severity", "Area", "Message", "Impact (clicks)"]),
                              (reports.NOTES, ["Topic", "Explanation"]),
                              (aio_import.RAW_TAB, ["Period", "Kind", "Date or Page", "AIO Impressions"])):
             self.assertEqual(self.tab(name)[0], header, name)
