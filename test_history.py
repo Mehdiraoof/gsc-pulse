@@ -130,6 +130,20 @@ class FakeSheets:
     def cells(self, book_id):
         return sum(t.row_count * t.col_count for t in self.books[book_id].values())
 
+    def write_cells(self, t, r1, c1, values):
+        """Writes a block of values with its top-left corner at (r1, c1); the grid grows
+        to fit, like the real API does for values.update."""
+        for i, row in enumerate(values):
+            r = r1 + i
+            t.row_count = max(t.row_count, r)
+            while len(t.data) < r:
+                t.data.append([])
+            cells = t.data[r - 1]
+            while len(cells) < c1 - 1 + len(row):
+                cells.append("")
+            for j, v in enumerate(row):
+                cells[c1 - 1 + j] = v
+
     def _tab(self, book_id, title):
         try:
             return self.books[book_id][title]
@@ -165,6 +179,11 @@ class FakeSheets:
                     book[p["title"]] = t
                     replies.append({"addSheet": {"properties": {
                         "sheetId": t.sheet_id, "title": p["title"]}}})
+                elif "deleteSheet" in req:
+                    sid = req["deleteSheet"]["sheetId"]
+                    for title in [k for k, t in book.items() if t.sheet_id == sid]:
+                        del book[title]
+                    replies.append({})
                 elif "repeatCell" in req:
                     sid = req["repeatCell"]["range"]["sheetId"]
                     for t in book.values():
@@ -218,13 +237,16 @@ class FakeValues:
                     and r1 >= 2 and body["values"][0][1] != ""):
                 self.fs.fail_state_update_once = False
                 raise RuntimeError("boom (state update)")
-            for i, row in enumerate(body["values"]):
-                r = r1 + i
-                if r > t.row_count:
-                    raise http_error(400, "Range exceeds grid limits")
-                while len(t.data) < r:
-                    t.data.append([])
-                t.data[r - 1] = list(row)
+            self.fs.write_cells(t, r1, c1, body["values"])
+            return {}
+        return Req(run)
+
+    def batchUpdate(self, spreadsheetId, body):
+        def run():
+            assert body["valueInputOption"] == "RAW"
+            for item in body["data"]:
+                tab, c1, r1, c2, r2 = parse_range(item["range"])
+                self.fs.write_cells(self.fs._tab(spreadsheetId, tab), r1 or 1, c1, item["values"])
             return {}
         return Req(run)
 

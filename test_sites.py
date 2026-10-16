@@ -142,5 +142,65 @@ class ValidationTests(unittest.TestCase):
         self.fails(dump(site("site-a"), site("site-b", history_sheet_id="site-a-main")))
 
 
+
+class ReportConfigTests(unittest.TestCase):
+
+    def parse(self, **kw):
+        return sites.parse_sites_json(dump(site("site-a", **kw)))[0]
+
+    def fails(self, *secret, **kw):
+        with self.assertRaises(sites.SitesConfigError) as cm:
+            self.parse(**kw)
+        for text in secret:
+            self.assertNotIn(text, str(cm.exception))
+
+    def test_defaults_when_nothing_is_configured(self):
+        s = self.parse()
+        self.assertEqual((s.page_types, s.thresholds, s.weekly_segments), ([], {}, False))
+        self.assertEqual(s.threshold("lost_new_min_impressions"), 10)
+        self.assertEqual(s.threshold("movers_top_n"), 100)
+
+    def test_page_types_thresholds_and_weekly_flag(self):
+        s = self.parse(page_types=[{"name": "English", "regex": "/en/"},
+                                   {"name": "Shop", "regex": "^https://shop\.example\.com/"},
+                                   {"name": "مقاله", "regex": "/article/"}],
+                       thresholds={"lost_new_min_impressions": 25, "movers_top_n": 50},
+                       weekly_segments=True)
+        self.assertEqual([t["name"] for t in s.page_types], ["English", "Shop", "مقاله"])
+        self.assertEqual(s.threshold("lost_new_min_impressions"), 25)
+        self.assertEqual(s.threshold("movers_top_n"), 50)
+        self.assertEqual(s.threshold("alarm_aio_drop_pct"), 30)            # untouched default
+        self.assertTrue(s.weekly_segments)
+
+    def test_regexes_are_sensitive_values(self):
+        s = self.parse(page_types=[{"name": "English", "regex": "/en-secret/"}],
+                       reports_sheet_id="rep")
+        self.assertIn("/en-secret/", s.sensitive_values())
+        self.assertIn("rep", s.sensitive_values())
+
+    def test_invalid_regex_is_refused_without_echoing_it(self):
+        self.fails("(unclosed-secret", page_types=[{"name": "English", "regex": "(unclosed-secret"}])
+
+    def test_reserved_duplicate_and_malformed_page_types(self):
+        for bad in ([{"name": "All", "regex": "/a/"}], [{"name": "other", "regex": "/a/"}],
+                    [{"name": "A", "regex": "/a/"}, {"name": "a", "regex": "/b/"}],
+                    [{"name": "A"}], [{"name": "A", "regex": ""}], [{"name": "A", "regex": 5}],
+                    [{"name": "A", "regex": "/a/", "extra": 1}], ["x"], "x", [{"name": "bad/name", "regex": "/a/"}],
+                    [{"name": "T%d" % i, "regex": "/%d/" % i} for i in range(21)]):
+            self.fails(page_types=bad)
+
+    def test_unknown_or_bad_thresholds(self):
+        self.fails("secret-setting", thresholds={"secret-setting": 1})
+        self.fails(thresholds={"movers_top_n": 0})
+        self.fails(thresholds={"movers_top_n": 2.5})
+        self.fails(thresholds={"lost_new_min_impressions": -1})
+        self.fails(thresholds={"lost_new_min_impressions": "10"})
+        self.fails(thresholds={"lost_new_min_impressions": True})
+        self.fails(thresholds=[1])
+
+    def test_weekly_segments_must_be_boolean(self):
+        self.fails(weekly_segments="yes")
+
+
 if __name__ == "__main__":
     unittest.main()

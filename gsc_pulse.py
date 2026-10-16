@@ -22,7 +22,7 @@ import time
 import functools
 import argparse
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 try:
@@ -43,6 +43,7 @@ except ImportError:
     sys.exit(1)
 
 import page_discovery
+import reports
 import history
 import sites
 
@@ -148,7 +149,8 @@ def get_credentials(oauth_client_file: str):
 
 def iter_gsc_pages(service, site_url: str, start_date: str, end_date: str,
                    dimensions: list, row_limit: int = DEFAULT_ROW_LIMIT,
-                   data_state: str = None, num_retries: int = 0):
+                   data_state: str = None, num_retries: int = 0,
+                   filter_groups: list = None):
     """
     Yields the rows of the GSC Search Analytics API one page at a time.
     Paginates automatically to retrieve more than one page of rows.
@@ -164,6 +166,8 @@ def iter_gsc_pages(service, site_url: str, start_date: str, end_date: str,
             "rowLimit":   row_limit,
             "startRow":   start_row,
         }
+        if filter_groups:
+            body["dimensionFilterGroups"] = filter_groups
         if data_state:
             body["dataState"] = data_state
         try:
@@ -184,14 +188,15 @@ def iter_gsc_pages(service, site_url: str, start_date: str, end_date: str,
 
 def fetch_gsc(service, site_url: str, start_date: str, end_date: str,
               dimensions: list, row_limit: int = DEFAULT_ROW_LIMIT,
-              data_state: str = None) -> list:
+              data_state: str = None, filter_groups: list = None) -> list:
     """
     Fetches all rows from the GSC Search Analytics API for the given dimensions.
     Paginates automatically to retrieve more than 5,000 rows.
     """
     all_rows = []
     for page in iter_gsc_pages(service, site_url, start_date, end_date,
-                               dimensions, row_limit, data_state):
+                               dimensions, row_limit, data_state,
+                               filter_groups=filter_groups):
         all_rows.extend(page)
     return all_rows
 
@@ -301,6 +306,7 @@ class SiteRun:
     history: object = None           # history.HistoryResult, when history ran
     history_meta: list = field(default_factory=list)
     history_text: str = "off"
+    reports_text: str = "off"
 
     @property
     def name(self) -> str:
@@ -361,6 +367,39 @@ def sync_history(gsc_service, sheets_service, run: SiteRun, started_at: float, o
     print()
 
 
+def sync_reports(gsc_service, sheets_service, run: SiteRun):
+    """Phase 1b: the report tabs of one site (skipped when it has no reports sheet)."""
+    site = run.site
+    site_header(run, "Reports")
+    if not site.reports_sheet_id:
+        print("reports: off\n")
+        return
+    today = date.today()
+
+    def fetch(dimensions, first, last, filter_groups=None):
+        rows = []
+        for page in iter_gsc_pages(gsc_service, site.site_url, first.isoformat(), last.isoformat(),
+                                   dimensions, history.HISTORY_ROW_LIMIT,
+                                   num_retries=history.RETRIES, filter_groups=filter_groups):
+            rows.extend(page)
+        return rows
+
+    final = history.last_final_date(
+        functools.partial(iter_gsc_pages, gsc_service, site.site_url, num_retries=history.RETRIES),
+        today)
+    if final is None:
+        run.reports_text = "waiting for final data"
+        print("reports: no final Search Console data available yet\n")
+        return
+    try:
+        result = reports.run_reports(sheets_service, site.reports_sheet_id, site, fetch, final, today)
+    except Exception:
+        run.reports_text = "failed"
+        raise
+    run.reports_text = result.summary()
+    print()
+
+
 def write_meta(sheets_service, run: SiteRun, start_date: str, end_date: str, days: int):
     """Phase 3: the Meta tab, which needs the history result."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -384,7 +423,7 @@ def print_summary(runs: list):
             continue
         appended = run.history.appended if run.history else 0
         print(f"  {run.name}: {run.status} | rows written: v1 {run.v1_rows}, "
-              f"history +{appended} | history: {run.history_text}")
+              f"history +{appended} | history: {run.history_text} | reports: {run.reports_text}")
     print()
 
 
@@ -513,10 +552,20 @@ def main():
             fail_site(r, e)
             print()
 
+    # ---- Phase 1b: reports of every site (before history, as agreed) -------
+    for r in enabled:
+        if not r.v1_done:
+            continue
+        try:
+            sync_reports(gsc_service, sheets_service, r)
+        except Exception as e:
+            fail_site(r, e)
+            print()
+
     # ---- Phase 2: history of every site (shares one time budget) -----------
     for r in enabled:
-        if r.status == "failed":
-            continue                        # no access / no sheet: nothing to append to
+        if not r.v1_done:
+            continue                        # v1 failed (no access?): nothing to append
         sync_history(gsc_service, sheets_service, r, started_at, history_off_text)
 
     # ---- Phase 3: Meta tab of every site -----------------------------------
