@@ -38,7 +38,7 @@ Runs every Monday on GitHub's servers, even when your computer is off.
    account email → **Restricted**.
 3. **Google Sheet:** create a blank sheet and share it with the service account
    email as **Editor**.
-4. **GitHub:** create a private repo and upload `gsc_pulse.py`, `history.py`, `requirements.txt`
+4. **GitHub:** create a private repo and upload `gsc_pulse.py`, `history.py`, `sites.py`, `requirements.txt`
    and `.github/workflows/gsc_pulse.yml`.
 5. **GitHub Secrets** (repo Settings → Secrets and variables → Actions):
 
@@ -47,6 +47,7 @@ Runs every Monday on GitHub's servers, even when your computer is off.
    | `GSC_SERVICE_ACCOUNT_JSON` | the full contents of the service account JSON key |
    | `SITE_URL` | your GSC property, e.g. `sc-domain:example.com` or `https://www.example.com/` |
    | `SHEET_ID` | the ID from the sheet URL (between `/d/` and `/edit`) |
+   | `SITES_JSON` | *(optional)* several sites in one secret, see [Multiple sites](#multiple-sites). Replaces the three secrets above |
    | `HISTORY_SHEET_ID` | *(optional)* a second sheet that keeps every day forever, see [History](#history-keep-every-day-forever) |
 
 6. **Actions tab → GSC Pulse weekly sync → Run workflow** to test. After that it
@@ -214,13 +215,61 @@ actual numbers.
 
 ## Multiple sites
 
-Copy `config.yaml` to `config-client2.yaml`, update the values, and run:
+One run can sync several sites, each into **its own** sheets (nothing is shared between
+sites). Put them in a single secret called `SITES_JSON`, a JSON list with one object per site:
 
-```bash
-python gsc_pulse.py --config config-client2.yaml
+```json
+[
+  {"name": "site-1", "site_url": "sc-domain:example.com",
+   "sheet_id": "MAIN_SHEET_ID", "history_sheet_id": "HISTORY_SHEET_ID"},
+  {"name": "site-2", "site_url": "https://www.example.org/",
+   "sheet_id": "MAIN_SHEET_ID_2", "history_sheet_id": "HISTORY_SHEET_ID_2"},
+  {"name": "site-3", "site_url": "sc-domain:example.net",
+   "sheet_id": "MAIN_SHEET_ID_3", "enabled": false}
+]
 ```
 
-One sheet per client, one command per sync.
+| Field | |
+|---|---|
+| `name` | **required.** A short, **neutral label** (`site-1`, `client-a`). Use letters, digits, space, `-` and `_` only. |
+| `site_url` | required. The Search Console property, exactly as shown there (`sc-domain:example.com` for domain properties). |
+| `sheet_id` | required. The main sheet (the 90-day tabs and `Meta`). |
+| `history_sheet_id` | optional. A separate sheet for the permanent [history](#history-keep-every-day-forever). Without it, history is off for that site. |
+| `enabled` | optional. `false` skips the site; the log says `<name>: disabled`. Handy while access is still being set up. |
+
+> **Use a neutral `name`, never the real domain or client.** Logs of a public repository
+> are visible to anyone, and the `name` is the only thing about a site that is printed.
+> `site_url`, `sheet_id` and `history_sheet_id` are hidden from every log message and error.
+
+**How a run goes.** Sites are processed one after another (never in parallel), sharing the
+Sheets API throttle. First the 90-day tabs of **every** site are written, then the history
+step runs for each site, all sharing one time budget (about 10 minutes per run). If the
+budget runs out, the remaining backfills pause and continue on the next run.
+
+**Failures are isolated.** If one site fails (no access, quota, ...), the log says
+`<name>: failed (reason)`, the other sites carry on, and the run ends red so you notice.
+The end of the log has one summary line per site (status, rows written, history status),
+without URLs or IDs.
+
+**Without `SITES_JSON`** the old settings keep working: the `SITE_URL`, `SHEET_ID` and
+`HISTORY_SHEET_ID` secrets (or `config.yaml` / the command-line flags) describe a single
+site. If `SITES_JSON` is set, it wins. A bad `SITES_JSON` stops the run with a clear
+message that says where the problem is, but never prints what the secret contains.
+
+**Adding a site**
+
+1. **Search Console:** Settings → Users and permissions → add the service account email
+   as **Restricted** user on the new property.
+2. **Google Sheets:** create two blank sheets (main + history) and share both with the
+   service account email as **Editor**. The service account cannot create sheets itself.
+3. Add an object for it to the `SITES_JSON` secret (Settings → Secrets and variables →
+   Actions → edit `SITES_JSON`), with a neutral `name`. You can add it with
+   `"enabled": false` first and switch it on once the access is in place.
+4. Run **GSC Pulse weekly sync** manually. A big site's history backfill may take more
+   than one run; re-run until the `State` tab of its history sheet shows the latest date.
+
+Running locally for a single site works as before; for several sites locally, set the
+`SITES_JSON` environment variable to the same JSON.
 
 ---
 

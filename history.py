@@ -75,6 +75,7 @@ class HistoryResult:
     oldest: str = ""
     newest: str = ""
     rows_total: int = 0
+    appended: int = 0       # rows added during this run
     paused: bool = False
     full: bool = False
     per_tab: dict = field(default_factory=dict)   # tab -> (last date, rows total)
@@ -398,6 +399,7 @@ def run_history(sheets, history_id: str, fetch_pages, started_at: float = None,
             total = state[tab]["rows"] + len(table)
             write_state(sheets, history_id, state, tab, _iso(chunk_end), total)
             appended += len(table)
+            result.appended += len(table)
 
         if not stop:
             log(f"  ✓  {tab:<12} +{appended} rows  (through {state[tab]['last']})")

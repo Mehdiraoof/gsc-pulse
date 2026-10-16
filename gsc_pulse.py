@@ -21,6 +21,7 @@ import json
 import time
 import functools
 import argparse
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -42,6 +43,7 @@ except ImportError:
     sys.exit(1)
 
 import history
+import sites
 
 
 # --------------------------------------------------------------------------- #
@@ -274,6 +276,118 @@ def bold_header_row(sheets_service, spreadsheet_id: str, tab_name: str, sheet_id
 
 
 # --------------------------------------------------------------------------- #
+# One site, in phases (v1 tabs for every site first, then history, then Meta)
+# --------------------------------------------------------------------------- #
+
+V1_TABS = [
+    ("Queries",     ["query"],         DEFAULT_ROW_LIMIT),
+    ("Pages",       ["page"],          DEFAULT_ROW_LIMIT),
+    ("Date Trend",  ["date"],          DEFAULT_ROW_LIMIT),
+    ("Device",      ["device"],        DEFAULT_ROW_LIMIT),
+    ("Country",     ["country"],       DEFAULT_ROW_LIMIT),
+    ("Query×Page",  ["query", "page"], QUERY_PAGE_LIMIT),
+]
+
+
+@dataclass
+class SiteRun:
+    """What happened to one site during this run."""
+    site: sites.Site
+    status: str = "pending"          # pending | ok | failed | disabled
+    failure: str = ""
+    v1_rows: int = 0
+    v1_done: bool = False
+    history: object = None           # history.HistoryResult, when history ran
+    history_meta: list = field(default_factory=list)
+    history_text: str = "off"
+
+    @property
+    def name(self) -> str:
+        return self.site.name
+
+
+def fail_site(run: SiteRun, error: Exception):
+    """Records a failure. Never raises, so one site cannot block the others."""
+    reason = scrub(describe_error(error))
+    run.status = "failed"
+    run.failure = run.failure or reason
+    print(f"  ❌  {run.name}: failed ({reason})")
+
+
+def site_header(run: SiteRun, phase: str):
+    print(f"── {run.name} · {phase} " + "─" * max(3, 40 - len(run.name) - len(phase)))
+
+
+def sync_main_tabs(gsc_service, sheets_service, run: SiteRun, start_date: str, end_date: str):
+    """Phase 1: the v1 tabs (rolling window) of one site."""
+    site = run.site
+    site_header(run, "Search Console tabs")
+    print(f"  Site   : {show(site.site_url)}")
+    print(f"  Sheet  : {show('https://docs.google.com/spreadsheets/d/' + site.sheet_id)}")
+    print(f"  {'Tab':<22} {'Rows':>5}")
+    print(f"  {'-'*22} {'-'*5}")
+    for tab_name, dimensions, limit in V1_TABS:
+        rows  = fetch_gsc(gsc_service, site.site_url, start_date, end_date, dimensions, limit)
+        table = rows_to_table(rows, dimensions)
+        write_tab(sheets_service, site.sheet_id, tab_name, table)
+        run.v1_rows += len(table) - 1
+    run.v1_done = True
+    print()
+
+
+def sync_history(gsc_service, sheets_service, run: SiteRun, started_at: float, off_text: str):
+    """Phase 2: the permanent history of one site (skipped when it has no history sheet)."""
+    site = run.site
+    site_header(run, "History")
+    if not site.history_sheet_id:
+        print(f"History: off ({off_text})\n")
+        return
+    print(f"History: on  ({show('https://docs.google.com/spreadsheets/d/' + site.history_sheet_id)})")
+    try:
+        result = history.run_history(
+            sheets_service, site.history_sheet_id,
+            functools.partial(iter_gsc_pages, gsc_service, site.site_url,
+                              num_retries=history.RETRIES),
+            started_at=started_at, clock=time.monotonic, budget=history.TIME_BUDGET_S,
+        )
+        run.history = result
+        run.history_meta = result.meta_rows()
+        run.history_text = result.status
+    except Exception as e:  # v1 tabs are already written; report and fail at the end
+        run.history_meta = [["History status", "error (see run log)"]]
+        run.history_text = "error"
+        fail_site(run, e)
+    print()
+
+
+def write_meta(sheets_service, run: SiteRun, start_date: str, end_date: str, days: int):
+    """Phase 3: the Meta tab, which needs the history result."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    meta_data = [
+        ["Property",        run.site.site_url],
+        ["Date range",      f"{start_date} → {end_date}"],
+        ["Days",            days],
+        ["Last updated",    now_str],
+    ] + run.history_meta + [
+        ["Built with",      "GSC Pulse by Mehdi Raoof — linkedin.com/in/mehdiraoof/"],
+    ]
+    write_tab(sheets_service, run.site.sheet_id, "Meta", meta_data)
+
+
+def print_summary(runs: list):
+    """One line per site: name, status, rows written, history status. No URLs or IDs."""
+    print("Summary")
+    for run in runs:
+        if run.status == "disabled":
+            print(f"  {run.name}: disabled")
+            continue
+        appended = run.history.appended if run.history else 0
+        print(f"  {run.name}: {run.status} | rows written: v1 {run.v1_rows}, "
+              f"history +{appended} | history: {run.history_text}")
+    print()
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 
@@ -283,8 +397,8 @@ def main():
     )
     parser.add_argument("--config", default="config.yaml",
                         help="Path to YAML config file (default: config.yaml)")
-    parser.add_argument("--site",  help="Override: GSC site URL")
-    parser.add_argument("--sheet", help="Override: Google Sheet ID")
+    parser.add_argument("--site",  help="Override: GSC site URL (single-site run)")
+    parser.add_argument("--sheet", help="Override: Google Sheet ID (single-site run)")
     parser.add_argument("--days",  type=int, help="Override: number of days to pull")
     parser.add_argument("--history-sheet",
                         help="Override: Google Sheet ID of the permanent history store")
@@ -299,23 +413,28 @@ def main():
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
 
-    site_url   = args.site  or os.environ.get("SITE_URL") or cfg.get("site_url")
-    sheet_id   = args.sheet or os.environ.get("SHEET_ID") or cfg.get("sheet_id")
     oauth_file = cfg.get("oauth_client_file", "credentials.json")
     days       = args.days  or int(os.environ.get("DAYS") or cfg.get("days", 90))
-    # Optional: leave empty to skip the history step entirely
-    history_id = (args.history_sheet or os.environ.get("HISTORY_SHEET_ID")
-                  or cfg.get("history_sheet_id"))
 
-    if not site_url or not sheet_id:
-        print("\n  ERROR: site_url and sheet_id are required.")
-        print("  Set them in config.yaml, as SITE_URL / SHEET_ID environment variables,")
-        print("  or with --site / --sheet.")
+    # Which sites? SITES_JSON (several sites) or the older single-site settings.
+    sites_json = os.environ.get("SITES_JSON")
+    try:
+        site_list = sites.load_sites(
+            sites_json,
+            args.site  or os.environ.get("SITE_URL") or cfg.get("site_url"),
+            args.sheet or os.environ.get("SHEET_ID") or cfg.get("sheet_id"),
+            (args.history_sheet or os.environ.get("HISTORY_SHEET_ID")
+             or cfg.get("history_sheet_id")),
+            force_single=bool(args.site or args.sheet),
+        )
+    except sites.SitesConfigError as e:
+        print(f"\n  ERROR: {e}")
         sys.exit(1)
+    multi = bool(sites_json and sites_json.strip()) and not (args.site or args.sheet)
+    history_off_text = ("no history_sheet_id for this site" if multi else "no HISTORY_SHEET_ID")
 
-    _SENSITIVE.extend([site_url, sheet_id])
-    if history_id:
-        _SENSITIVE.append(history_id)
+    for s in site_list:                     # every id, even of disabled sites, is scrubbed
+        _SENSITIVE.extend(s.sensitive_values())
 
     # GSC data runs ~2-3 days behind, so stop 3 days ago to avoid half-empty days
     end_dt     = datetime.today() - timedelta(days=3)
@@ -323,81 +442,62 @@ def main():
     end_date   = end_dt.strftime("%Y-%m-%d")
     start_date = start_dt.strftime("%Y-%m-%d")
 
+    runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
+    enabled = [r for r in runs if r.status != "disabled"]
+
     # ---- Banner ------------------------------------------------------------
     print()
     print("  ┌─────────────────────────────────────────────┐")
     print("  │  GSC Pulse  ·  by Mehdi Raoof               │")
     print("  └─────────────────────────────────────────────┘")
-    print(f"  Site   : {show(site_url)}")
+    print(f"  Sites  : {len(enabled)} enabled, {len(runs) - len(enabled)} disabled")
     print(f"  Period : {start_date}  →  {end_date}  ({days} days)")
-    print(f"  Sheet  : {show('https://docs.google.com/spreadsheets/d/' + sheet_id)}")
+    print()
+    for r in runs:
+        if r.status == "disabled":
+            print(f"{r.name}: disabled")
     print()
 
-    # ---- Auth --------------------------------------------------------------
+    # ---- Auth (once, shared by every site) ---------------------------------
     print("Authenticating...")
-    creds         = get_credentials(oauth_file)
-    gsc_service   = build("webmasters", "v3",  credentials=creds)
+    creds          = get_credentials(oauth_file)
+    gsc_service    = build("webmasters", "v3",  credentials=creds)
     sheets_service = build("sheets",    "v4",  credentials=creds)
     print("  ✓  Connected to Google APIs\n")
 
-    # ---- Fetch + write tabs ------------------------------------------------
-    print("Fetching data from Search Console and writing to Sheets...")
-    print(f"  {'Tab':<22} {'Rows':>5}")
-    print(f"  {'-'*22} {'-'*5}")
-
-    tabs = [
-        ("Queries",     ["query"],         DEFAULT_ROW_LIMIT),
-        ("Pages",       ["page"],          DEFAULT_ROW_LIMIT),
-        ("Date Trend",  ["date"],          DEFAULT_ROW_LIMIT),
-        ("Device",      ["device"],        DEFAULT_ROW_LIMIT),
-        ("Country",     ["country"],       DEFAULT_ROW_LIMIT),
-        ("Query×Page",  ["query", "page"], QUERY_PAGE_LIMIT),
-    ]
-
-    for tab_name, dimensions, limit in tabs:
-        rows  = fetch_gsc(gsc_service, site_url, start_date, end_date, dimensions, limit)
-        table = rows_to_table(rows, dimensions)
-        write_tab(sheets_service, sheet_id, tab_name, table)
-
-    # ---- History (append-only, separate sheet) -----------------------------
-    history_meta   = []
-    history_failure = None
-    print()
-    if not history_id:
-        print("History: off (no HISTORY_SHEET_ID)")
-    else:
-        print(f"History: on  ({show('https://docs.google.com/spreadsheets/d/' + history_id)})")
+    # ---- Phase 1: v1 tabs of every site, one after another -----------------
+    for r in enabled:
         try:
-            result = history.run_history(
-                sheets_service, history_id,
-                functools.partial(iter_gsc_pages, gsc_service, site_url, num_retries=history.RETRIES),
-                started_at=started_at,
-            )
-            history_meta = result.meta_rows()
-        except Exception as e:  # v1 tabs are already written; report and fail at the end
-            history_failure = scrub(describe_error(e))
-            print(f"  ❌  History: {history_failure}")
-            history_meta = [["History status", "error (see run log)"]]
+            sync_main_tabs(gsc_service, sheets_service, r, start_date, end_date)
+        except Exception as e:
+            r.history_text = "skipped"
+            fail_site(r, e)
+            print()
 
-    # ---- Meta tab ----------------------------------------------------------
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    meta_data = [
-        ["Property",        site_url],
-        ["Date range",      f"{start_date} → {end_date}"],
-        ["Days",            days],
-        ["Last updated",    now_str],
-    ] + history_meta + [
-        ["Built with",      "GSC Pulse by Mehdi Raoof — linkedin.com/in/mehdiraoof/"],
-    ]
-    write_tab(sheets_service, sheet_id, "Meta", meta_data)
+    # ---- Phase 2: history of every site (shares one time budget) -----------
+    for r in enabled:
+        if r.status == "failed":
+            continue                        # no access / no sheet: nothing to append to
+        sync_history(gsc_service, sheets_service, r, started_at, history_off_text)
 
-    if history_failure:
-        raise GscPulseError(f"History step failed: {history_failure}")
+    # ---- Phase 3: Meta tab of every site -----------------------------------
+    for r in enabled:
+        if not r.v1_done:
+            continue                        # the v1 phase failed: nothing to describe
+        try:
+            write_meta(sheets_service, r, start_date, end_date, days)
+        except Exception as e:
+            fail_site(r, e)
+        if r.status == "pending":
+            r.status = "ok"
 
     # ---- Done --------------------------------------------------------------
     print()
-    print(f"  ✅  Done — updated at {now_str}")
-    print(f"  Sheet: {show('https://docs.google.com/spreadsheets/d/' + sheet_id)}")
+    print_summary(runs)
+    failed = [r.name for r in runs if r.status == "failed"]
+    if failed:
+        raise GscPulseError(f"{len(failed)} of {len(enabled)} site(s) failed: {', '.join(failed)}")
+    print(f"  ✅  Done — updated at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print()
 
 

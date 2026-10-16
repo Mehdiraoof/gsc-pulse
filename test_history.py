@@ -621,7 +621,7 @@ class MainWiringTests(unittest.TestCase):
 
         out = io.StringIO()
         clean = {k: v for k, v in os.environ.items()
-                 if k not in ("HISTORY_SHEET_ID", "SITE_URL", "SHEET_ID", "DAYS", "GITHUB_ACTIONS")}
+                 if k not in ("SITES_JSON", "HISTORY_SHEET_ID", "SITE_URL", "SHEET_ID", "DAYS", "GITHUB_ACTIONS")}
         clean.update(env)
         with mock.patch.dict(os.environ, clean, clear=True), \
              mock.patch.object(sys, "argv", ["gsc_pulse.py", "--config", "no-such-file.yaml"]), \
