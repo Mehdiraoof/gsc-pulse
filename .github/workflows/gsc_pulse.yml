@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 4 * * 1"   # every Monday 04:00 UTC (07:00 Istanbul)
   workflow_dispatch:       # adds a "Run workflow" button for manual runs
+    inputs:
+      discover_site:
+        description: "Page type discovery only: site name from SITES_JSON (leave empty for the normal sync)"
+        required: false
+        default: ""
 
 permissions:
   contents: write   # only used by the keep-alive step below
@@ -34,6 +39,7 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
           SITES_JSON: ${{ secrets.SITES_JSON }}
+          DISCOVER_SITE: ${{ inputs.discover_site }}
         run: python gsc_pulse.py
 
       # Public repos pause scheduled runs after 60 days without activity.

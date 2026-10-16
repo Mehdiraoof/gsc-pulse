@@ -69,6 +69,22 @@ class LoadSitesTests(unittest.TestCase):
         self.assertEqual(set(s.sensitive_values()), {"sc-domain:site-a.test", "site-a-main", "a-hist"})
 
 
+    def test_reports_sheet_is_optional_and_counts_as_sensitive(self):
+        got = sites.parse_sites_json(dump(site("site-a", reports_sheet_id="a-reports"),
+                                          site("site-b")))
+        self.assertEqual(got[0].reports_sheet_id, "a-reports")
+        self.assertEqual(got[1].reports_sheet_id, "")
+        self.assertIn("a-reports", got[0].sensitive_values())
+
+    def test_reports_sheet_must_be_its_own_sheet(self):
+        with self.assertRaises(sites.SitesConfigError):
+            sites.parse_sites_json(dump(site("site-a", reports_sheet_id="site-a-main")))
+        with self.assertRaises(sites.SitesConfigError):
+            sites.parse_sites_json(dump(site("site-a", history_sheet_id="x", reports_sheet_id="x")))
+        with self.assertRaises(sites.SitesConfigError):
+            sites.parse_sites_json(dump(site("site-a", reports_sheet_id="r"),
+                                        site("site-b", reports_sheet_id="r")))
+
 class ValidationTests(unittest.TestCase):
 
     def fails(self, raw, *must_not_contain):

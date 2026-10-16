@@ -42,6 +42,7 @@ except ImportError:
     print("Missing dependencies. Run: pip install -r requirements.txt")
     sys.exit(1)
 
+import page_discovery
 import history
 import sites
 
@@ -387,6 +388,32 @@ def print_summary(runs: list):
     print()
 
 
+def discover_page_types(gsc_service, sheets_service, site, start_date: str, end_date: str):
+    """Writes the Page Type Discovery tab to the site's Reports sheet. Nothing else runs."""
+    site_header_text = "Page type discovery"
+    print(f"── {site.name} · {site_header_text} " + "─" * 10)
+    print(f"  Period : {start_date}  →  {end_date}")
+    page_discovery.run_discovery(
+        lambda dims: fetch_gsc(gsc_service, site.site_url, start_date, end_date, dims),
+        sheets_service, write_tab, site.reports_sheet_id,
+    )
+    print("  Read the tab, then add `page_types` rules to the site's entry in SITES_JSON.")
+    print("  Nothing is written automatically.\n")
+
+
+def pick_discovery_site(site_list: list, name: str):
+    """The enabled site to run discovery for. Errors never echo the requested name."""
+    match = [s for s in site_list if s.name.lower() == name.strip().lower()]
+    if not match:
+        raise GscPulseError("page type discovery: that site name is not in SITES_JSON")
+    site = match[0]
+    if not site.enabled:
+        raise GscPulseError("page type discovery: that site is disabled")
+    if not site.reports_sheet_id:
+        raise GscPulseError("page type discovery: that site has no reports_sheet_id")
+    return site
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -402,6 +429,9 @@ def main():
     parser.add_argument("--days",  type=int, help="Override: number of days to pull")
     parser.add_argument("--history-sheet",
                         help="Override: Google Sheet ID of the permanent history store")
+    parser.add_argument("--discover-page-types", metavar="SITE_NAME",
+                        help="Write the Page Type Discovery tab to the Reports sheet of this "
+                             "site (a name from SITES_JSON) and exit; nothing else runs")
     args = parser.parse_args()
     started_at = time.monotonic()
 
@@ -442,6 +472,10 @@ def main():
     end_date   = end_dt.strftime("%Y-%m-%d")
     start_date = start_dt.strftime("%Y-%m-%d")
 
+    # ---- Page type discovery: its own command, nothing else runs ------------
+    discover_name = (args.discover_page_types or os.environ.get("DISCOVER_SITE") or "").strip()
+    discover_site = pick_discovery_site(site_list, discover_name) if discover_name else None
+
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
     enabled = [r for r in runs if r.status != "disabled"]
 
@@ -464,6 +498,11 @@ def main():
     gsc_service    = build("webmasters", "v3",  credentials=creds)
     sheets_service = build("sheets",    "v4",  credentials=creds)
     print("  ✓  Connected to Google APIs\n")
+    if discover_site:
+        discover_page_types(gsc_service, sheets_service, discover_site, start_date, end_date)
+        print(f"  ✅  Done — updated at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        return
+
 
     # ---- Phase 1: v1 tabs of every site, one after another -----------------
     for r in enabled:

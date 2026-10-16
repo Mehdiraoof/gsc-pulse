@@ -22,7 +22,7 @@ import json
 import re
 from dataclasses import dataclass
 
-ALLOWED_FIELDS = ("name", "site_url", "sheet_id", "history_sheet_id", "enabled")
+ALLOWED_FIELDS = ("name", "site_url", "sheet_id", "history_sheet_id", "reports_sheet_id", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
 
@@ -37,11 +37,13 @@ class Site:
     site_url: str = ""
     sheet_id: str = ""
     history_sheet_id: str = ""
+    reports_sheet_id: str = ""
     enabled: bool = True
 
     def sensitive_values(self) -> list:
         """Everything that must never appear in a public log."""
-        return [v for v in (self.site_url, self.sheet_id, self.history_sheet_id) if v]
+        return [v for v in (self.site_url, self.sheet_id, self.history_sheet_id,
+                            self.reports_sheet_id) if v]
 
 
 def _text(entry: dict, field: str, where: str, required: bool) -> str:
@@ -95,11 +97,13 @@ def parse_sites_json(raw: str) -> list:
             site_url=_text(entry, "site_url", where, required=enabled),
             sheet_id=_text(entry, "sheet_id", where, required=enabled),
             history_sheet_id=_text(entry, "history_sheet_id", where, required=False),
+            reports_sheet_id=_text(entry, "reports_sheet_id", where, required=False),
             enabled=enabled,
         )
-        if site.history_sheet_id and site.history_sheet_id == site.sheet_id:
-            raise SitesConfigError(f"{where}: 'history_sheet_id' must be a different sheet "
-                                   f"than 'sheet_id'")
+        own = [site.sheet_id, site.history_sheet_id, site.reports_sheet_id]
+        if len({v for v in own if v}) != len([v for v in own if v]):
+            raise SitesConfigError(f"{where}: sheet_id, history_sheet_id and reports_sheet_id "
+                                   f"must be three different sheets")
         sites.append(site)
 
     if not any(s.enabled for s in sites):
@@ -110,7 +114,8 @@ def parse_sites_json(raw: str) -> list:
     for s in sites:
         if not s.enabled:
             continue
-        for kind, value in (("sheet_id", s.sheet_id), ("history_sheet_id", s.history_sheet_id)):
+        for kind, value in (("sheet_id", s.sheet_id), ("history_sheet_id", s.history_sheet_id),
+                            ("reports_sheet_id", s.reports_sheet_id)):
             if value and value in seen:
                 raise SitesConfigError(
                     f"site '{s.name}': '{kind}' is already used by site '{seen[value]}'")
