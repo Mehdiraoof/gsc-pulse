@@ -1,5 +1,5 @@
 """
-GSC Pulse: AI Overview (Generative AI report) imports
+PulseO: AI Overview (Generative AI report) imports
 =====================================================
 Search Console has no API for the Generative AI report. Once a month the report
 is exported to Google Sheets and its `Pages` and `Dates` tabs are copied into the

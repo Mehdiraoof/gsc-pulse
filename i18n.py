@@ -102,6 +102,7 @@ EN = {
     "h_kw_up": "Growing keywords", "h_kw_down": "Declining keywords",
     "no_kw_up": "No growing keywords this month", "no_kw_down": "No declining keywords this month",
     "pages_title_loss": "The page {page} lost {n} clicks",
+    "pages_title_loss_generic": "The top declining page lost {n} clicks",
     "pages_title_plain": "Growing and declining pages",
     "h_pg_up": "Growing pages", "h_pg_down": "Declining pages",
     "no_pg_up": "No growing pages this month", "no_pg_down": "No declining pages this month",
@@ -237,6 +238,7 @@ FA = {
     "h_kw_up": "کلمات در حال رشد", "h_kw_down": "کلمات در حال افت",
     "no_kw_up": "این ماه کلمه‌ای رشد نکرد", "no_kw_down": "این ماه کلمه‌ای افت نکرد",
     "pages_title_loss": "صفحه {page} {n} کلیک از دست داد",
+    "pages_title_loss_generic": "صفحه‌ای که بیشترین افت را داشت {n} کلیک از دست داد",
     "pages_title_plain": "صفحات در حال رشد و افت",
     "h_pg_up": "صفحات در حال رشد", "h_pg_down": "صفحات در حال افت",
     "no_pg_up": "این ماه صفحه‌ای رشد نکرد", "no_pg_down": "این ماه صفحه‌ای افت نکرد",
@@ -293,7 +295,7 @@ FA = {
 
 LANGUAGES = {"en": EN, "fa": FA}
 
-_NUMBER = re.compile(r"[+\-−]?\d[\d,.]*%?")
+_NUMBER = re.compile(r"(?<![\w.])([+\-−]?)(\d[\d,.]*%?)")   # a sign counts only at the start of a word
 _ARABIC = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
 
 
@@ -310,11 +312,19 @@ def has_arabic_script(text: str) -> bool:
 
 
 def bidi(text: str, lang: str) -> str:
-    """In Persian text, wraps numbers, % and signs in LRM so they keep their order."""
+    """
+    In Persian text, wraps numbers, % and signs in LRM so they keep their order. The sign gets
+    its own LRM between it and the digits: with only one LRM around the whole number a minus
+    sign resolves to the right-to-left direction and lands on the wrong side of the digits.
+    """
     if lang != "fa":
         return text
-    return _NUMBER.sub(lambda m: f"{LRM}{m.group(0)}{LRM}", text)
 
+    def wrap(m):
+        sign, number = m.group(1), m.group(2)
+        return f"{LRM}{sign}{LRM}{number}{LRM}" if sign else f"{LRM}{number}{LRM}"
+
+    return _NUMBER.sub(wrap, text)
 
 def fmt_int(n) -> str:
     return f"{int(round(n)):,}"

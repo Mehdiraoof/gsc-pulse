@@ -1,5 +1,5 @@
 """
-GSC Pulse: page type discovery
+PulseO: page type discovery
 ==============================
 A helper for writing `page_types` rules. It lists how a site's URLs are laid out
 (hosts, first path segments, second path segments, and for flat "/some-slug/"

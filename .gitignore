@@ -4,3 +4,5 @@ credentials.json
 !package.json
 __pycache__/
 *.log
+*.pptx
+!templates/*.pptx

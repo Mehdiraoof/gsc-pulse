@@ -1,5 +1,5 @@
 """
-GSC Pulse: small Google Sheets helpers for report tabs
+PulseO: small Google Sheets helpers for report tabs
 ======================================================
 Thin wrappers around the throttled read / write calls of history.py, so the
 report modules never talk to the Sheets API directly and always stay inside

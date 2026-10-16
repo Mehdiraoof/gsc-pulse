@@ -1,5 +1,5 @@
 """
-GSC Pulse: report periods
+PulseO: report periods
 =========================
 Calendar months and Monday-to-Sunday (ISO) weeks, and which of them are
 *complete*: a period counts only when its last day is on or before the last

@@ -126,28 +126,45 @@ def template_mark(layouts) -> bytes:
 _ARABIC = i18n._ARABIC
 
 
-def split_script(text: str) -> list:
-    """[(piece, is_persian)]: Persian words (with the spaces between them) and everything else."""
+def split_script(text: str, neutral_to_persian: bool = False) -> list:
+    """
+    [(piece, is_persian)]: Persian words and everything else, in order. Spaces, digits and
+    punctuation (neutrals) go with the letters around them; where a neutral stretch sits
+    between the two scripts it goes to the script of the paragraph (Latin in an English deck,
+    Persian in a Persian one), so a space never ends up on the wrong side of a Persian word.
+    """
     kinds = []
     for ch in text:
-        if _ARABIC.match(ch) or ch in "‌‏":
+        if _ARABIC.match(ch) or ch in "\u200c\u200f":
             kinds.append(True)
         elif ch.isalpha():
             kinds.append(False)
         else:
-            kinds.append(None)                           # neutral: spaces, digits, punctuation
-    last = None
-    for i, k in enumerate(kinds):                        # neutrals follow the previous letter
-        if k is None:
-            kinds[i] = last
+            kinds.append(None)
+    n = len(kinds)
+    i = 0
+    while i < n:
+        if kinds[i] is not None:
+            i += 1
+            continue
+        j = i
+        while j < n and kinds[j] is None:
+            j += 1
+        before = kinds[i - 1] if i > 0 else None
+        after = kinds[j] if j < n else None
+        if before is not None and before == after:
+            fill = before
+        elif before is None and after is None:
+            fill = neutral_to_persian
+        elif before is None or after is None:
+            fill = before if before is not None else after
+            if before is None:
+                fill = after
         else:
-            last = k
-    nxt = False
-    for i in range(len(kinds) - 1, -1, -1):              # leading neutrals follow the next letter
-        if kinds[i] is None:
-            kinds[i] = nxt
-        else:
-            nxt = kinds[i]
+            fill = neutral_to_persian
+        for k in range(i, j):
+            kinds[k] = fill
+        i = j
     pieces = []
     for ch, k in zip(text, kinds):
         if pieces and pieces[-1][1] == k:
@@ -157,7 +174,13 @@ def split_script(text: str) -> list:
     return [(p, k) for p, k in pieces]
 
 
-def _style_run(run, ctx: Ctx, size, bold, color, persian: bool):
+def _style_run(run, ctx: Ctx, size, bold, color, persian: bool, number: bool = False):
+    """
+    Persian runs (and every run of a Persian deck) get Vazirmatn and are marked right-to-left.
+    A number inside Persian text is its own run in the same font but *not* marked right-to-left
+    (language en-US, wrapped in LRM): marked right-to-left, a minus sign lands on the wrong
+    side of the digits.
+    """
     font = run.font
     if size:
         font.size = Pt(size)
@@ -165,14 +188,30 @@ def _style_run(run, ctx: Ctx, size, bold, color, persian: bool):
         font.bold = bold
     if color:
         font.color.rgb = rgb(color)
-    if persian or ctx.rtl:
+    if number:
+        font.name = FONT_FA
+        run._r.get_or_add_rPr().set("lang", "en-US")
+    elif persian or ctx.rtl:
         font.name = FONT_FA
         r_pr = run._r.get_or_add_rPr()
         r_pr.set("lang", "fa-IR")
         etree.SubElement(r_pr, qn("a:cs")).set("typeface", FONT_FA)
-        rtl = etree.SubElement(r_pr, qn("a:rtl"))
-        rtl.set("val", "1")
+        etree.SubElement(r_pr, qn("a:rtl")).set("val", "1")
 
+
+def run_pieces(chunk: str, ctx: Ctx) -> list:
+    """[(text, is_persian, is_number)] for one chunk of text."""
+    if not ctx.rtl:
+        return [(p, k, False) for p, k in split_script(chunk)]
+    out, pos = [], 0
+    for m in i18n._NUMBER.finditer(chunk):
+        if m.start() > pos:
+            out += [(p, k, False) for p, k in split_script(chunk[pos:m.start()], True)]
+        out.append((i18n.LRM + m.group(0) + i18n.LRM, False, True))
+        pos = m.end()
+    if pos < len(chunk):
+        out += [(p, k, False) for p, k in split_script(chunk[pos:], True)]
+    return out
 
 def write_paragraph(paragraph, text: str, ctx: Ctx, size=None, bold=None, color=None,
                     align=None, rtl=None, runs=None):
@@ -185,12 +224,11 @@ def write_paragraph(paragraph, text: str, ctx: Ctx, size=None, bold=None, color=
         r._r.getparent().remove(r._r)
     items = runs if runs else [(text, {})]
     for chunk, fmt in items:
-        chunk = i18n.bidi(chunk, ctx.lang)
-        for piece, persian in split_script(chunk):
+        for piece, persian, number in run_pieces(chunk, ctx):
             run = paragraph.add_run()
             run.text = piece
             _style_run(run, ctx, fmt.get("size", size), fmt.get("bold", bold),
-                       fmt.get("color", color), persian)
+                       fmt.get("color", color), persian, number)
     p_pr = paragraph._p.get_or_add_pPr()
     is_rtl = ctx.rtl if rtl is None else rtl
     if is_rtl:
@@ -218,15 +256,18 @@ def set_bullet(paragraph, kind: str, space_after: int = 10):
         etree.SubElement(p_pr, qn("a:buAutoNum")).set("type", "arabicPeriod")
 
 
-def fill_placeholder(ph, paragraphs: list, ctx: Ctx, **fmt):
-    """paragraphs: list of str or (str, {format}). First one reuses the placeholder's paragraph."""
+def fill_placeholder(ph, paragraphs: list, ctx: Ctx, anchor=None, **fmt):
+    """paragraphs: list of str or (str, {format}). First one reuses the placeholder's paragraph.
+    The text starts exactly at the placeholder's edge (no inner margin), like the sample decks."""
     tf = ph.text_frame
     tf.clear()
+    tf.margin_left = tf.margin_right = Emu(0)
+    if anchor is not None:
+        tf.vertical_anchor = anchor
     for i, item in enumerate(paragraphs):
         text, own = (item, {}) if isinstance(item, str) else item
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         write_paragraph(p, text, ctx, **{**fmt, **own})
-
 
 def text_box(slide, x, y, w, h, paragraphs: list, ctx: Ctx, size=14, color=SLATE, bold=None,
              align=None, anchor=MSO_ANCHOR.TOP):
@@ -289,7 +330,8 @@ def new_slide(ctx: Ctx, layout_name: str, title: str = None, notes: str = None):
     ctx.slide_count += 1
     if title is not None:
         text = title if len(title) <= 78 else title[:77] + "…"
-        fill_placeholder(roles["title"], [text], ctx, **({"size": 26} if len(text) > 56 else {}))
+        fill_placeholder(roles["title"], [text], ctx, anchor=MSO_ANCHOR.MIDDLE,
+                         **({"size": 26} if len(text) > 56 else {}))
     if "footer" in roles:
         fill_placeholder(roles["footer"], [ctx.footer], ctx)
     if notes:
@@ -349,7 +391,7 @@ def add_table(slide, ctx: Ctx, x, y, col_widths: list, header: list, rows: list,
     for i in range(len(rows) + 1):
         table.rows[i].height = Emu(inch(row_height))
 
-    def put(cell, spec: Cell, header_row: bool):
+    def put(cell, spec: Cell, header_row: bool, force_right: bool = False):
         _borders(cell, TINT if header_row else "FFFFFF")
         persian = dd_has_arabic(spec.text)
         if spec.kind in ("query", "page"):
@@ -358,14 +400,18 @@ def add_table(slide, ctx: Ctx, x, y, col_widths: list, header: list, rows: list,
             align = "r" if ctx.rtl else "l"
         else:                                           # numbers sit at the end of the row
             align = "l" if ctx.rtl else "r"
+        if force_right:
+            align = "r"
         p = cell.text_frame.paragraphs[0]
         write_paragraph(p, spec.text, ctx, size=size - 1 if header_row else size,
                         bold=True if header_row else spec.bold,
                         color=SLATE if header_row else (spec.color or INK), align=align,
                         rtl=True if (persian and spec.kind in ("query", "page")) else None)
 
+    persian_cols = {j for row in rows for j, c in enumerate(row)
+                    if c.kind in ("query", "page") and dd_has_arabic(c.text)}
     for j, h in enumerate(header):
-        put(table.cell(0, j), Cell(h, "num" if j > 0 else "query"), True)
+        put(table.cell(0, j), Cell(h, "num" if j > 0 else "query"), True, force_right=j in persian_cols)
     for i, row in enumerate(rows, start=1):
         for j, spec in enumerate(row):
             put(table.cell(i, j), spec, False)
@@ -438,7 +484,7 @@ def _alarm_cards(slide, ctx: Ctx, alarms: list):
         tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
         write_paragraph(tf.paragraphs[0], ctx.T["sev_" + a["severity"]], ctx, size=12, bold=True,
-                        color="FFFFFF" if high else INK, align="ctr", rtl=False)
+                        color="FFFFFF" if high else INK, align="ctr")
         text_x = mirror_x(ctx, left + 1.85, width - 2.15)
         area = ctx.T.get("area_" + a["area"], a["area"])
         message = dd.alarm_text(a, ctx.lang)
@@ -642,8 +688,10 @@ def slide_page_movers(ctx: Ctx):
     T, rep = ctx.T, ctx.report
     up, down = dd.of_type(rep.pages, "Growing"), dd.of_type(rep.pages, "Declining")
     if down and (dd.num(down[0]["Clicks diff"]) or 0) < 0:
-        title = T["pages_title_loss"].format(page=dd.short_path(down[0]["Page"], 30),
-                                             n=i18n.fmt_int(abs(dd.num(down[0]["Clicks diff"]))))
+        path = dd.short_path(down[0]["Page"], 30)
+        n = i18n.fmt_int(abs(dd.num(down[0]["Clicks diff"])))
+        title = (T["pages_title_loss_generic"].format(n=n) if (dd_has_arabic(path) and not ctx.rtl)
+                 else T["pages_title_loss"].format(page=path, n=n))
     else:
         title = T["pages_title_plain"]
     notes = "Full URLs\n\nGrowing:\n" + _page_notes(up) + "\n\nDeclining:\n" + _page_notes(down)
@@ -716,7 +764,7 @@ def slide_about(ctx: Ctx):
     slide, ph = new_slide(ctx, "Notes", title=T["about_title"])
     unit_free = {"AI Overviews", "Alarms", "Page types", "All and segments"}
     if ctx.lang == "en" and rep.notes:
-        bullets = [T["about_source"]] + [dd.first_sentence(text) for topic, text in rep.notes
+        bullets = [T["about_source"]] + [f"{topic}: {dd.first_sentence(text)}" for topic, text in rep.notes
                                          if topic not in unit_free and text]
         bullets.append(T["about_types"].format(names=", ".join(rep.page_types)) if rep.page_types
                        else T["about_types_none"])

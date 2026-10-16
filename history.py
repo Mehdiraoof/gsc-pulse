@@ -1,5 +1,5 @@
 """
-GSC Pulse: permanent history
+PulseO: permanent history
 ============================
 Search Console only keeps about 16 months of data. This module appends every
 finished day to a separate Google Sheet, once, and never overwrites it.

@@ -1,4 +1,4 @@
-# GSC Pulse
+# PulseO
 
 Sync your Google Search Console data to a Google Sheet automatically.  
 No third-party tools. No BigQuery costs. Just the official GSC API + Python.
@@ -50,7 +50,7 @@ Runs every Monday on GitHub's servers, even when your computer is off.
    | `SITES_JSON` | *(optional)* several sites in one secret, see [Multiple sites](#multiple-sites). Replaces the three secrets above |
    | `HISTORY_SHEET_ID` | *(optional)* a second sheet that keeps every day forever, see [History](#history-keep-every-day-forever) |
 
-6. **Actions tab → GSC Pulse weekly sync → Run workflow** to test. After that it
+6. **Actions tab → PulseO weekly sync → Run workflow** to test. After that it
    runs every Monday at 07:00 Istanbul time on its own.
 
 Domain properties in GSC are written as `sc-domain:example.com`.
@@ -64,7 +64,7 @@ Domain properties in GSC are written as `sc-domain:example.com`.
 ### 1. Google Cloud project
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a new project — name it anything (e.g. "GSC Pulse")
+2. Create a new project — name it anything (e.g. "PulseO")
 3. Go to **APIs & Services → Enable APIs & Services**
 4. Search for and enable:
    - **Google Search Console API**
@@ -135,7 +135,7 @@ crontab -e
 ### Windows (Task Scheduler)
 
 1. Open Task Scheduler
-2. Create Basic Task → name it "GSC Pulse"
+2. Create Basic Task → name it "PulseO"
 3. Trigger: Weekly, Monday
 4. Action: Start a program → `python` → Arguments: `C:\path\to\gsc_pulse.py`
 
@@ -143,7 +143,7 @@ crontab -e
 
 ## History: keep every day forever
 
-Search Console only keeps about 16 months of data. With history switched on, GSC Pulse
+Search Console only keeps about 16 months of data. With history switched on, PulseO
 also appends every finished day to a **separate** Google Sheet, once, and never
 overwrites it. The main sheet stays small and fast to read; the history sheet grows.
 
@@ -186,7 +186,7 @@ Without `HISTORY_SHEET_ID` the history step is skipped and everything else works
 
 A Google spreadsheet holds at most 10,000,000 cells. The history tabs grow forever
 (query rows are the biggest), so a busy site will eventually reach it. Before every
-append GSC Pulse checks the size of the history spreadsheet and **stops appending at
+append PulseO checks the size of the history spreadsheet and **stops appending at
 9,000,000 cells**. The sync still succeeds; it writes a warning to the log and to the
 `Meta` tab: *"History sheet almost full: create a new history sheet and update
 HISTORY_SHEET_ID"*.
@@ -314,6 +314,96 @@ untouched and the problem is written to `R Alarms` (area `AIO import`).
 
 ---
 
+## Reports by email: PowerPoint decks
+
+Every week and every month, PulseO can send a ready-to-present **PowerPoint (.pptx)** report per
+site by email, built from the numbers in the site's Reports sheet (so [Reports](#reports-the-monthly-and-weekly-seo-report-generated)
+must be set up first). Anyone who prefers Google Slides opens the attachment there: Slides
+opens .pptx files directly.
+
+- **Monthly deck** (about 12 slides): summary, alarms, scorecard, 13-month trend, segments (only
+  for sites with page types), lost and new keywords, growing and declining keywords and pages,
+  year over year, AI search, and a data-notes slide. It is sent when a new complete month exists
+  that was not sent yet.
+- **Weekly deck** (6 slides): summary, alarms (week-on-week drops of 20% or more), scorecard,
+  12-week trend and the top keyword movers. It is sent once for the latest complete week.
+- Slide titles state the takeaway ("Clicks down 32% this month, 91% vs last year"), generated
+  from the data by fixed rules. Empty data becomes a sentence, never an empty table.
+- The deck is built **in memory during the run** and exists only in the email. Nothing is
+  uploaded, committed or stored as a workflow artifact (the repository and its artifacts are public).
+- Which periods were sent is remembered in the `State` tab of the Reports sheet. Run the
+  workflow manually with **rebuild_decks** ticked to build and send both decks now.
+
+**Set it up**
+
+1. **Gmail:** turn on 2-Step Verification, then create an **App password** for "PulseO"
+   (Google Account → Security → 2-Step Verification → App passwords).
+2. **Repository secrets** (Settings → Secrets and variables → Actions):
+
+   | Secret | Value |
+   |---|---|
+   | `SMTP_HOST` | `smtp.gmail.com` |
+   | `SMTP_PORT` | `587` |
+   | `SMTP_USER` | the Gmail address that sends the emails |
+   | `SMTP_PASSWORD` | the app password (not your normal password) |
+   | `ANTHROPIC_API_KEY` | *(optional)* for automatic AI summaries |
+
+   Without the SMTP secrets nothing is built and the log says `decks: off (no SMTP settings)`.
+3. **Per site**, add a `deck` block to its entry in `SITES_JSON`:
+
+   ```json
+   "deck": {
+     "enabled": true,
+     "language": "en",
+     "site_label": "Example",
+     "recipients": ["someone@example.com", "env:SMTP_USER"],
+     "weekly": true,
+     "monthly": true,
+     "brand_color": "#1F3A5F",
+     "accent_color": "#E07A2E",
+     "logo_url": "https://example.com/logo.png",
+     "ai_summary": false
+   }
+   ```
+
+   | Field | |
+   |---|---|
+   | `enabled` | `false` (or no `deck` block) means no decks for the site. |
+   | `language` | `en` or `fa` (see below). |
+   | `site_label` | The client-facing name shown on the decks and in the email. It lives in the secret only. |
+   | `recipients` | One or more addresses. `"env:SMTP_USER"` means "the address in the `SMTP_USER` secret", so it never has to be written anywhere else. Start with only yourself, review the look, then add team members. |
+   | `weekly`, `monthly` | Which decks to send (default: both). |
+   | `brand_color`, `accent_color` | Optional. They only change the chart colours (impressions and clicks); fonts, colours and layout come from the template. |
+   | `logo_url` | Optional `https://` image, downloaded when the deck is built and shown on the title slide. If it cannot be downloaded the deck is built without it. |
+   | `ai_summary` | `true` writes the Summary slide with Claude (below). |
+
+Each email has its own subject, a short body with three headline numbers and the top alarm,
+and the deck attached, so your inbox is the archive. If sending fails, it is retried once, the
+error is logged (with addresses and passwords hidden) and the run ends red; decks that were sent
+stay marked as sent.
+
+**Design.** The look comes from a designed template (`templates/gsc_pulse_template.pptx`, and
+`gsc_pulse_template_fa.pptx` for Persian) with named slide layouts. The code only fills their
+placeholders and draws cards, tables and **native, editable PowerPoint charts** inside them. If a
+layout is missing from the template, the run fails with a message naming it.
+
+**Persian (`"language": "fa"`).** Every label comes from a translation table, text is
+right-to-left, tables read right to left, and all Persian text uses the font **Vazirmatn**. Google
+Slides has Vazirmatn; for PowerPoint, install it first (it is free, from Google Fonts), otherwise
+Persian text falls back to another font. Keywords and URLs in English decks are Persian too: those
+runs also use Vazirmatn. Alarm sentences are translated when they follow a known pattern.
+
+**AI summary.** With `"ai_summary": true` and an `ANTHROPIC_API_KEY`, the Summary slide is written by
+Claude: four to six plain-language bullets (biggest change first) and two or three next steps, in
+the deck language. **Enabling this sends aggregated numbers and your top queries and pages to the
+Anthropic API** (the scorecard, segments, alarms, top movers and AI search data of the period;
+never credentials, IDs or full tables). It costs cents per report. The model can be changed with
+the `AI_SUMMARY_MODEL` variable. If the key is missing or the request fails, the slide says
+"Summary not generated automatically" and its speaker notes hold the same aggregated text, ready to
+paste into Claude yourself.
+
+---
+
 ## Using it with Claude
 
 Once the sheet is updated, open a Claude session that has the Google Sheets
@@ -379,7 +469,7 @@ message that says where the problem is, but never prints what the secret contain
 3. Add an object for it to the `SITES_JSON` secret (Settings → Secrets and variables →
    Actions → edit `SITES_JSON`), with a neutral `name`. You can add it with
    `"enabled": false` first and switch it on once the access is in place.
-4. Run **GSC Pulse weekly sync** manually. A big site's history backfill may take more
+4. Run **PulseO weekly sync** manually. A big site's history backfill may take more
    than one run; re-run until the `State` tab of its history sheet shows the latest date.
 
 Running locally for a single site works as before; for several sites locally, set the

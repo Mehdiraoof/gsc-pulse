@@ -99,12 +99,12 @@ def monthly_report(segments: bool = False, aio: bool = False, persian_rows: bool
         {"severity": "high", "area": "Segment clicks", "impact": 156,
          "message": "Clicks for All fell by 32.4% compared with 2026-08 (481 to 325)."},
         {"severity": "medium", "area": "Page loss", "impact": 82,
-         "message": "The page https://example.test/guide/blue-running-shoes/ lost 59.9% of its clicks "
+         "message": "The page https://example.test/guide/%D8%A2%D9%85%D9%88%D8%B2%D8%B4-%D8%A8%D8%B1%D9%86%D8%A7%D9%85%D9%87/ lost 59.9% of its clicks "
                     "compared with 2026-08 (137 to 55)."},
         {"severity": "medium", "area": "Page loss", "impact": 70,
          "message": "and 4 more pages lost 50%+ of their clicks"},
         {"severity": "medium", "area": "Lost keyword", "impact": 26,
-         "message": "The keyword \"best budget laptop\" brought 26 clicks in 2026-08 and is not in "
+         "message": "The keyword \"قیمت لپ تاپ\" brought 26 clicks in 2026-08 and is not in "
                     "Search Console's data in 2026-09."},
     ]
     rep.notes = [("Data lag", "Search Console data is final about two to three days after a day ends."),

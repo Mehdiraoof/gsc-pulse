@@ -1,5 +1,5 @@
 """
-GSC Pulse: site configuration
+PulseO: site configuration
 =============================
 Loads the list of sites to sync, either from the SITES_JSON secret (several
 sites) or from the older single-site settings (SITE_URL / SHEET_ID /

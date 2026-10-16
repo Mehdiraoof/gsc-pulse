@@ -53,6 +53,7 @@ def _base_chart(slide, kind, x, y, w, h, categories, series, font: str):
         data.add_series(name, values, number_format)
     frame = slide.shapes.add_chart(kind, Emu(x), Emu(y), Emu(w), Emu(h), data)
     chart = frame.chart
+    chart.has_title = False
     chart.font.size = Pt(12)
     chart.font.color.rgb = _rgb(SLATE)
     if font:
@@ -169,6 +170,7 @@ def _move_second_series_to_secondary_line(chart, line_color: str, title: str, fo
         f'<c:crossAx val="{sec_cat}"/><c:crosses val="max"/><c:crossBetween val="between"/></c:valAx>')
     last_axis.addnext(cat_ax)
     cat_ax.addnext(val_ax)
+    etree.cleanup_namespaces(chart._chartSpace)          # no repeated xmlns declarations
 
 
 def _escape(text: str) -> str:

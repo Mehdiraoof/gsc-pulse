@@ -75,12 +75,12 @@ def build_message(sender: str, recipients: list, subject: str, body: str, filena
 
 
 def send(settings: SmtpSettings, message: EmailMessage, attempts: int = 2, wait: float = 5.0,
-         sleep=time.sleep, smtp_class=smtplib.SMTP):
+         sleep=None, smtp_class=None):
     """Sends the message; after a failure it waits and tries once more, then raises MailError."""
     last = None
     for attempt in range(attempts):
         try:
-            with smtp_class(settings.host, settings.port, timeout=60) as server:
+            with (smtp_class or smtplib.SMTP)(settings.host, settings.port, timeout=60) as server:
                 server.ehlo()
                 server.starttls(context=ssl.create_default_context())
                 server.ehlo()
@@ -90,5 +90,5 @@ def send(settings: SmtpSettings, message: EmailMessage, attempts: int = 2, wait:
         except (smtplib.SMTPException, OSError) as e:
             last = e
             if attempt + 1 < attempts:
-                sleep(wait)
+                (sleep or time.sleep)(wait)
     raise MailError(f"{type(last).__name__}: {last}")

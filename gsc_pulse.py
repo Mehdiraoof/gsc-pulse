@@ -1,5 +1,5 @@
 """
-GSC Pulse
+PulseO
 =========
 Syncs Google Search Console data to a Google Sheet automatically.
 Built for SEO teams who want live, always-updated keyword + page data
@@ -434,7 +434,7 @@ def write_meta(sheets_service, run: SiteRun, start_date: str, end_date: str, day
         ["Days",            days],
         ["Last updated",    now_str],
     ] + run.history_meta + [
-        ["Built with",      "GSC Pulse by Mehdi Raoof — linkedin.com/in/mehdiraoof/"],
+        ["Built with",      "PulseO by Mehdi Raoof — linkedin.com/in/mehdiraoof/"],
     ]
     write_tab(sheets_service, run.site.sheet_id, "Meta", meta_data)
 
@@ -485,7 +485,7 @@ def pick_discovery_site(site_list: list, name: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="GSC Pulse — sync Google Search Console data to Google Sheets"
+        description="PulseO — sync Google Search Console data to Google Sheets"
     )
     parser.add_argument("--config", default="config.yaml",
                         help="Path to YAML config file (default: config.yaml)")
@@ -556,7 +556,7 @@ def main():
     # ---- Banner ------------------------------------------------------------
     print()
     print("  ┌─────────────────────────────────────────────┐")
-    print("  │  GSC Pulse  ·  by Mehdi Raoof               │")
+    print("  │  PulseO  ·  by Mehdi Raoof                  │")
     print("  └─────────────────────────────────────────────┘")
     print(f"  Sites  : {len(enabled)} enabled, {len(runs) - len(enabled)} disabled")
     print(f"  Period : {start_date}  →  {end_date}  ({days} days)")

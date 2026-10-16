@@ -1,5 +1,5 @@
 """
-GSC Pulse: report engine (v2.0)
+PulseO: report engine (v2.0)
 ===============================
 Turns Search Console data into the monthly and weekly SEO reports, per site, in a
 separate Reports spreadsheet. Long format, one row per period per item, so the tabs

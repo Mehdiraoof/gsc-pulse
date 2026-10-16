@@ -1,5 +1,5 @@
 """
-GSC Pulse: alarms
+PulseO: alarms
 =================
 Deterministic rules that turn the report numbers into a short list of things
 worth looking at. Messages are plain English; the first slide of a client deck
