@@ -1,0 +1,22 @@
+# GSC Pulse — configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to config.yaml and fill in your values.
+# Never commit config.yaml to a public repo (it contains your Sheet ID).
+
+# The Google Search Console property URL.
+# Check the exact format in GSC — must match exactly, including trailing slash.
+# URL prefix format:  https://www.example.com/
+# Domain property:    sc-domain:example.com
+site_url: "https://www.example.com/"
+
+# The Google Sheet where data will be written.
+# Get this from the URL: docs.google.com/spreadsheets/d/THIS_PART/edit
+sheet_id: "YOUR_GOOGLE_SHEET_ID_HERE"
+
+# Path to the OAuth credentials JSON downloaded from Google Cloud Console.
+# Keep this file private — it lets anyone authenticate as your Google app.
+oauth_client_file: "credentials.json"
+
+# Number of days of data to pull (rolling window from today).
+# 90 is a good default for trend analysis. Max 480 days via the API.
+days: 90

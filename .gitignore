@@ -1,0 +1,6 @@
+config.yaml
+credentials.json
+*.json
+!package.json
+__pycache__/
+*.log

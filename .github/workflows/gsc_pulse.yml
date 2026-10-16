@@ -1,0 +1,45 @@
+name: GSC Pulse weekly sync
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"   # every Monday 04:00 UTC (07:00 Istanbul)
+  workflow_dispatch:       # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: write   # only used by the keep-alive step below
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync Search Console to Google Sheets
+        env:
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+        run: python gsc_pulse.py
+
+      # Public repos pause scheduled runs after 60 days without activity.
+      # If the last commit is 45+ days old, add an empty commit to stay active.
+      - name: Keep the weekly schedule alive
+        if: success()
+        run: |
+          age_days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "Last commit was $age_days days ago"
+          if [ "$age_days" -ge 45 ]; then
+            git config user.name "gsc-pulse-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep weekly schedule active"
+            git push
+          fi
