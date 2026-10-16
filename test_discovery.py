@@ -105,7 +105,34 @@ class AnalyzeTests(unittest.TestCase):
     def test_groups_per_level_are_capped(self):
         rows = [row(f"{WWW}s{i}/p{j}", 1, 1 + i) for i in range(400) for j in range(2)]
         table, _ = page_discovery.analyze(rows)
-        self.assertEqual(len(by_pattern(table, "Path 1")), page_discovery.MAX_GROUPS)
+        self.assertEqual(len(by_pattern(table, "Path 1")), page_discovery.MAX_GROUPS["Path 1"])
+
+    def test_fragment_variants_are_merged_into_one_page(self):
+        rows = [row(WWW + "a/x", 10, 100), row(WWW + "a/x#i", 3, 40), row(WWW + "a/x#i-2", 2, 10),
+                row(WWW + "a/y", 1, 5)]
+        table, stats = page_discovery.analyze(rows)
+        self.assertEqual(stats["pages"], 2)
+        self.assertEqual(stats["fragments_merged"], 2)
+        self.assertEqual(table[1][2:5], [2, 16, 155])                  # pages, clicks, impressions
+        a = by_pattern(table, "Path 1")[WWW + "a/"]
+        self.assertEqual((a[2], a[3], a[4]), (2, 16, 155))
+        self.assertEqual(a[6:9], [WWW + "a/x", WWW + "a/y", ""])       # examples have no fragment
+
+    def test_slug_start_groups_flat_slugs_by_their_first_word(self):
+        rows = ([row(WWW + f"price-of-item-{i}/", 1, 10 + i) for i in range(3)]
+                + [row(WWW + "price-list/", 1, 5), row(WWW + "guide-one/", 1, 5),
+                   row(WWW + "guide-two/", 1, 5), row(WWW + "en/price-x", 1, 5)])
+        table, _ = page_discovery.analyze(rows)
+        slugs = by_pattern(table, "Slug start")
+        self.assertEqual(set(slugs), {WWW + "price-"})                 # guide-: only 2 pages
+        self.assertEqual(slugs[WWW + "price-"][2], 4)                  # the /en/ page is not flat
+
+    def test_readable_pattern_column_decodes_percent_encoding(self):
+        rows = [row(WWW + "%D9%85%D8%AF%D9%84-a/", 1, 5), row(WWW + "%D9%85%D8%AF%D9%84-b/", 1, 5),
+                row(WWW + "%D9%85%D8%AF%D9%84-c/", 1, 5)]
+        table, _ = page_discovery.analyze(rows)
+        slug = by_pattern(table, "Slug start")[WWW + "%D9%85%D8%AF%D9%84-"]
+        self.assertEqual(slug[-1], WWW + "مدل-")
 
 
 class UrlGsc:
@@ -190,7 +217,7 @@ class DiscoveryCommandTests(unittest.TestCase):
 
     def test_log_shows_counts_only(self):
         out, err = self.run_main(["--discover-page-types", "site-a"])
-        self.assertIn("9 pages in", out)
+        self.assertIn("9 pages (0 #fragment variants merged)", out)
         for secret in SECRETS + [WWW, SHOP, "shop.alpha"]:
             self.assertNotIn(secret, out)
 
