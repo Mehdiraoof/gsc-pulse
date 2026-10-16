@@ -70,7 +70,9 @@ def parse_date(cell):
     t = _clean(cell)
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(t, fmt).date()
+            d = datetime.strptime(t, fmt).date()
+            if d.year >= 1900:           # a Jalali year such as 1405 is not a Gregorian date
+                return d
         except ValueError:
             continue
     return None

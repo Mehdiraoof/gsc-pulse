@@ -38,7 +38,7 @@ Runs every Monday on GitHub's servers, even when your computer is off.
    account email → **Restricted**.
 3. **Google Sheet:** create a blank sheet and share it with the service account
    email as **Editor**.
-4. **GitHub:** create a private repo and upload `gsc_pulse.py`, `history.py`, `sites.py`, `requirements.txt`
+4. **GitHub:** create a private repo and upload `gsc_pulse.py` and the other `.py` modules, `requirements.txt`
    and `.github/workflows/gsc_pulse.yml`.
 5. **GitHub Secrets** (repo Settings → Secrets and variables → Actions):
 
@@ -197,6 +197,106 @@ The fix is one new history sheet per year (or whenever the warning appears):
 2. Replace the `HISTORY_SHEET_ID` secret with the new ID.
 3. The next run starts the new sheet from scratch; it backfills only what Search
    Console still has. Keep the old sheet as the archive.
+
+---
+
+## Reports: the monthly and weekly SEO report, generated
+
+With a **Reports sheet** per site, every run also builds the numbers of a monthly and weekly
+SEO report, in a separate spreadsheet, in tabs that only ever grow (one row per period per
+item, so they can be charted and later turned into presentations).
+
+**Set it up:** create a blank Google Sheet for the site, share it with the service account
+as **Editor**, and add its ID to the site's entry in `SITES_JSON` as `reports_sheet_id`.
+Without `reports_sheet_id` the site gets no reports (the log says `reports: off`). No new
+Google permissions are needed.
+
+```json
+{"name": "site-1", "site_url": "sc-domain:example.com", "sheet_id": "…", "history_sheet_id": "…",
+ "reports_sheet_id": "…",
+ "page_types": [
+   {"name": "English", "regex": "/en/"},
+   {"name": "Shop", "regex": "^https://shop\\.example\\.com/"},
+   {"name": "Article", "regex": "/article/"}],
+ "thresholds": {"lost_new_min_impressions": 10, "movers_top_n": 100},
+ "weekly_segments": false}
+```
+
+| Tab | Content |
+|---|---|
+| `R Monthly` | Per month and segment: clicks, impressions, CTR, position, AI Overview impressions, and the change vs the previous month (MoM) and the same month last year (YoY), absolute and in %. |
+| `R Weekly` | The same per ISO week (Monday to Sunday), with WoW and YoY. Segment `All` only; `"weekly_segments": true` adds the page types. |
+| `R Keywords` | Per month vs the previous month: `Lost`, `New`, `Growing` and `Declining` keywords. |
+| `R Pages` | Per month: `Growing` / `Declining` pages vs the previous month and `YoY Growing` / `YoY Declining` vs the same month last year, with the page type(s) of each page. |
+| `R AIO Pages` | `Growing` / `Declining` pages by AI Overview impressions. |
+| `R Alarms` | Plain-English alarms (see below). |
+| `Notes` | Fixed explanations of how to read the numbers. |
+| `AIO Raw` | The imported AI Overview data (you never edit it). |
+
+**Rules that apply everywhere**
+
+- **Complete periods only.** Months are calendar months, weeks are Monday to Sunday. A
+  period is reported only after its last day has final data in Search Console; a partial
+  month or week is never shown as if it were complete.
+- **Closed periods are append-only.** A month or week is written once and not rewritten,
+  even if Search Console later revises the numbers. The first run writes every complete
+  month and week Search Console still has (about 16 months). The one exception: the AIO
+  columns of existing rows are filled in when an AI Overview import arrives later.
+- **`All`** uses a date-only query, exactly like Search Console with no filter. Segments use a
+  page filter (`includingRegex`); `Other` excludes every page type's regex.
+- Changes are empty when there is nothing to compare with: the first month, a base of 0 (for
+  %), or a period older than the 16 months Search Console keeps (so YoY fills in as time passes).
+- Query data leaves out anonymized queries: a keyword "missing" in a month means "not in
+  Search Console's returned data".
+
+**Page types**
+
+Page types are optional and describe how a site's URLs are organised (folders, subdomains).
+They live in `SITES_JSON`, because URL patterns can reveal a client. Types **may overlap**
+(an English article counts in English and in Article, like when you filter in Search Console).
+`Other` is automatic: the pages that match no rule. Without `page_types` only `All` is
+reported, there is no `Other`, and there is no "new URL pattern" alarm. A site whose URLs are
+flat slugs with no structure should simply have no page types.
+
+To find good rules, write the discovery tab:
+
+```bash
+python gsc_pulse.py --discover-page-types site-1
+```
+
+or run the workflow manually and fill in the `discover_site` input with the site name. It
+writes a `Page Type Discovery` tab to the Reports sheet: subdomains, first and second path
+segments (and, for flat sites, the first word of the slug) with page counts, clicks,
+impressions and example URLs. Rules are never written automatically; you decide which
+patterns become page types.
+
+**Alarms** (`R Alarms`: `Period, Severity, Area, Message`). Each is a fixed rule with a
+threshold you can change under `thresholds`:
+
+- a segment's clicks changed by 20% or more vs the previous month (`high` from 40%), if the
+  segment has at least 30 clicks (`alarm_clicks_change_pct`, `alarm_clicks_high_pct`, `alarm_min_clicks`)
+- a lost keyword that had 10 or more clicks the month before (`alarm_lost_keyword_clicks`)
+- a page that lost 50% or more of its clicks, having had 20 or more (`alarm_page_loss_pct`, `alarm_page_loss_min_clicks`)
+- AI Overview impressions down 30% or more (`alarm_aio_drop_pct`)
+- a possible new section: 5 or more pages in `Other` sharing the first folder or a subdomain
+  (`alarm_new_pattern_pages`), only for sites with page types
+- an AI Overview import that could not be read
+
+Other thresholds: `lost_new_min_impressions` (10) and `movers_top_n` (100).
+
+**AI Overview data (monthly, two minutes)**
+
+Search Console has no API for the Generative AI report yet, so the data goes in through the
+Reports sheet. Every month, open Search Console → Generative AI report → last full month, no
+comparison → Export → **Google Sheets**. In the exported spreadsheet, right-click the
+**Pages** tab and the **Dates** (daily chart) tab → *Copy to → Existing spreadsheet* → the
+site's Reports sheet, then rename the copied tabs to `AIO YYYY-MM Pages` and
+`AIO YYYY-MM Dates` (for example `AIO 2026-09 Pages` and `AIO 2026-09 Dates`).
+
+On the next run the tabs are read (columns are matched by name and by what the values look
+like, so a localized export works), stored in `AIO Raw`, and deleted. Importing a month again
+replaces that month. If a tab name or its content cannot be understood, the tab is left
+untouched and the problem is written to `R Alarms` (area `AIO import`).
 
 ---
 
