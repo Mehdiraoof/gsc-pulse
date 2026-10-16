@@ -40,6 +40,7 @@ import tabs
 MONTHLY, WEEKLY = "R Monthly", "R Weekly"
 KEYWORDS, PAGES = "R Keywords", "R Pages"
 AIO_PAGES, ALARMS, NOTES = "R AIO Pages", "R Alarms", "Notes"
+WEEKLY_MOVERS = "R Weekly Movers"
 
 
 def _change_header(unit: str) -> list:       # unit: "MoM" or "WoW"
@@ -65,6 +66,7 @@ AIO_PAGES_HEADER = ["Period", "Type", "Page", "AIO Impr", "AIO Impr prev", "AIO 
 TABS = [(MONTHLY, MONTHLY_HEADER, "Q"), (WEEKLY, WEEKLY_HEADER, "Q"),
         (KEYWORDS, KEYWORDS_HEADER, "L"), (PAGES, PAGES_HEADER, "M"),
         (AIO_PAGES, AIO_PAGES_HEADER, "F"), (ALARMS, alarms.HEADER, "E"),
+        (WEEKLY_MOVERS, KEYWORDS_HEADER, "L"),
         (NOTES, ["Topic", "Explanation"], "B"), (aio_import.RAW_TAB, aio_import.RAW_HEADER, "D")]
 
 AIO_COLS = (6, 11, 12)      # AIO Impressions, AIO change, AIO change % (0-based)
@@ -403,7 +405,8 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     week_by_label = {w[0]: w for w in weeks}
 
     existing = {name: tabs.read_rows(sheets, reports_id, name, last)
-                for name, _, last in TABS if name in (MONTHLY, WEEKLY, KEYWORDS, PAGES, AIO_PAGES)}
+                for name, _, last in TABS
+                if name in (MONTHLY, WEEKLY, KEYWORDS, PAGES, AIO_PAGES, WEEKLY_MOVERS)}
     series = {"All": all_series}
 
     def segment_series(seg):
@@ -449,6 +452,18 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     tabs.append(sheets, reports_id, WEEKLY, weekly_new, log)
     result.months = len({r[0] for r in monthly_new})
     result.weeks = len({r[0] for r in weekly_new})
+
+    # ---- R Weekly Movers: the latest complete week (the weekly deck's last slide) ----
+    if weeks:
+        label, monday, sunday = weeks[-1]
+        prev_monday = monday - timedelta(days=7)
+        if (label not in {r[0] for r in existing[WEEKLY_MOVERS] if r}
+                and periods.week_label(prev_monday) in week_by_label):
+            cur = by_key(fetch(["query"], monday, sunday))
+            prev = by_key(fetch(["query"], prev_monday, prev_monday + timedelta(days=6)))
+            tabs.append(sheets, reports_id, WEEKLY_MOVERS,
+                        movers(label, compare_rows(cur, prev), int(th["weekly_movers_top_n"]),
+                               "Growing", "Declining", lambda k: ()), log)
 
     # ---- AIO columns of rows that already exist -----------------------------
     seg_by_name = {s.name: s for s in segments}

@@ -42,6 +42,8 @@ except ImportError:
     print("Missing dependencies. Run: pip install -r requirements.txt")
     sys.exit(1)
 
+import deck_runner
+import mailer
 import page_discovery
 import reports
 import history
@@ -307,6 +309,7 @@ class SiteRun:
     history_meta: list = field(default_factory=list)
     history_text: str = "off"
     reports_text: str = "off"
+    decks_text: str = "off"
 
     @property
     def name(self) -> str:
@@ -401,6 +404,27 @@ def sync_reports(gsc_service, sheets_service, run: SiteRun, rebuild_alarms: bool
     print()
 
 
+def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks: bool = False):
+    """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed."""
+    site = run.site
+    if not site.deck.enabled:
+        return
+    site_header(run, "Decks")
+    if not site.reports_sheet_id:
+        print("decks: off (no reports sheet)\n")
+        return
+    if smtp is None:
+        run.decks_text = "off (no SMTP settings)"
+        print("decks: off (no SMTP settings)\n")
+        return
+    result = deck_runner.run_decks(sheets_service, site.reports_sheet_id, site, smtp, os.environ,
+                                   rebuild_decks, print, scrub)
+    run.decks_text = result.text()
+    if result.failed:
+        raise GscPulseError(f"deck delivery failed: {', '.join(result.failed)}")
+    print()
+
+
 def write_meta(sheets_service, run: SiteRun, start_date: str, end_date: str, days: int):
     """Phase 3: the Meta tab, which needs the history result."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -424,7 +448,8 @@ def print_summary(runs: list):
             continue
         appended = run.history.appended if run.history else 0
         print(f"  {run.name}: {run.status} | rows written: v1 {run.v1_rows}, "
-              f"history +{appended} | history: {run.history_text} | reports: {run.reports_text}")
+              f"history +{appended} | history: {run.history_text} | reports: {run.reports_text}"
+              + (f" | decks: {run.decks_text}" if run.site.deck.enabled else ""))
     print()
 
 
@@ -516,6 +541,14 @@ def main():
     discover_name = (args.discover_page_types or os.environ.get("DISCOVER_SITE") or "").strip()
     discover_site = pick_discovery_site(site_list, discover_name) if discover_name else None
     rebuild_alarms = os.environ.get("REBUILD_ALARMS", "").strip().lower() in ("1", "true", "yes")
+    rebuild_decks = os.environ.get("REBUILD_DECKS", "").strip().lower() in ("1", "true", "yes")
+    smtp = mailer.settings_from_env(os.environ)
+    if smtp:
+        _SENSITIVE.extend(smtp.sensitive_values())
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        _SENSITIVE.append(os.environ["ANTHROPIC_API_KEY"].strip())
+    for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
+        _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients, os.environ))
 
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
     enabled = [r for r in runs if r.status != "disabled"]
@@ -561,6 +594,17 @@ def main():
         try:
             sync_reports(gsc_service, sheets_service, r, rebuild_alarms)
         except Exception as e:
+            fail_site(r, e)
+            print()
+
+    # ---- Phase 1c: decks (PowerPoint reports by email), still before history ---
+    for r in enabled:
+        if not r.v1_done:
+            continue
+        try:
+            sync_decks(sheets_service, r, smtp, rebuild_decks)
+        except Exception as e:
+            r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
             fail_site(r, e)
             print()
 

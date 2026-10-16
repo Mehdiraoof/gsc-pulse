@@ -1,4 +1,4 @@
-name: GSC Pulse weekly sync
+name: PulseO weekly sync
 
 on:
   schedule:
@@ -11,6 +11,11 @@ on:
         default: ""
       rebuild_alarms:
         description: "Recompute R Alarms for all past periods with the current rules (normal sync otherwise)"
+        required: false
+        type: boolean
+        default: false
+      rebuild_decks:
+        description: "Build and email the weekly and monthly decks now, even if already sent (normal sync otherwise)"
         required: false
         type: boolean
         default: false
@@ -46,6 +51,12 @@ jobs:
           SITES_JSON: ${{ secrets.SITES_JSON }}
           DISCOVER_SITE: ${{ inputs.discover_site }}
           REBUILD_ALARMS: ${{ inputs.rebuild_alarms }}
+          REBUILD_DECKS: ${{ inputs.rebuild_decks }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python gsc_pulse.py
 
       # Public repos pause scheduled runs after 60 days without activity.

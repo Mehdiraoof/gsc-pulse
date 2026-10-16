@@ -23,13 +23,14 @@ import re
 from dataclasses import dataclass, field
 
 ALLOWED_FIELDS = ("name", "site_url", "sheet_id", "history_sheet_id", "reports_sheet_id",
-                  "page_types", "thresholds", "weekly_segments", "enabled")
+                  "page_types", "thresholds", "weekly_segments", "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
 TYPE_NAME_PATTERN = re.compile(r"[\w][\w \-]{0,39}")  # letters (any script), digits, space, - _
 RESERVED_SEGMENTS = ("all", "other")
 MAX_PAGE_TYPES = 20
-WHOLE_NUMBER_MIN = {"movers_top_n": 1, "alarm_max_per_period": 1, "alarm_page_loss_shown": 0}
+WHOLE_NUMBER_MIN = {"movers_top_n": 1, "alarm_max_per_period": 1, "alarm_page_loss_shown": 0,
+                    "weekly_movers_top_n": 1}
 
 # Report thresholds (all optional in SITES_JSON, per site)
 THRESHOLD_DEFAULTS = {
@@ -45,6 +46,7 @@ THRESHOLD_DEFAULTS = {
     "alarm_max_per_period":        10,   # R Alarms rows per period, all types together
     "alarm_aio_drop_pct":          30,   # AIO impressions fell this much month on month
     "alarm_new_pattern_pages":      5,   # pages in Other that share a first path segment or host
+    "weekly_movers_top_n":         10,   # keywords per list in the weekly deck (R Weekly Movers)
 }
 
 
@@ -62,17 +64,104 @@ class Site:
     page_types: list = field(default_factory=list)       # [{"name": ..., "regex": ...}]
     thresholds: dict = field(default_factory=dict)       # overrides of THRESHOLD_DEFAULTS
     weekly_segments: bool = False
+    deck: "DeckConfig" = None
     enabled: bool = True
 
     def sensitive_values(self) -> list:
         """Everything that must never appear in a public log."""
         ids = [v for v in (self.site_url, self.sheet_id, self.history_sheet_id,
                            self.reports_sheet_id) if v]
-        return ids + [t["regex"] for t in self.page_types]
+        return ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
+
+    def __post_init__(self):
+        if self.deck is None:
+            self.deck = DeckConfig()
 
     def threshold(self, key: str):
         """A report threshold: the site's own value, else the default."""
         return self.thresholds.get(key, THRESHOLD_DEFAULTS[key])
+
+
+# --------------------------------------------------------------------------- #
+# Decks (PowerPoint reports by email)
+# --------------------------------------------------------------------------- #
+
+DECK_FIELDS = ("enabled", "language", "site_label", "recipients", "weekly", "monthly",
+               "brand_color", "accent_color", "logo_url", "ai_summary")
+DECK_LANGUAGES = ("en", "fa")
+EMAIL_PATTERN = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
+ENV_RECIPIENT = re.compile(r"env:([A-Z][A-Z0-9_]*)")       # e.g. env:SMTP_USER: read at send time
+HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
+MAX_RECIPIENTS = 20
+
+
+@dataclass
+class DeckConfig:
+    enabled: bool = False
+    language: str = "en"
+    site_label: str = ""
+    recipients: list = field(default_factory=list)       # addresses, or "env:NAME" for a secret
+    weekly: bool = True
+    monthly: bool = True
+    brand_color: str = ""                                # overrides the impressions series colour
+    accent_color: str = ""                               # overrides the clicks series colour
+    logo_url: str = ""
+    ai_summary: bool = False
+
+    def sensitive_values(self) -> list:
+        fixed = [r for r in self.recipients if not ENV_RECIPIENT.fullmatch(r)]
+        return [v for v in [self.site_label, self.logo_url] + fixed if v]
+
+
+def _parse_deck(value, where: str) -> DeckConfig:
+    """Validates the deck block. Messages say where the problem is, never what the value is."""
+    if value is None:
+        return DeckConfig()
+    at = f"{where}, deck"
+    if not isinstance(value, dict):
+        raise SitesConfigError(f"{at}: must be a JSON object")
+    if set(value) - set(DECK_FIELDS):
+        raise SitesConfigError(f"{at}: has an unknown field (allowed: {', '.join(DECK_FIELDS)})")
+    for key in ("enabled", "weekly", "monthly", "ai_summary"):
+        if key in value and not isinstance(value[key], bool):
+            raise SitesConfigError(f"{at}: '{key}' must be true or false")
+    cfg = DeckConfig(enabled=value.get("enabled", True), weekly=value.get("weekly", True),
+                     monthly=value.get("monthly", True), ai_summary=value.get("ai_summary", False))
+    if not cfg.enabled:
+        return cfg
+    lang = value.get("language", "en")
+    if lang not in DECK_LANGUAGES:
+        raise SitesConfigError(f"{at}: 'language' must be one of {', '.join(DECK_LANGUAGES)}")
+    cfg.language = lang
+    label = value.get("site_label")
+    if not isinstance(label, str) or not label.strip() or len(label.strip()) > 60 \
+            or any(ord(c) < 32 for c in label):
+        raise SitesConfigError(f"{at}: 'site_label' is required (short text, at most 60 characters)")
+    cfg.site_label = label.strip()
+    rec = value.get("recipients")
+    if not isinstance(rec, list) or not rec or len(rec) > MAX_RECIPIENTS:
+        raise SitesConfigError(f"{at}: 'recipients' must be a list of 1 to {MAX_RECIPIENTS} "
+                               f"email addresses")
+    for r in rec:
+        if not isinstance(r, str) or not (EMAIL_PATTERN.fullmatch(r.strip())
+                                          or ENV_RECIPIENT.fullmatch(r.strip())):
+            raise SitesConfigError(f"{at}: every recipient must be an email address "
+                                   f"(or env:NAME for an address kept in a secret)")
+    cfg.recipients = [r.strip() for r in rec]
+    for key in ("brand_color", "accent_color"):
+        v = value.get(key, "")
+        if v and (not isinstance(v, str) or not HEX_COLOR.fullmatch(v)):
+            raise SitesConfigError(f"{at}: '{key}' must look like #1F3A5F")
+        setattr(cfg, key, v or "")
+    logo = value.get("logo_url", "")
+    if logo and (not isinstance(logo, str) or not logo.startswith("https://") or len(logo) > 500):
+        raise SitesConfigError(f"{at}: 'logo_url' must be an https:// address")
+    cfg.logo_url = logo or ""
+    if not (cfg.weekly or cfg.monthly):
+        raise SitesConfigError(f"{at}: switch on 'weekly' or 'monthly' (or set enabled to false)")
+    return cfg
+
+
 
 
 def _flag(entry: dict, key: str, where: str) -> bool:
@@ -188,6 +277,7 @@ def parse_sites_json(raw: str) -> list:
             page_types=_parse_page_types(entry.get("page_types"), where),
             thresholds=_parse_thresholds(entry.get("thresholds"), where),
             weekly_segments=_flag(entry, "weekly_segments", where),
+            deck=_parse_deck(entry.get("deck"), where),
             enabled=enabled,
         )
         own = [site.sheet_id, site.history_sheet_id, site.reports_sheet_id]
