@@ -112,9 +112,9 @@ def load_monthly(sheets, reports_id: str, site, period: str = None):
     rep.segments = list(dict.fromkeys(r["Segment"] for r in monthly if r["Segment"]))
     rep.keywords = [r for r in as_dicts(tabs.read_rows(sheets, reports_id, reports.KEYWORDS, "L"),
                                         reports.KEYWORDS_HEADER) if r["Period"] == period]
-    rep.pages = [r for r in as_dicts(tabs.read_rows(sheets, reports_id, reports.PAGES, "M"),
+    rep.pages = [r for r in as_dicts(tabs.read_rows(sheets, reports_id, reports.PAGES, "N"),
                                      reports.PAGES_HEADER) if r["Period"] == period]
-    rep.aio_pages = [r for r in as_dicts(tabs.read_rows(sheets, reports_id, reports.AIO_PAGES, "F"),
+    rep.aio_pages = [r for r in as_dicts(tabs.read_rows(sheets, reports_id, reports.AIO_PAGES, "G"),
                                          reports.AIO_PAGES_HEADER) if r["Period"] == period]
     rep.alarms = [{"severity": r[1], "area": r[2], "message": r[3], "impact": num(r[4]) or 0}
                   for r in (list(x) + [""] * 5 for x in
@@ -189,6 +189,7 @@ def weekly_alarms(rep: Report) -> list:
 _MONTH_KEY = re.compile(r"^(\d{4})-(\d{2})$")
 _WEEK_KEY = re.compile(r"^(\d{4})-W(\d{2})$")
 _URL = re.compile(r"(https?://[^\s]+)")
+_EN_MONTHS = {name: i + 1 for i, name in enumerate(i18n.table("en")["months"])}
 
 
 def human_period(key: str, lang: str) -> str:
@@ -196,6 +197,9 @@ def human_period(key: str, lang: str) -> str:
     m = _MONTH_KEY.match(key)
     if m and 1 <= int(m.group(2)) <= 12:
         return i18n.month_name(key, lang)
+    english = _EN_MONTHS.get(key)                    # R Alarms sentences name the month in English
+    if english:
+        return i18n.month_name(f"2000-{english:02d}", lang)
     w = _WEEK_KEY.match(key)
     if w:
         text = i18n.table(lang)["week"].format(n=int(w.group(2)))
@@ -232,7 +236,15 @@ def alarm_text(alarm: dict, lang: str) -> str:
     return shorten_urls(rendered if rendered else humanize_periods(message, lang))
 
 
+# Two generations of sentences: the current ones (month names, "vs", the segment left out for
+# the whole site, a page shown by its path) and the ones written before v2.2.
 _PATTERNS = [
+    ("msg_clicks", re.compile(r"Clicks(?: for (?P<seg>.+?))? (?P<dir>rose|fell) (?P<pct>[\d.]+%) vs "
+                              r"(?P<prev>\S+) \((?P<a>[\d,]+) to (?P<b>[\d,]+)\)\.")),
+    ("msg_page_loss", re.compile(r"The page (?P<page>.+) lost (?P<pct>[\d.]+%) of its clicks vs "
+                                 r"(?P<prev>\S+) \((?P<a>[\d,]+) to (?P<b>[\d,]+)\)\.")),
+    ("msg_aio_drop", re.compile(r"AI Overview impressions fell (?P<pct>[\d.]+%) vs "
+                                r"(?P<prev>\S+) \((?P<a>[\d,]+) to (?P<b>[\d,]+)\)\.")),
     ("msg_clicks", re.compile(r"Clicks for (?P<seg>.+) (?P<dir>rose|fell) by (?P<pct>[\d.]+%) compared "
                               r"with (?P<prev>\S+) \((?P<a>[\d,]+) to (?P<b>[\d,]+)\)\.")),
     ("msg_lost_kw", re.compile(r"The keyword \"(?P<kw>.+)\" brought (?P<n>[\d,]+) clicks in (?P<prev>\S+) "
@@ -259,7 +271,7 @@ def _render_message(message: str, lang: str, T: dict):
                 g[field_name] = human_period(g[field_name], lang)
         if key == "msg_clicks":
             direction = g.pop("dir")
-            g["metric"] = segment_phrase(T, "clicks", g.pop("seg"))
+            g["metric"] = segment_phrase(T, "clicks", g.pop("seg") or "All")
             return T["msg_clicks_up" if direction == "rose" else "msg_clicks_down"].format(**g)
         if key == "msg_page_loss":
             g["page"] = short_path(g["page"], 40)

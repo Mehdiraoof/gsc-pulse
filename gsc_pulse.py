@@ -46,6 +46,7 @@ import deck_runner
 import mailer
 import page_discovery
 import reports
+import views
 import history
 import sites
 
@@ -309,6 +310,8 @@ class SiteRun:
     history_meta: list = field(default_factory=list)
     history_text: str = "off"
     reports_text: str = "off"
+    reports_result: object = None    # reports.ReportsResult, when the reports ran
+    views_text: str = "off"
     decks_text: str = "off"
 
     @property
@@ -400,7 +403,29 @@ def sync_reports(gsc_service, sheets_service, run: SiteRun, rebuild_alarms: bool
     except Exception:
         run.reports_text = "failed"
         raise
+    run.reports_result = result
     run.reports_text = result.summary()
+    print()
+
+
+def sync_views(sheets_service, run: SiteRun, rebuild_views: bool = False):
+    """Phase 1c: the readable view tabs (Dashboard, Monthly, ...) of one site's Reports sheet."""
+    site = run.site
+    site_header(run, "Views")
+    if not site.reports_sheet_id:
+        print("views: off (no reports sheet)\n")
+        return
+    done = run.reports_result
+    try:
+        result = views.run_views(
+            sheets_service, site.reports_sheet_id, site,
+            newest_month=done.newest_month if done else "",
+            new_month=done.new_month if done else "",
+            rebuild=rebuild_views, log=print)
+    except Exception:
+        run.views_text = "failed"
+        raise
+    run.views_text = result.text()
     print()
 
 
@@ -449,6 +474,7 @@ def print_summary(runs: list):
         appended = run.history.appended if run.history else 0
         print(f"  {run.name}: {run.status} | rows written: v1 {run.v1_rows}, "
               f"history +{appended} | history: {run.history_text} | reports: {run.reports_text}"
+              + (f" | views: {run.views_text}" if run.site.reports_sheet_id else "")
               + (f" | decks: {run.decks_text}" if run.site.deck.enabled else ""))
     print()
 
@@ -542,6 +568,7 @@ def main():
     discover_site = pick_discovery_site(site_list, discover_name) if discover_name else None
     rebuild_alarms = os.environ.get("REBUILD_ALARMS", "").strip().lower() in ("1", "true", "yes")
     rebuild_decks = os.environ.get("REBUILD_DECKS", "").strip().lower() in ("1", "true", "yes")
+    rebuild_views = os.environ.get("REBUILD_VIEWS", "").strip().lower() in ("1", "true", "yes")
     smtp = mailer.settings_from_env(os.environ)
     if smtp:
         _SENSITIVE.extend(smtp.sensitive_values())
@@ -597,7 +624,17 @@ def main():
             fail_site(r, e)
             print()
 
-    # ---- Phase 1c: decks (PowerPoint reports by email), still before history ---
+    # ---- Phase 1c: view tabs (formulas on top of the report tabs) ----------
+    for r in enabled:
+        if not r.v1_done or r.status == "failed" and r.reports_result is None:
+            continue
+        try:
+            sync_views(sheets_service, r, rebuild_views)
+        except Exception as e:
+            fail_site(r, e)
+            print()
+
+    # ---- Phase 1d: decks (PowerPoint reports by email), still before history ---
     for r in enabled:
         if not r.v1_done:
             continue

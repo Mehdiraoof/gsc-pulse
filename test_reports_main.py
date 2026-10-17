@@ -25,7 +25,7 @@ A = {"name": "site-a", "site_url": "sc-domain:alpha.test", "sheet_id": "A-MAIN-I
 B = {"name": "site-b", "site_url": "sc-domain:beta.test", "sheet_id": "B-MAIN-ID",
      "history_sheet_id": "B-HIST-ID"}
 ENV_KEYS = ("SITES_JSON", "SITE_URL", "SHEET_ID", "HISTORY_SHEET_ID", "DAYS", "GITHUB_ACTIONS",
-            "DISCOVER_SITE")
+            "DISCOVER_SITE", "REBUILD_VIEWS", "REBUILD_ALARMS", "REBUILD_DECKS")
 
 
 class ReportsMainTests(unittest.TestCase):
@@ -38,9 +38,9 @@ class ReportsMainTests(unittest.TestCase):
         for book in ("A-MAIN-ID", "B-MAIN-ID", "A-REPORTS-ID"):
             self.sheets.add_book(book)
 
-    def run_main(self, entries):
+    def run_main(self, entries, extra_env=None):
         clean = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        clean.update({"SITES_JSON": json.dumps(entries), "GITHUB_ACTIONS": "true"})
+        clean.update({"SITES_JSON": json.dumps(entries), "GITHUB_ACTIONS": "true", **(extra_env or {})})
         out, error = io.StringIO(), None
         with mock.patch.dict(os.environ, clean, clear=True), \
              mock.patch.object(sys, "argv", ["gsc_pulse.py", "--config", "none.yaml"]), \
@@ -83,6 +83,41 @@ class ReportsMainTests(unittest.TestCase):
         b = [l for l in summary.splitlines() if l.strip().startswith("site-b")][0]
         self.assertIn("reports: +", a)
         self.assertTrue(b.rstrip().endswith("reports: off"))
+
+    def test_views_are_built_after_the_reports_and_before_history(self):
+        out, err = self.run_main([A, B])
+        self.assertIsNone(err)
+        self.assertLess(out.index("site-a · Reports"), out.index("site-a · Views"))
+        self.assertLess(out.index("site-a · Views"), out.index("site-a · History"))
+        book = self.sheets.books["A-REPORTS-ID"]
+        self.assertEqual(list(book)[:3], ["Dashboard", "Monthly", "Monthly · English"])
+        summary = out[out.index("Summary"):]
+        a = [l for l in summary.splitlines() if l.strip().startswith("site-a")][0]
+        self.assertIn("views: built", a)
+
+    def test_a_second_run_leaves_the_views_alone_and_rebuild_views_rebuilds_them(self):
+        self.run_main([A, B])
+        built = {n: t.sheet_id for n, t in self.sheets.books["A-REPORTS-ID"].items()}
+        out, err = self.run_main([A, B])
+        self.assertIsNone(err)
+        self.assertEqual({n: t.sheet_id for n, t in self.sheets.books["A-REPORTS-ID"].items()}, built)
+        a = [l for l in out[out.index("Summary"):].splitlines() if l.strip().startswith("site-a")][0]
+        self.assertIn("views: ok", a)
+        out, err = self.run_main([A, B], {"REBUILD_VIEWS": "true"})
+        self.assertIsNone(err)
+        self.assertNotEqual(self.sheets.books["A-REPORTS-ID"]["Dashboard"].sheet_id, built["Dashboard"])
+        a = [l for l in out[out.index("Summary"):].splitlines() if l.strip().startswith("site-a")][0]
+        self.assertIn("views: built", a)
+
+    def test_a_broken_view_fails_the_site_without_leaking_anything(self):
+        self.sheets.error_cells[("Dashboard", "B7")] = "#REF!"
+        out, err = self.run_main([A, B])
+        self.assertIsInstance(err, gsc_pulse.GscPulseError)
+        self.assertIn("site-a: failed (", out)
+        self.assertIn("Dashboard!B7", out)
+        self.assertNotIn("A-REPORTS-ID", out)
+        self.assertNotIn("English", out)
+        self.assertIn("History: on", out)
 
     def test_nothing_secret_reaches_the_log(self):
         out, _ = self.run_main([A, B])

@@ -14,10 +14,15 @@ changes lives in `R Pages`.
 All thresholds come from the site's configuration (sites.THRESHOLD_DEFAULTS).
 """
 
+import re
 from dataclasses import dataclass
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+
+import i18n
+import tabs
 
 HEADER = ["Period", "Severity", "Area", "Message", "Impact (clicks)"]
+WORDING_VERSION = "2"        # State tab: R Alarms holding older sentences is rebuilt once
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
 PAGE_LOSS = "Page loss"
 IMPORT_PROBLEM_IMPACT = 10 ** 9          # a tab that could not be imported always comes first
@@ -65,6 +70,11 @@ def _pct(change: float) -> str:
     return f"{abs(change):.1f}%"
 
 
+def _month(period: str) -> str:
+    """'2026-08' -> 'August': people never read period keys."""
+    return i18n.month_name(period, "en") if re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period) else period
+
+
 # --------------------------------------------------------------------------- #
 # The rules
 # --------------------------------------------------------------------------- #
@@ -83,8 +93,9 @@ def segment_change(period: str, prev_period: str, segment: str, clicks: int, pre
         return []
     severity = "high" if abs(change) >= th["alarm_clicks_high_pct"] else "medium"
     direction = "rose" if change > 0 else "fell"
+    who = "Clicks" if segment == "All" else f"Clicks for {segment}"      # "All" is an internal name
     return [Alarm(period, severity, "Segment clicks",
-                  f"Clicks for {segment} {direction} by {_pct(change)} compared with {prev_period} "
+                  f"{who} {direction} {_pct(change)} vs {_month(prev_period)} "
                   f"({_n(prev_clicks)} to {_n(clicks)}).", abs(clicks - prev_clicks))]
 
 
@@ -92,7 +103,8 @@ def lost_keywords(period: str, prev_period: str, lost: list, th: dict) -> list:
     """lost: [(query, clicks_prev)] for keywords that dropped out of the data this month."""
     return [Alarm(period, "medium", "Lost keyword",
                   f"The keyword \"{query}\" brought {_n(prev_clicks)} clicks in "
-                  f"{prev_period} and is not in Search Console's data in {period}.", prev_clicks)
+                  f"{_month(prev_period)} and is not in Search Console's data in "
+                  f"{_month(period)}.", prev_clicks)
             for query, prev_clicks in lost if prev_clicks >= th["alarm_lost_keyword_clicks"]]
 
 
@@ -111,8 +123,8 @@ def page_losses(period: str, prev_period: str, pages: list, th: dict) -> list:
     found.sort(key=lambda f: (-f[0], f[1]))
     shown = max(int(th["alarm_page_loss_shown"]), 0)
     out = [Alarm(period, "medium", PAGE_LOSS,
-                 f"The page {unquote(url)} lost {_pct(loss)} of its clicks compared with "
-                 f"{prev_period} ({_n(prev)} to {_n(clicks)}).", lost)
+                 f"The page {tabs.path_of(url)} lost {_pct(loss)} of its clicks vs "
+                 f"{_month(prev_period)} ({_n(prev)} to {_n(clicks)}).", lost)
            for lost, url, clicks, prev, loss in found[:shown]]
     more = len(found) - shown
     if more > 0:
@@ -134,7 +146,7 @@ def aio_drop(period: str, prev_period: str, aio: int, prev_aio: int, th: dict) -
     if drop < th["alarm_aio_drop_pct"]:
         return []
     return [Alarm(period, "medium", "AI Overviews",
-                  f"AI Overview impressions fell by {_pct(drop)} compared with {prev_period} "
+                  f"AI Overview impressions fell {_pct(drop)} vs {_month(prev_period)} "
                   f"({_n(prev_aio)} to {_n(aio)}).", 0)]
 
 
@@ -172,9 +184,10 @@ def new_url_patterns(period: str, other_urls: list, prev_other_urls: list, th: d
         if kind == "host" and key == main_host:
             continue
         what = "subdomain" if kind == "host" else "first folder"
+        where = urlsplit(key).netloc if kind == "host" else tabs.path_of(key)     # no scheme, no domain for a folder
         out.append(Alarm(period, "low", "New URL pattern",
                          f"{len(urls)} pages that match no page type share the same {what} "
-                         f"({unquote(key)}). This may be a new section: consider a page-type "
+                         f"({where}). This may be a new section: consider a page-type "
                          f"rule.", 0))
     return out
 

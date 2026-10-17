@@ -227,7 +227,7 @@ Google permissions are needed.
 | `R Monthly` | Per month and segment: clicks, impressions, CTR, position, AI Overview impressions, and the change vs the previous month (MoM) and the same month last year (YoY), absolute and in %. |
 | `R Weekly` | The same per ISO week (Monday to Sunday), with WoW and YoY. Segment `All` only; `"weekly_segments": true` adds the page types. |
 | `R Keywords` | Per month vs the previous month: `Lost`, `New`, `Growing` and `Declining` keywords. |
-| `R Pages` | Per month: `Growing` / `Declining` pages vs the previous month and `YoY Growing` / `YoY Declining` vs the same month last year, with the page type(s) of each page. |
+| `R Pages` | Per month: `Growing` / `Declining` pages vs the previous month and `YoY Growing` / `YoY Declining` vs the same month last year, with the page type(s) of each page and a readable `Path` in the last column (the URL decoded, domain removed; `R AIO Pages` has it too). |
 | `R AIO Pages` | `Growing` / `Declining` pages by AI Overview impressions. |
 | `R Alarms` | Plain-English alarms, at most 10 per period, with the clicks involved (see below). |
 | `Notes` | Fixed explanations of how to read the numbers. |
@@ -294,7 +294,10 @@ later for it (for example an AI Overview import), it is merged in and the period
 again. To recompute **R Alarms for every past period** with the current rules, for example after
 changing a threshold, run the workflow manually with *rebuild_alarms* ticked. This rewrites only
 R Alarms; the data tabs are never touched. (An R Alarms tab written by an older version, without
-the Impact column, is rebuilt automatically on the next run.)
+the Impact column or with the older wording, is rebuilt automatically once on the next run; the
+wording version is kept in the `State` tab.) The sentences are written for people: month names
+instead of period keys ("Clicks fell 32.4% vs August (481 to 325)."), the segment's name only for a
+page type (never "All"), and a page by its readable path.
 
 Other thresholds: `lost_new_min_impressions` (10) and `movers_top_n` (100).
 
@@ -311,6 +314,47 @@ On the next run the tabs are read (columns are matched by name and by what the v
 like, so a localized export works), stored in `AIO Raw`, and deleted. Importing a month again
 replaces that month. If a tab name or its content cannot be understood, the tab is left
 untouched and the problem is written to `R Alarms` (area `AIO import`).
+
+---
+
+## Reading the Reports sheet
+
+The `R ...` tabs are long lists made for code. On top of them PulseO builds a set of readable
+**view tabs**: open the sheet and you understand the month in half a minute. They hold formulas
+only, so they refresh by themselves when the R tabs grow; the weekly run never rewrites them.
+
+| Tab | What it shows |
+|---|---|
+| `Dashboard` | A month dropdown (and a *Segment* dropdown when the site has page types), one sentence about the month, a known event if you wrote one, the scorecard (clicks, impressions, CTR, average position, AI Overview impressions, each vs last month and last year, with a 13-month sparkline), the month's alarms, and the top 5 pages lost and gained, lost keywords and new keywords. |
+| `Monthly` | One row per month, newest on top, with changes, CTR, position, AI Overview impressions, year on year, and your note from `Events`. With page types there is also one `Monthly · <segment>` tab per segment (including *Other*). |
+| `Weekly` | The same per ISO week (for example `W41 · 5 Oct – 11 Oct 2026`), compared with the week before. |
+| `Lost Keywords`, `New Keywords`, `Growing Keywords`, `Declining Keywords` | A *Month* dropdown and the whole list for that month. |
+| `Growing Pages`, `Declining Pages`, `YoY Growing Pages`, `YoY Declining Pages` | The same for pages (shown by their readable path). YoY compares with the same month last year. |
+| `Growing AIO Pages`, `Declining AIO Pages` | Pages by AI Overview impressions. A month without an import says so. |
+| `Events` | The one tab you write in (see below). |
+| `R ...`, `Notes`, `AIO Raw`, `State`, `Page Type Discovery` | The data, in grey, at the end. Do not edit them. |
+
+Tab colours: amber is the Dashboard, dark blue the views, slate the Events tab, grey the data.
+Green numbers are good and red are bad; for the average position it is the other way round, because
+a lower position is better. Everything that can hold Persian (keywords, paths, alarm messages, notes)
+uses the Vazirmatn font.
+
+**Using the dropdowns.** Choose a month in the highlighted cell at the top of a tab. Each tab has its
+own dropdown. When a run adds a new complete month, every month dropdown moves to it by itself, so the
+sheet opens on the newest report; on other runs your choices are left alone.
+
+**Writing events.** Open `Events`, put the month in the first column as `YYYY-MM` (for example `2026-09`)
+and what happened in the second ("Site migration", "Core update", ...). The note then shows on the
+Dashboard under the takeaway, in the *Note* column of `Monthly`, and, for a week, in `Weekly` (by the
+month of its Monday). The rows with a note are highlighted. Nothing ever overwrites `Events`.
+
+**Repairing and rebuilding.** The tool stores a `views_version` in the `State` tab. If you delete a view
+tab, the next run creates it again. When a new version of PulseO changes the views, the next run
+deletes and recreates them once (`Events` is kept as it is). To rebuild them by hand, for example
+after you changed something in them, run the workflow manually with **rebuild_views** ticked. After
+building, the tabs are read back and the run fails if a cell shows `#REF!`, `#NAME?`, `#VALUE!` or
+`#ERROR!`. The formulas use commas between arguments, so the spreadsheet locale should be one that
+does too (File → Settings → Locale; *United States* always works).
 
 ---
 

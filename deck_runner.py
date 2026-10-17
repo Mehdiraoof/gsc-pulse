@@ -14,7 +14,6 @@ stored as a workflow artifact.
 
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
 
 import deck_data as dd
 import decks
@@ -23,9 +22,8 @@ import i18n
 import mailer
 import summary
 import tabs
+from state import STATE_HEADER, STATE_TAB, read_state, write_state   # noqa: F401  (re-exported)
 
-STATE_TAB = "State"
-STATE_HEADER = ["Key", "Value", "Updated at"]
 STATE_KEY = {"monthly": "monthly_deck_sent", "weekly": "weekly_deck_sent"}
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 
@@ -45,30 +43,6 @@ class DeckResult:
         if not parts:
             parts.append("nothing new" if self.skipped else "nothing to send")
         return ", ".join(parts)
-
-
-# --------------------------------------------------------------------------- #
-# State
-# --------------------------------------------------------------------------- #
-
-def read_state(sheets, reports_id: str) -> dict:
-    """{key: (sheet row, value)}"""
-    state = {}
-    for i, row in enumerate(tabs.read_rows(sheets, reports_id, STATE_TAB, "C"), start=2):
-        if row and row[0]:
-            state[row[0]] = (i, row[1] if len(row) > 1 else "")
-    return state
-
-
-def write_state(sheets, reports_id: str, state: dict, key: str, value: str):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    if key in state:
-        row = state[key][0]
-        tabs.patch_cells(sheets, reports_id, [(f"'{STATE_TAB}'!B{row}:C{row}", [[value, now]])])
-    else:
-        tabs.append(sheets, reports_id, STATE_TAB, [[key, value, now]])
-        state[key] = (2 + len(state), value)
-    state[key] = (state[key][0], value)
 
 
 # --------------------------------------------------------------------------- #

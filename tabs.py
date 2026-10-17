@@ -6,7 +6,20 @@ report modules never talk to the Sheets API directly and always stay inside
 the per-minute quotas.
 """
 
+from urllib.parse import unquote, urlsplit
+
 import history
+
+
+def path_of(url: str) -> str:
+    """A page URL as its readable path: percent-decoded (UTF-8), domain removed.
+    'https://example.com/%D9%85%D8%A7-x/' -> '/ما-x/'. A path that is already decoded
+    stays as it is; an invalid byte sequence becomes the replacement character."""
+    parts = urlsplit(str(url).strip())
+    path = unquote(parts.path or "/", errors="replace")
+    if parts.query:
+        path += "?" + unquote(parts.query, errors="replace")
+    return path
 
 
 def ensure_tab(sheets, spreadsheet_id: str, titles: dict, name: str, header: list):

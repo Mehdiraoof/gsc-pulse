@@ -35,8 +35,10 @@ import alarms
 import history
 import sites
 import periods
+import state
 import tabs
 
+ALARMS_VERSION_KEY = "alarms_version"       # State tab: the wording the R Alarms rows were written with
 MONTHLY, WEEKLY = "R Monthly", "R Weekly"
 KEYWORDS, PAGES = "R Keywords", "R Pages"
 AIO_PAGES, ALARMS, NOTES = "R AIO Pages", "R Alarms", "Notes"
@@ -60,12 +62,12 @@ KEYWORDS_HEADER = ["Period", "Type", "Query", "Clicks", "Clicks prev", "Clicks d
                    "Position diff"]
 PAGES_HEADER = ["Period", "Type", "Page", "Page type(s)", "Clicks", "Clicks prev", "Clicks diff",
                 "Impressions", "Impr prev", "Impr diff", "Position", "Position prev",
-                "Position diff"]
-AIO_PAGES_HEADER = ["Period", "Type", "Page", "AIO Impr", "AIO Impr prev", "AIO Impr diff"]
+                "Position diff", "Path"]
+AIO_PAGES_HEADER = ["Period", "Type", "Page", "AIO Impr", "AIO Impr prev", "AIO Impr diff", "Path"]
 
 TABS = [(MONTHLY, MONTHLY_HEADER, "Q"), (WEEKLY, WEEKLY_HEADER, "Q"),
-        (KEYWORDS, KEYWORDS_HEADER, "L"), (PAGES, PAGES_HEADER, "M"),
-        (AIO_PAGES, AIO_PAGES_HEADER, "F"), (ALARMS, alarms.HEADER, "E"),
+        (KEYWORDS, KEYWORDS_HEADER, "L"), (PAGES, PAGES_HEADER, "N"),
+        (AIO_PAGES, AIO_PAGES_HEADER, "G"), (ALARMS, alarms.HEADER, "E"),
         (WEEKLY_MOVERS, KEYWORDS_HEADER, "L"),
         (NOTES, ["Topic", "Explanation"], "B"), (aio_import.RAW_TAB, aio_import.RAW_HEADER, "D")]
 
@@ -82,6 +84,9 @@ class ReportsResult:
     alarm_counts: dict = field(default_factory=dict)      # area -> rows in R Alarms
     aio_months: int = 0
     patched_cells: int = 0
+    path_backfilled: int = 0                # rows that got their Path in this run (one-off)
+    newest_month: str = ""                  # newest complete month, e.g. '2026-09'
+    new_month: str = ""                     # set when this run added a newer month to R Monthly
     note: str = ""
 
     def summary(self) -> str:
@@ -286,7 +291,7 @@ def page_rows(period: str, cur: dict, prev: dict, yoy, segments: list, th: dict)
     rows = movers(period, compare_rows(cur, prev), n, "Growing", "Declining", extra)
     if yoy is not None:
         rows += movers(period, compare_rows(cur, yoy), n, "YoY Growing", "YoY Declining", extra)
-    return rows
+    return [row + [tabs.path_of(row[2])] for row in rows]
 
 
 def aio_page_rows(period: str, cur: dict, prev: dict, top_n: int) -> list:
@@ -295,8 +300,8 @@ def aio_page_rows(period: str, cur: dict, prev: dict, top_n: int) -> list:
                 key=lambda kv: (-(kv[1][0] - kv[1][1]), kv[0]))
     down = sorted(((u, v) for u, v in pairs.items() if v[0] - v[1] < 0),
                   key=lambda kv: (kv[1][0] - kv[1][1], kv[0]))
-    return ([[period, "Growing", u, a, b, a - b] for u, (a, b) in up[:top_n]]
-            + [[period, "Declining", u, a, b, a - b] for u, (a, b) in down[:top_n]])
+    return ([[period, "Growing", u, a, b, a - b, tabs.path_of(u)] for u, (a, b) in up[:top_n]]
+            + [[period, "Declining", u, a, b, a - b, tabs.path_of(u)] for u, (a, b) in down[:top_n]])
 
 
 # --------------------------------------------------------------------------- #
@@ -347,6 +352,27 @@ def _pad(row, n):
     return list(row) + [""] * (n - len(row))
 
 
+def _add_path_column(sheets, reports_id: str, titles: dict, name: str, header: list, last: str,
+                     log) -> int:
+    """
+    R Pages and R AIO Pages written before v2.2 have no Path column. Adds it (last column)
+    and fills it once, for every row, from the Page column. Returns the rows filled.
+    A tab that already has the column, or whose header is not the known old one, is left alone.
+    """
+    if history.read_cell(sheets, reports_id, name, f"{last}1") == header[-1]:
+        return 0
+    rows = tabs.read_rows(sheets, reports_id, name, last, first_row=1)
+    if not rows or [str(c) for c in rows[0]] != header[:-1]:
+        return 0
+    sheet_id = titles.get(name)
+    if sheet_id is not None:
+        tabs.add_columns(sheets, reports_id, sheet_id, 1)
+    column = [[header[-1]]] + [[tabs.path_of(r[2]) if len(r) > 2 and r[2] else ""] for r in rows[1:]]
+    tabs.patch_cells(sheets, reports_id, [(f"'{name}'!{last}1:{last}{len(rows)}", column)])
+    log(f"  reports: {name}: Path column added for {len(rows) - 1} rows")
+    return len(rows) - 1
+
+
 def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=print,
                 rebuild_alarms: bool = False) -> ReportsResult:
     """
@@ -363,6 +389,14 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     titles, _ = history.grid_info(sheets, reports_id)
     for name, header, _ in TABS:
         tabs.ensure_tab(sheets, reports_id, titles, name, header)
+    tabs.ensure_tab(sheets, reports_id, titles, state.STATE_TAB, state.STATE_HEADER)
+    st = state.read_state(sheets, reports_id)
+
+    # ---- Data fix: the readable Path column (one-off, for tabs written by older versions) ----
+    for name, header, last in TABS:
+        if name in (PAGES, AIO_PAGES):
+            result.path_backfilled += _add_path_column(sheets, reports_id, titles, name, header,
+                                                       last, log)
 
     # ---- AI Overview imports first, so every table below can use them -----
     imp = aio_import.run_import(sheets, reports_id, today, log)
@@ -375,7 +409,9 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     # R Alarms written by older rules has no Impact column: rebuild it for all past periods
     old_header = tabs.read_rows(sheets, reports_id, ALARMS, "E", first_row=1)[:1]
     migrate = bool(old_header) and old_header[0] != alarms.HEADER
-    rebuild = rebuild_alarms or migrate
+    # the sentences were reworded in v2.2: tabs holding the older wording are rebuilt once
+    reworded = state.get(st, ALARMS_VERSION_KEY) != alarms.WORDING_VERSION
+    rebuild = rebuild_alarms or migrate or reworded
     if migrate and len(old_header[0]) < len(alarms.HEADER) and titles.get(ALARMS) is not None:
         tabs.add_columns(sheets, reports_id, titles[ALARMS], len(alarms.HEADER) - len(old_header[0]))
     cap = int(th["alarm_max_per_period"])
@@ -395,7 +431,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     if not active:
         log("  reports: no Search Console data in range yet")
         result.note = "no data yet"
-        _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log)
+        _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log, st)
         return result
     first_data = active[0]
 
@@ -452,6 +488,11 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     tabs.append(sheets, reports_id, WEEKLY, weekly_new, log)
     result.months = len({r[0] for r in monthly_new})
     result.weeks = len({r[0] for r in weekly_new})
+    result.newest_month = months[-1][0] if months else ""
+    added = max((r[0] for r in monthly_new), default="")
+    stored = max((r[0] for r in existing[MONTHLY] if r), default="")
+    if added and added > stored:
+        result.new_month = added
 
     # ---- R Weekly Movers: the latest complete week (the weekly deck's last slide) ----
     if weeks:
@@ -563,7 +604,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
             aio.month(label, first, periods.month_end(first), all_seg),
             aio.month(periods.month_label(pfirst), pfirst, periods.month_end(pfirst), all_seg), th)
 
-    _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log)
+    _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log, st)
     return result
 
 
@@ -579,8 +620,8 @@ def _aio_pages(sheets, reports_id, aio: AioData, existing: list, top_n: int, log
         return
     have = {}
     for r in existing:
-        r = _pad(r, 6)
-        have.setdefault(r[0], []).append(r[:3] + [tabs.number(c) for c in r[3:6]])
+        r = _pad(r, len(AIO_PAGES_HEADER))
+        have.setdefault(r[0], []).append(r[:3] + [tabs.number(c) for c in r[3:6]] + [r[6]])
     changed = any(
         len(have.get(p, [])) != len(rows) or any(
             not all(tabs.same(a, b) for a, b in zip(x, y)) for x, y in zip(have.get(p, []), rows))
@@ -630,9 +671,11 @@ def _save_alarms(sheets, reports_id, candidates: list, rebuild: bool, cap: int,
 
 
 def _finish(sheets, reports_id, segments, new_alarms: list, rebuild: bool, cap: int, th: dict,
-            result: ReportsResult, log):
+            result: ReportsResult, log, st: dict):
     """Saves the alarms and refreshes the Notes tab."""
     _save_alarms(sheets, reports_id, new_alarms, rebuild, cap, result)
+    if state.get(st, ALARMS_VERSION_KEY) != alarms.WORDING_VERSION:
+        state.write_state(sheets, reports_id, st, ALARMS_VERSION_KEY, alarms.WORDING_VERSION)
     tabs.rewrite(sheets, reports_id, NOTES, ["Topic", "Explanation"], notes_rows(segments, th))
     log(f"  reports: {result.summary()}")
     if rebuild:

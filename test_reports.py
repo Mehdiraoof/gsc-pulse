@@ -16,6 +16,7 @@ import history
 import periods
 import reports
 import sites
+import tabs
 from test_history import FakeSheets, Req, patch_time
 
 RID   = "reports-sheet-id"
@@ -530,10 +531,10 @@ class AlarmTests(unittest.TestCase):
         medium = f(120, 100)
         self.assertEqual((medium[0].period, medium[0].severity, medium[0].area),
                          ("2026-09", "medium", "Segment clicks"))
-        self.assertIn("rose by 20.0%", medium[0].message)
+        self.assertIn("Clicks rose 20.0% vs August (100 to 120).", medium[0].message)
         self.assertEqual(medium[0].impact, 20)
         self.assertEqual(f(60, 100)[0].severity, "high")           # -40%
-        self.assertIn("fell by 40.0%", f(60, 100)[0].message)
+        self.assertEqual(f(60, 100)[0].message, "Clicks fell 40.0% vs August (100 to 60).")
         self.assertEqual(f(60, 100)[0].impact, 40)
         self.assertEqual(f(70, 100)[0].severity, "medium")
         self.assertEqual(f(10, 0), [])                            # no base
@@ -545,7 +546,7 @@ class AlarmTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].area, "Lost keyword")
         self.assertIn("big", out[0].message)
-        self.assertIn("10 clicks in 2026-08", out[0].message)
+        self.assertIn("10 clicks in August and is not in Search Console's data in September.", out[0].message)
         self.assertEqual(out[0].impact, 10)
 
     def losses(self, pages, **th):
@@ -556,7 +557,7 @@ class AlarmTests(unittest.TestCase):
         out = self.losses(pages)
         self.assertEqual(len(out), 6)
         self.assertEqual([a.impact for a in out[:5]], [51, 50, 49, 48, 47])        # most clicks lost first
-        self.assertIn("https://x.test/p11", out[0].message)
+        self.assertIn("The page /p11 lost", out[0].message)
         summary = out[5]
         self.assertEqual(summary.message, "and 7 more pages lost 50%+ of their clicks")
         self.assertEqual((summary.severity, summary.area), ("medium", "Page loss"))
@@ -582,12 +583,12 @@ class AlarmTests(unittest.TestCase):
     def test_a_page_needs_to_lose_half_its_clicks(self):
         self.assertEqual(self.losses([("https://x.test/a", 21, 40)]), [])     # -47.5%
         out = self.losses([("https://x.test/a", 20, 40)])                      # -50%
-        self.assertIn("lost 50.0% of its clicks compared with 2026-08 (40 to 20)", out[0].message)
+        self.assertIn("lost 50.0% of its clicks vs August (40 to 20)", out[0].message)
         self.assertEqual(out[0].impact, 20)
 
     def test_equal_losses_are_ordered_by_page_so_output_is_stable(self):
         out = self.losses([("https://x.test/b", 0, 40), ("https://x.test/a", 0, 40)])
-        self.assertIn("https://x.test/a", out[0].message)
+        self.assertIn("The page /a lost", out[0].message)
 
     def test_how_many_are_listed_and_the_wording_follow_the_settings(self):
         pages = [(f"https://x.test/p{i}", 0, 40) for i in range(4)]
@@ -739,7 +740,7 @@ class AlarmEngineTests(ReportsTestCase):
         self.assertEqual(len(summary), 1)
         self.assertEqual(summary[0][3], f"and {len(expected) - 5} more pages lost 50%+ of their clicks")
         for lost, url in expected[:5]:                            # the five with the most clicks lost
-            self.assertTrue(any(url in r[3] and float(r[4]) == lost for r in listed), url)
+            self.assertTrue(any(tabs.path_of(url) in r[3] and float(r[4]) == lost for r in listed), url)
         self.assertLessEqual(len(rows), 10)
         # the complete list of page losses lives in R Pages
         declining = {r[2] for r in self.rows(reports.PAGES) if r[0] == "2026-09" and r[1] == "Declining"}
@@ -753,7 +754,7 @@ class AlarmEngineTests(ReportsTestCase):
         rows = self.alarm_rows("2026-09")
         self.assertEqual(rows[0][1], "high")
         self.assertEqual(rows[0][2], "Segment clicks")
-        self.assertIn("fell by", rows[0][3])
+        self.assertIn(" fell ", rows[0][3])
         rank = {"high": 0, "medium": 1, "low": 2}
         self.assertEqual([rank[r[1]] for r in rows], sorted(rank[r[1]] for r in rows))
 

@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      rebuild_views:
+        description: "Delete and recreate the view tabs (Dashboard, Monthly, ...) of every enabled site; Events is kept (normal sync otherwise)"
+        required: false
+        type: boolean
+        default: false
       rebuild_decks:
         description: "Build and email the weekly and monthly decks now, even if already sent (normal sync otherwise)"
         required: false
@@ -52,6 +57,7 @@ jobs:
           DISCOVER_SITE: ${{ inputs.discover_site }}
           REBUILD_ALARMS: ${{ inputs.rebuild_alarms }}
           REBUILD_DECKS: ${{ inputs.rebuild_decks }}
+          REBUILD_VIEWS: ${{ inputs.rebuild_views }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

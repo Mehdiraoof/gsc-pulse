@@ -82,6 +82,11 @@ class Tab:
         self.sheet_id, self.row_count, self.col_count = sheet_id, rows, cols
         self.data = []          # list of rows, trailing empty rows trimmed
         self.frozen, self.bold = 0, False
+        self.color = None       # tabColorStyle.rgbColor of the tab
+        self.hide_grid = False
+        self.dropdowns = {}     # (row, col) 1-based -> source range of the dropdown
+        self.merges = 0
+        self.hidden_cols = []
 
 
 def _col(letters):
@@ -89,6 +94,32 @@ def _col(letters):
     for ch in letters:
         n = n * 26 + ord(ch) - 64
     return n
+
+
+def _letters(n):
+    """1 -> A, 27 -> AA"""
+    s = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _sheet_id_of(obj):
+    """The first sheetId found inside a batchUpdate request."""
+    if isinstance(obj, dict):
+        if "sheetId" in obj:
+            return obj["sheetId"]
+        for v in obj.values():
+            found = _sheet_id_of(v)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _sheet_id_of(v)
+            if found is not None:
+                return found
+    return None
 
 
 def parse_range(rng):
@@ -118,6 +149,26 @@ class FakeSheets:
         self.append_calls = 0
         self.fail_append_call = None        # raise on the Nth append call
         self.fail_state_update_once = False # raise on first State update that has a date
+        self.locale = "en_US"
+        self.requests = []                  # (book id, request) of every batchUpdate request
+        self.value_calls = []               # (book id, valueInputOption, tab titles at that moment, [(range, values)])
+        self.error_cells = {}               # (tab, "B7") -> error a formula cell shows when read back
+
+    def requests_for(self, book_id, title):
+        """The batchUpdate requests that address one tab (by its sheetId)."""
+        sid = self.books[book_id][title].sheet_id
+        found = []
+        for bid, req in self.requests:
+            if bid == book_id and _sheet_id_of(req) == sid:
+                found.append(req)
+        return found
+
+    def shown(self, tab, row, col, value):
+        """What a cell shows when read: formulas have no engine here, they show 0 unless a test
+        planted an error for them."""
+        if isinstance(value, str) and value.startswith("="):
+            return self.error_cells.get((tab, f"{_letters(col)}{row}"), "0")
+        return value
 
     def add_book(self, book_id, tabs=None):
         book = {"Sheet1": Tab(0)}
@@ -157,10 +208,11 @@ class FakeSheets:
     def get(self, spreadsheetId, fields=None):
         def run():
             book = self.books.setdefault(spreadsheetId, {"Sheet1": Tab(0)})
-            return {"sheets": [{"properties": {
-                "sheetId": t.sheet_id, "title": title,
-                "gridProperties": {"rowCount": t.row_count, "columnCount": t.col_count}}}
-                for title, t in book.items()]}
+            return {"properties": {"locale": self.locale},
+                    "sheets": [{"properties": {
+                        "sheetId": t.sheet_id, "title": title,
+                        "gridProperties": {"rowCount": t.row_count, "columnCount": t.col_count}}}
+                        for title, t in book.items()]}
         return Req(run)
 
     def batchUpdate(self, spreadsheetId, body):
@@ -168,6 +220,7 @@ class FakeSheets:
             book = self.books.setdefault(spreadsheetId, {"Sheet1": Tab(0)})
             replies = []
             for req in body["requests"]:
+                self.requests.append((spreadsheetId, req))
                 if "addSheet" in req:
                     p = req["addSheet"]["properties"]
                     gp = p.get("gridProperties", {})
@@ -175,10 +228,49 @@ class FakeSheets:
                         raise http_error(400, "already exists")
                     t = Tab(self.next_id, gp.get("rowCount", 1000), gp.get("columnCount", 26))
                     t.frozen = gp.get("frozenRowCount", 0)
+                    t.hide_grid = bool(gp.get("hideGridlines"))
+                    t.color = p.get("tabColorStyle", {}).get("rgbColor")
                     self.next_id += 1
-                    book[p["title"]] = t
+                    if "index" in p:
+                        items = list(book.items())
+                        items.insert(p["index"], (p["title"], t))
+                        book.clear()
+                        book.update(items)
+                    else:
+                        book[p["title"]] = t
                     replies.append({"addSheet": {"properties": {
                         "sheetId": t.sheet_id, "title": p["title"]}}})
+                elif "updateSheetProperties" in req:
+                    props = req["updateSheetProperties"]["properties"]
+                    title = next(k for k, t in book.items() if t.sheet_id == props["sheetId"])
+                    if "tabColorStyle" in props:
+                        book[title].color = props["tabColorStyle"]["rgbColor"]
+                    if "index" in props:
+                        items = [(k, v) for k, v in book.items() if k != title]
+                        items.insert(props["index"], (title, book[title]))
+                        book.clear()
+                        book.update(items)
+                    replies.append({})
+                elif "mergeCells" in req:
+                    for t in book.values():
+                        if t.sheet_id == req["mergeCells"]["range"]["sheetId"]:
+                            t.merges += 1
+                    replies.append({})
+                elif "setDataValidation" in req:
+                    dv = req["setDataValidation"]
+                    for t in book.values():
+                        if t.sheet_id == dv["range"]["sheetId"]:
+                            t.dropdowns[(dv["range"]["startRowIndex"] + 1,
+                                         dv["range"]["startColumnIndex"] + 1)] = \
+                                dv["rule"]["condition"]["values"][0]["userEnteredValue"]
+                    replies.append({})
+                elif "updateDimensionProperties" in req:
+                    up = req["updateDimensionProperties"]
+                    if up["properties"].get("hiddenByUser"):
+                        for t in book.values():
+                            if t.sheet_id == up["range"]["sheetId"]:
+                                t.hidden_cols.append((up["range"]["startIndex"], up["range"]["endIndex"]))
+                    replies.append({})
                 elif "appendDimension" in req:
                     ad = req["appendDimension"]
                     for t in book.values():
@@ -225,6 +317,7 @@ class FakeValues:
             out = []
             for r in range_(r1, last + 1):
                 row = t.data[r - 1] if r - 1 < len(t.data) else []
+                row = [self.fs.shown(tab, r, i + 1, v) for i, v in enumerate(row)]
                 cells = [str(v) for v in row[c1 - 1: c2]] if c2 else [str(v) for v in row[c1 - 1:]]
                 while cells and cells[-1] == "":
                     cells.pop()
@@ -249,11 +342,24 @@ class FakeValues:
 
     def batchUpdate(self, spreadsheetId, body):
         def run():
-            assert body["valueInputOption"] == "RAW"
+            mode = body["valueInputOption"]
+            assert mode in ("RAW", "USER_ENTERED")
+            self.fs.value_calls.append((spreadsheetId, mode, list(self.fs.books[spreadsheetId]), [
+                (item["range"], item["values"]) for item in body["data"]]))
             for item in body["data"]:
                 tab, c1, r1, c2, r2 = parse_range(item["range"])
-                self.fs.write_cells(self.fs._tab(spreadsheetId, tab), r1 or 1, c1, item["values"])
+                values = item["values"]
+                if mode == "USER_ENTERED":        # a leading apostrophe makes the cell text
+                    values = [[v[1:] if isinstance(v, str) and v.startswith("'") else v for v in row]
+                              for row in values]
+                self.fs.write_cells(self.fs._tab(spreadsheetId, tab), r1 or 1, c1, values)
             return {}
+        return Req(run)
+
+    def batchGet(self, spreadsheetId, ranges):
+        def run():
+            return {"valueRanges": [
+                dict(self.get(spreadsheetId, r).execute(), range=r) for r in ranges]}
         return Req(run)
 
     def append(self, spreadsheetId, range, valueInputOption, insertDataOption, body):

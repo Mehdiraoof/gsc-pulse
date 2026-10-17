@@ -266,7 +266,7 @@ class DeckRunnerTests(ReportsTestCase):
             fetch_logo=lambda url: None, **({"post": post} if post else {}))
 
     def state(self):
-        return {r[0]: r[1] for r in self.rows("State")}
+        return {r[0]: r[1] for r in self.rows("State") if r[0].endswith("_deck_sent")}
 
     def test_first_run_sends_both_decks(self):
         result = self.run_decks()
@@ -494,7 +494,8 @@ class DecksInTheRunTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertIn("decks: off (no SMTP settings)", out)
         self.assertEqual(FakeSMTP.sent, [])
-        self.assertNotIn("State", self.sheets.books["A-REPORTS-ID"])
+        state_tab = self.sheets.books["A-REPORTS-ID"].get("State")
+        self.assertFalse(state_tab and any(str(r[0]).endswith("_deck_sent") for r in state_tab.data[1:]))
 
     def test_decks_are_emailed_after_the_reports_and_before_history(self):
         site = dict(SITE, history_sheet_id="A-HIST-ID")

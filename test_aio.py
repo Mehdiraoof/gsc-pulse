@@ -328,7 +328,7 @@ class LateAioAlarmTests(AioTestCase):
         rows = self.rows(reports.ALARMS)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][:3], ["2026-09", "medium", "AI Overviews"])
-        self.assertIn("fell by 51.6%", rows[0][3])
+        self.assertIn("fell 51.6% vs August", rows[0][3])
         self.run_reports(site)                                       # and only once
         self.assertEqual(self.rows(reports.ALARMS), rows)
 
