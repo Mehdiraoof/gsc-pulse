@@ -165,14 +165,14 @@ def weekly_alarms(rep: Report) -> list:
         row = rep.row(segment=seg)
         if row is None:
             continue
-        for pct_col, diff_col, key, text_key in (
-                ("Clicks WoW %", "Clicks WoW", "Clicks", "weekly_clicks_fell"),
-                ("Impr WoW %", "Impr WoW", "Impressions", "weekly_impr_fell")):
+        for pct_col, diff_col, key, metric in (
+                ("Clicks WoW %", "Clicks WoW", "Clicks", "clicks"),
+                ("Impr WoW %", "Impr WoW", "Impressions", "impressions")):
             pct, diff, cur = num(row.get(pct_col)), num(row.get(diff_col)), num(row.get(key))
             if pct is None or diff is None or cur is None or pct > -WEEKLY_DROP_PCT:
                 continue
             out.append({"severity": "high" if pct <= -WEEKLY_HIGH_PCT else "medium",
-                        "area": "Traffic", "text_key": text_key, "segment": seg,
+                        "area": "Traffic", "weekly": True, "metric": metric, "segment": seg,
                         "pct": abs(pct), "a": cur - diff, "b": cur, "impact": abs(diff),
                         "message": ""})
     out.sort(key=lambda a: (0 if a["severity"] == "high" else 1, -a["impact"]))
@@ -182,19 +182,54 @@ def weekly_alarms(rep: Report) -> list:
 # --------------------------------------------------------------------------- #
 # Alarm wording
 # --------------------------------------------------------------------------- #
+# R Alarms keeps its sentences as they are (with period keys like 2026-08 and the segment name
+# "All"). Everything a person reads (decks, emails) is rewritten here: month names ("vs
+# August"), "vs the previous week", the segment's label, and nothing at all for the whole site.
+
+_MONTH_KEY = re.compile(r"^(\d{4})-(\d{2})$")
+_WEEK_KEY = re.compile(r"^(\d{4})-W(\d{2})$")
+_URL = re.compile(r"(https?://[^\s]+)")
+
+
+def human_period(key: str, lang: str) -> str:
+    """'2026-08' -> 'August'; '2026-W41' -> 'week 41'; anything else unchanged."""
+    m = _MONTH_KEY.match(key)
+    if m and 1 <= int(m.group(2)) <= 12:
+        return i18n.month_name(key, lang)
+    w = _WEEK_KEY.match(key)
+    if w:
+        text = i18n.table(lang)["week"].format(n=int(w.group(2)))
+        return text.lower() if lang == "en" else text
+    return key
+
+
+def humanize_periods(text: str, lang: str) -> str:
+    """Replaces raw period keys inside a sentence (URLs are left alone)."""
+    pattern = re.compile(r"\b\d{4}-(?:W\d{2}|\d{2})\b")
+    parts = _URL.split(text)
+    return "".join(p if i % 2 else pattern.sub(lambda m: human_period(m.group(0), lang), p)
+                   for i, p in enumerate(parts))
+
+
+def segment_phrase(T: dict, metric: str, segment: str) -> str:
+    """'Clicks' for the whole site, 'Clicks for English' for a segment."""
+    if segment and segment != "All":
+        return T[f"{metric}_seg"].format(seg=segment)
+    return T[f"{metric}_all"]
+
 
 def alarm_text(alarm: dict, lang: str) -> str:
-    """The sentence shown on an alarm card (URLs shortened; Persian for known sentences)."""
+    """The sentence a person reads for an alarm (URLs shortened, months by name, no 'All')."""
     T = i18n.table(lang)
-    if "text_key" in alarm:                                    # weekly alarms are built from numbers
-        return T[alarm["text_key"]].format(
+    if alarm.get("weekly"):                                    # weekly alarms are built from numbers
+        return T["weekly_fell"].format(
+            metric=segment_phrase(T, alarm["metric"], alarm.get("segment", "All")),
             pct=f"{alarm['pct']:.1f}%", a=i18n.fmt_int(alarm["a"]), b=i18n.fmt_int(alarm["b"]))
     message = alarm["message"]
-    if lang == "fa":
-        translated = _translate_message(message, T)
-        if translated:
-            message = translated
-    return shorten_urls(message)
+    if alarm.get("area") == "AIO import":                      # it quotes the tab names to use
+        return shorten_urls(message)
+    rendered = _render_message(message, lang, T)
+    return shorten_urls(rendered if rendered else humanize_periods(message, lang))
 
 
 _PATTERNS = [
@@ -210,18 +245,34 @@ _PATTERNS = [
 ]
 
 
-def _translate_message(message: str, T: dict):
+def _render_message(message: str, lang: str, T: dict):
+    """A known alarm sentence in the deck language, or None."""
     for key, pattern in _PATTERNS:
         m = pattern.fullmatch(message.strip())
         if not m:
             continue
         g = m.groupdict()
+        if key == "msg_more" and lang == "en":
+            return message.strip()                       # already plain English (singular or plural)
+        for field_name in ("prev", "period"):
+            if field_name in g:
+                g[field_name] = human_period(g[field_name], lang)
         if key == "msg_clicks":
-            return T["msg_clicks_up" if g.pop("dir") == "rose" else "msg_clicks_down"].format(**g)
+            direction = g.pop("dir")
+            g["metric"] = segment_phrase(T, "clicks", g.pop("seg"))
+            return T["msg_clicks_up" if direction == "rose" else "msg_clicks_down"].format(**g)
         if key == "msg_page_loss":
             g["page"] = short_path(g["page"], 40)
         return T[key].format(**g)
     return None
+
+
+def period_title(rep: Report, lang: str) -> str:
+    """'September 2026' or 'Week 41 · 5 Oct – 11 Oct 2026'."""
+    T = i18n.table(lang)
+    if rep.kind == "monthly":
+        return i18n.month_title(rep.period, lang)
+    return f"{T['week'].format(n=int(rep.period[6:]))} · {i18n.week_dates(rep.monday, rep.sunday, lang)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -396,7 +447,7 @@ def aggregated_text(rep: Report, label: str) -> str:
     T = i18n.table("en")
     pre = "MoM" if rep.kind == "monthly" else "WoW"
     lines = [f"Site: {label}", f"Report: {'Monthly' if rep.kind == 'monthly' else 'Weekly'} SEO report, "
-                              f"period {rep.period}", ""]
+                              f"period {period_title(rep, 'en')}", ""]
     for card in scorecard(rep, T):
         parts = [f"{T[l.label_key] if l.label_key in T else l.label_key.upper()} {l.text}" for l in card.lines]
         lines.append(f"{T[card.label_key]}: {card.value}" + (f" ({'; '.join(parts)})" if parts

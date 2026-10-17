@@ -590,16 +590,17 @@ def slide_segments(ctx: Ctx):
     if len(segs) < 2:
         return None
     slide, ph = new_slide(ctx, "Chart + Table", title=T["segments_title"])
+    label = lambda s: T["segment_all"] if s == "All" else s      # the whole site is never called "All"
     ordered = sorted(segs, key=lambda s: -(dd.num(rep.row(segment=s)["Clicks"]) or 0))
     chart_x = 0.6 if not ctx.rtl else 5.6
-    charts.bar_chart(slide, (inch(chart_x), inch(1.5), inch(7.0), inch(5.1)), ordered,
+    charts.bar_chart(slide, (inch(chart_x), inch(1.5), inch(7.0), inch(5.1)), [label(s) for s in ordered],
                      T["series_clicks"], [dd.num(rep.row(segment=s)["Clicks"]) or 0 for s in ordered],
                      ctx.accent, ctx.font)
     rows = []
     for s in ordered:
         r = rep.row(segment=s)
         mom, yoy = dd.change_cell(r["Clicks MoM %"]), dd.change_cell(r["Clicks YoY %"])
-        rows.append([Cell(s, "query"), Cell(i18n.fmt_int(dd.num(r["Clicks"]) or 0), "num"),
+        rows.append([Cell(label(s), "query"), Cell(i18n.fmt_int(dd.num(r["Clicks"]) or 0), "num"),
                      Cell(mom[0] + ("%" if mom[0] != "—" else ""), "change",
                           GREEN if mom[1] else (RED if mom[1] is False else None), True),
                      Cell(yoy[0] + ("%" if yoy[0] != "—" else ""), "change",
@@ -803,10 +804,7 @@ WEEKLY_SLIDES = [slide_title, slide_summary, slide_alarms, slide_scorecard, slid
 # --------------------------------------------------------------------------- #
 
 def period_title(rep: dd.Report, lang: str) -> str:
-    T = i18n.table(lang)
-    if rep.kind == "monthly":
-        return i18n.month_title(rep.period, lang)
-    return f"{T['week'].format(n=int(rep.period[6:]))} · {i18n.week_dates(rep.monday, rep.sunday, lang)}"
+    return dd.period_title(rep, lang)
 
 
 def build_deck(report: dd.Report, cfg, template_dir: str, summary=None, logo: bytes = None) -> bytes:

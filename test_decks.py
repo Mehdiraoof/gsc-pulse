@@ -609,5 +609,152 @@ class PersianNumberRunTests(unittest.TestCase):
                          ["\u200e\u22121.33\u200e", "\u200e+0.3\u200e", "\u200e-5\u200e"])
 
 
+class AlarmWordingTests(unittest.TestCase):
+    """What a person reads: month names, 'vs the previous week', segment labels, no 'All'."""
+
+    def text(self, message, lang="en", area="Segment clicks"):
+        return dd.alarm_text({"severity": "medium", "area": area, "message": message, "impact": 1}, lang)
+
+    def test_the_whole_site_is_not_named(self):
+        self.assertEqual(self.text("Clicks for All fell by 32.4% compared with 2026-08 (481 to 325)."),
+                         "Clicks fell 32.4% vs August (481 to 325).")
+        self.assertEqual(self.text("Clicks for All rose by 22.6% compared with 2025-07 (2,377 to 2,915)."),
+                         "Clicks rose 22.6% vs July (2,377 to 2,915).")
+
+    def test_a_segment_is_named_by_its_label(self):
+        self.assertEqual(self.text("Clicks for English fell by 40.0% compared with 2026-12 (100 to 60)."),
+                         "Clicks for English fell 40.0% vs December (100 to 60).")
+
+    def test_other_sentences(self):
+        self.assertEqual(
+            self.text('The keyword "blue shoes" brought 26 clicks in 2026-08 and is not in Search '
+                      "Console's data in 2026-09.", area="Lost keyword"),
+            "The keyword “blue shoes” brought 26 clicks in August and is not in Search "
+            "Console's data in September.")
+        self.assertEqual(
+            self.text("The page https://x.test/guide/ lost 59.9% of its clicks compared with 2026-08 "
+                      "(137 to 55).", area="Page loss"),
+            "The page /guide/ lost 59.9% of its clicks vs August (137 to 55).")
+        self.assertEqual(
+            self.text("AI Overview impressions fell by 51.6% compared with 2026-08 (6,200 to 3,000).",
+                      area="AI Overviews"),
+            "AI Overview impressions fell 51.6% vs August (6,200 to 3,000).")
+        self.assertEqual(self.text("and 7 more pages lost 50%+ of their clicks", area="Page loss"),
+                         "and 7 more pages lost 50%+ of their clicks")
+        self.assertEqual(self.text("and 1 more page lost 50%+ of its clicks", area="Page loss"),
+                         "and 1 more page lost 50%+ of its clicks")
+
+    def test_an_unknown_sentence_still_loses_its_raw_periods_but_not_its_urls(self):
+        out = self.text("Something changed between 2026-08 and 2026-09 on https://x.test/2026-08/ page.",
+                        area="Other area")
+        self.assertEqual(out, "Something changed between August and September on /2026-08/ page.")
+        self.assertEqual(self.text("Week 2026-W41 was odd.", area="Other area"), "Week week 41 was odd.")
+
+    def test_the_import_problem_keeps_the_tab_names_it_asks_for(self):
+        msg = 'The tab "AIO Sept Pages" was not imported: its name must look like "AIO 2026-09 Pages".'
+        self.assertEqual(self.text(msg, area="AIO import"), msg)
+
+    def test_weekly_alarms(self):
+        base = {"severity": "medium", "area": "Traffic", "weekly": True, "pct": 28.9, "a": 90, "b": 64,
+                "impact": 26, "message": ""}
+        whole = dict(base, metric="clicks", segment="All")
+        seg = dict(base, metric="impressions", segment="English")
+        self.assertEqual(dd.alarm_text(whole, "en"), "Clicks fell 28.9% vs the previous week (90 to 64).")
+        self.assertEqual(dd.alarm_text(seg, "en"),
+                         "Impressions for English fell 28.9% vs the previous week (90 to 64).")
+
+    def test_persian_wording(self):
+        fa = i18n.table("fa")
+        out = self.text("Clicks for All fell by 32.4% compared with 2026-08 (481 to 325).", "fa")
+        self.assertIn(fa["months"][7], out)                                  # August
+        self.assertNotIn("2026-08", out)
+        self.assertNotIn("All", out)
+        self.assertIn(fa["clicks_all"], out)
+        seg = self.text("Clicks for English rose by 5.0% compared with 2026-08 (10 to 11).", "fa")
+        self.assertIn(fa["clicks_seg"].format(seg="English"), seg)
+
+    def test_human_period_names(self):
+        self.assertEqual(dd.human_period("2026-08", "en"), "August")
+        self.assertEqual(dd.human_period("2026-W41", "en"), "week 41")
+        self.assertEqual(dd.human_period("2026-13", "en"), "2026-13")
+        self.assertEqual(dd.human_period("hello", "en"), "hello")
+
+
+RAW_MONTH = re.compile(r"\b\d{4}-\d{2}\b")
+RAW_WEEK = re.compile(r"\b\d{4}-W\d{2}\b")
+ALL_AS_NAME = re.compile(r"\bAll\b")
+TAB_INSTRUCTION = re.compile(r"AIO \d{4}-\d{2} (?:Pages|Dates)")        # the import steps name the tabs
+
+
+class NoInternalNamesTests(unittest.TestCase):
+    """Nothing a human reads may contain a raw YYYY-MM / YYYY-Www key or 'All' as a segment name."""
+
+    def human_texts(self, prs):
+        for slide in prs.slides:
+            yield all_text(slide)
+            for chart in charts_of(slide):
+                yield " ".join(str(c) for c in list(chart.plots)[0].categories)
+                for plot in chart.plots:
+                    for s in plot.series:
+                        yield s.name
+            if slide.has_notes_slide:
+                yield slide.notes_slide.notes_text_frame.text
+
+    def check(self, label, text):
+        text = TAB_INSTRUCTION.sub("", text).replace("‎", "")
+        self.assertIsNone(RAW_MONTH.search(text), f"{label}: raw month key in: {text[:200]}")
+        self.assertIsNone(RAW_WEEK.search(text), f"{label}: raw week key in: {text[:200]}")
+        self.assertIsNone(ALL_AS_NAME.search(text), f"{label}: 'All' as a name in: {text[:200]}")
+
+    def test_every_deck_in_every_variant(self):
+        cases = {
+            "monthly": lambda: fx.monthly_report(),
+            "monthly+segments+aio": lambda: fx.monthly_report(segments=True, aio=True),
+            "weekly": lambda: fx.weekly_report(),
+        }
+        for lang in ("en", "fa"):
+            for name, make in cases.items():
+                prs = build(make(), lang=lang)
+                for text in self.human_texts(prs):
+                    self.check(f"{name}/{lang}", text)
+
+    def test_weekly_alarms_for_a_segment(self):
+        rep = fx.weekly_report()
+        rep.rows[(rep.period, "English")] = dict(rep.rows[(rep.period, "All")], Segment="English")
+        rep.segments = ["All", "English"]
+        rep.alarms = dd.weekly_alarms(rep)
+        text = " ".join(dd.alarm_text(a, "en") for a in rep.alarms)
+        self.assertIn("Clicks for English fell", text)
+        self.assertIn("Clicks fell", text)
+        self.check("weekly segments", text)
+
+    def test_email_subject_and_body(self):
+        import deck_runner
+        for lang in ("en", "fa"):
+            for make in (fx.monthly_report, fx.weekly_report):
+                rep = make()
+                T = i18n.table(lang)
+                title = T["monthly_report" if rep.kind == "monthly" else "weekly_report"]
+                subject, body = deck_runner.email_text(rep, cfg(lang), lang, title, decks.period_title(rep, lang))
+                self.check(f"email/{lang}", subject)
+                self.check(f"email/{lang}", body)
+                self.assertIn("PulseO", subject)
+
+    def test_the_ai_summary_input_and_the_notes_use_names_too(self):
+        text = dd.aggregated_text(fx.monthly_report(), "Example")
+        self.check("aggregated", text)
+        self.assertIn("September 2026", text)
+        self.assertIn("vs August", text)
+        weekly = dd.aggregated_text(fx.weekly_report(), "Example")
+        self.check("aggregated weekly", weekly)
+        self.assertIn("Week 41", weekly)
+
+    def test_the_whole_site_row_of_the_segments_slide_is_called_whole_site(self):
+        prs = build(fx.monthly_report(segments=True))
+        slide = [s for s in prs.slides if s.slide_layout.name == "Chart + Table"][0]
+        self.assertIn("Whole site", all_text(slide))
+        self.assertNotRegex(all_text(slide), ALL_AS_NAME)
+
+
 if __name__ == "__main__":
     unittest.main()
