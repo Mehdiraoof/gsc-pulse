@@ -461,7 +461,7 @@ def build_dashboard(sid, t: TabSpec, ctx: dict) -> tuple:
         req += [repeat(sid, 1, 2, 3, 4, text=text(10, True, color=MUTED), h="RIGHT", v="MIDDLE"),
                 repeat(sid, 1, 2, 4, 5, bg=CALLOUT, border=AMBER, text=text(12, True), h="CENTER",
                        v="MIDDLE"),
-                dropdown(sid, 1, 2, "Dashboard!$N$2:$N")]
+                dropdown(sid, 1, 4, "Dashboard!$N$2:$N")]
         # helper lists for the dropdowns: every month once (newest first), every segment once
         cells.append(_cell(DASHBOARD, "L2", "=SORT(UNIQUE(FILTER('R Monthly'!A2:A,'R Monthly'!A2:A<>\"\")),1,FALSE)"))
         cells.append(_cell(DASHBOARD, "N2", "=UNIQUE(FILTER('R Monthly'!B2:B,'R Monthly'!B2:B<>\"\"))"))

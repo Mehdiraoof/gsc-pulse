@@ -280,9 +280,9 @@ class AioPagesTests(AioTestCase):
         self.add_month("2026-09", 10, {a: 150, b: 10, c: 30})
         self.run_reports()
         rows = [r for r in self.rows(reports.AIO_PAGES) if r[0] == "2026-09"]
-        self.assertEqual(rows, [["2026-09", "Growing", a, 150, 100, 50],
-                                ["2026-09", "Growing", c, 30, 0, 30],
-                                ["2026-09", "Declining", b, 10, 50, -40]])
+        self.assertEqual(rows, [["2026-09", "Growing", a, 150, 100, 50, "/a"],
+                                ["2026-09", "Growing", c, 30, 0, 30, "/c"],
+                                ["2026-09", "Declining", b, 10, 50, -40, "/b"]])
         self.assertEqual([r for r in self.rows(reports.AIO_PAGES) if r[0] == "2026-08"], [])
 
     def test_unchanged_data_does_not_rewrite_the_tab(self):
@@ -301,7 +301,7 @@ class AioPagesTests(AioTestCase):
         self.add_tab("AIO 2026-09 Pages", [["Top pages", "Impressions"], [a, "400"]])
         self.run_reports()
         rows = [r for r in self.rows(reports.AIO_PAGES) if r[0] == "2026-09"]
-        self.assertEqual(rows, [["2026-09", "Growing", a, 400, 100, 300]])
+        self.assertEqual(rows, [["2026-09", "Growing", a, 400, 100, 300, "/a"]])
 
     def test_the_month_after_an_import_is_recomputed_too(self):
         a = "https://www.alpha.test/a"
@@ -311,7 +311,7 @@ class AioPagesTests(AioTestCase):
         self.add_tab("AIO 2026-08 Pages", [["Top pages", "Impressions"], [a, "50"]])
         self.run_reports()
         sep = [r for r in self.rows(reports.AIO_PAGES) if r[0] == "2026-09"]
-        self.assertEqual(sep, [["2026-09", "Growing", a, 150, 50, 100]])
+        self.assertEqual(sep, [["2026-09", "Growing", a, 150, 50, 100, "/a"]])
 
 
 class LateAioAlarmTests(AioTestCase):
