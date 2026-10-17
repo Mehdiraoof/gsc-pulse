@@ -701,7 +701,7 @@ class NoInternalNamesTests(unittest.TestCase):
                 yield slide.notes_slide.notes_text_frame.text
 
     def check(self, label, text):
-        text = TAB_INSTRUCTION.sub("", text).replace("‎", "")
+        text = TAB_INSTRUCTION.sub("", text.replace("‎", ""))
         self.assertIsNone(RAW_MONTH.search(text), f"{label}: raw month key in: {text[:200]}")
         self.assertIsNone(RAW_WEEK.search(text), f"{label}: raw week key in: {text[:200]}")
         self.assertIsNone(ALL_AS_NAME.search(text), f"{label}: 'All' as a name in: {text[:200]}")
