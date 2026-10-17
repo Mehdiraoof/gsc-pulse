@@ -249,8 +249,8 @@ class SegmentsAndAioTests(unittest.TestCase):
         slide = self.prs.slides[5]
         chart = charts_of(slide)[0]
         plot = list(chart.plots)[0]
-        self.assertEqual(sorted(plot.categories), sorted(["All", "English", "Article", "Other"]))
-        self.assertEqual(plot.categories[0], "All")                            # the biggest first
+        self.assertEqual(sorted(plot.categories), sorted(["Whole site", "English", "Article", "Other"]))
+        self.assertEqual(plot.categories[0], "Whole site")                     # the biggest first
         rows = tables(slide)[0].table
         self.assertEqual([c.text for c in rows.rows[0].cells], ["Segment", "Clicks", "MoM", "YoY", "Impr."])
         self.assertEqual(len(rows.rows), 5)
@@ -586,7 +586,7 @@ class I18nTests(unittest.TestCase):
         unknown = dd.alarm_text({"severity": "low", "area": "New URL pattern", "impact": 0,
                                  "message": "Some other sentence."}, "fa")
         self.assertEqual(unknown, "Some other sentence.")
-        self.assertIn("{seg}", T["msg_clicks_up"])
+        self.assertIn("{metric}", T["msg_clicks_up"])
 
 
 
