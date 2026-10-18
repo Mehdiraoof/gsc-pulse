@@ -635,7 +635,8 @@ class FirstMatchSegmentTests(unittest.TestCase):
         self.assertEqual([s.name for s in segs], ["All", "English", "Article", "Shop", "Blog & other"])
         self.assertEqual(reports.page_types_of(segs, self.EN_ARTICLE), "English")
         self.assertEqual(reports.page_types_of(segs, "https://www.alpha.test/fa/article/c"), "Article")
-        self.assertEqual(reports.page_types_of(segs, "https://shop.alpha.test/en/p"), "Shop")
+        self.assertEqual(reports.page_types_of(segs, "https://shop.alpha.test/p/1"), "Shop")
+        self.assertEqual(reports.page_types_of(segs, "https://shop.alpha.test/en/p"), "English")   # order, not specificity
         self.assertEqual(reports.page_types_of(segs, "https://www.alpha.test/blog/x"), "Blog & other")
 
     def test_the_search_console_filter_excludes_the_types_before_it(self):
