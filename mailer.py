@@ -57,6 +57,21 @@ def resolve_recipients(recipients: list, env) -> list:
     return out
 
 
+def split_recipients(addresses: list, owner: str) -> tuple:
+    """
+    (to, bcc) for a deck. The owner (SMTP_USER) always gets every deck: when it goes to other
+    people they are in To and the owner gets a blind copy; when the list is empty, or holds only
+    the owner, the owner is the only recipient.
+    """
+    seen, others = set(), []
+    for a in addresses:
+        key = a.strip().lower()
+        if key and key != owner.strip().lower() and key not in seen:
+            seen.add(key)
+            others.append(a.strip())
+    return (others, [owner]) if others else ([owner], [])
+
+
 def safe_filename(label: str, period: str) -> str:
     """'<label>-SEO-Report-<period>.pptx' with safe characters only."""
     base = re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-._") or "Site"
@@ -64,10 +79,12 @@ def safe_filename(label: str, period: str) -> str:
 
 
 def build_message(sender: str, recipients: list, subject: str, body: str, filename: str,
-                  payload: bytes) -> EmailMessage:
+                  payload: bytes, bcc: list = None) -> EmailMessage:
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
+    if bcc:
+        msg["Bcc"] = ", ".join(bcc)           # smtplib delivers to it and drops the header
     msg["Subject"] = subject
     msg.set_content(body)
     msg.add_attachment(payload, maintype=PPTX_TYPE[0], subtype=PPTX_TYPE[1], filename=filename)

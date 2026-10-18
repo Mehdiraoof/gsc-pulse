@@ -399,6 +399,34 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(len(self.mails), 2)
         self.assertEqual(self.drive.names(provision.FOLDER).count("PulseO"), 1)
 
+    def move_and_rename(self):
+        """What the owner may do in Drive: move the site's folder into a project folder, rename it,
+        rename and move the sheets. The root PulseO folder with the Index stays."""
+        for f in self.drive.files_.values():
+            if f["name"] == "Kalameh" and f["mimeType"] == provision.FOLDER:
+                f["name"], f["parents"] = "Kalameh · PulseO", ["PROJECT-FOLDER"]
+            elif f["name"].startswith("Kalameh · PulseO ") and f["mimeType"] == provision.SHEET:
+                f["name"], f["parents"] = "my " + f["name"].lower(), ["SOME-OTHER-PLACE"]
+
+    def test_moving_or_renaming_the_folders_and_sheets_changes_nothing(self):
+        first = self.site()
+        provision.provision_site(self.drive, self.sheets, first, self.notify)
+        self.move_and_rename()
+        files = {k: dict(v) for k, v in self.drive.files_.items()}
+        second = self.site()
+        made = provision.provision_site(self.drive, self.sheets, second, self.notify)
+        self.assertEqual(made.created, 0)
+        self.assertEqual(self.drive.files_, files)                       # nothing created, nothing touched
+        self.assertEqual((second.sheet_id, second.history_sheet_id, second.reports_sheet_id),
+                         (first.sheet_id, first.history_sheet_id, first.reports_sheet_id))
+        self.assertEqual(len(self.mails), 1)
+
+    def test_the_index_is_found_by_its_name_wherever_it_is(self):
+        provision.provision_site(self.drive, self.sheets, self.site(), self.notify)
+        self.drive.files_[self.drive.id_of(provision.INDEX_NAME)]["parents"] = ["ANOTHER-FOLDER"]
+        again = self.site()
+        self.assertEqual(provision.provision_site(self.drive, self.sheets, again, self.notify).created, 0)
+
     def test_a_quote_in_a_name_cannot_break_the_search(self):
         site = self.site(label="Kal'ameh")
         provision.provision_site(self.drive, self.sheets, site, self.notify)
@@ -516,6 +544,23 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.drive.files_, files)
         self.assertIn("site-2: sheets from the Index", out)
         self.assertEqual(len(FakeSMTP.sent), sent)
+
+    def test_the_owner_may_move_and_rename_what_pulseo_created(self):
+        self.run_main()
+        for f in self.drive.files_.values():
+            if f["mimeType"] == provision.FOLDER and f["name"] == "site-2":
+                f["name"], f["parents"] = "Kalameh · PulseO", ["PROJECT-FOLDER"]
+            elif f["name"].startswith("site-2 · PulseO"):
+                f["name"], f["parents"] = "renamed " + f["name"], ["ELSEWHERE"]
+        files = {k: dict(v) for k, v in self.drive.files_.items()}
+        reports_book = self.book("renamed site-2 · PulseO Reports")
+        before = len(reports_book["R Monthly"].data)
+        out, err = self.run_main()
+        self.assertIsNone(err, out)
+        self.assertEqual(self.drive.files_, files)
+        self.assertIn("site-2: sheets from the Index", out)
+        self.assertIn("site-2: ok", self.summary_line(out, "site-2"))
+        self.assertGreaterEqual(len(reports_book["R Monthly"].data), before)
 
     def test_weekly_deck_of_a_site_with_empty_recipients_goes_to_the_owner(self):
         site = dict(S2, deck={"enabled": True, "language": "en", "site_label": "Kalameh",

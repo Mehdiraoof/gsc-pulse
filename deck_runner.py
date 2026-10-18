@@ -82,15 +82,12 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
     titles, _ = history.grid_info(sheets, reports_id)
     tabs.ensure_tab(sheets, reports_id, titles, STATE_TAB, STATE_HEADER)
     state = read_state(sheets, reports_id)
-    recipients = mailer.resolve_recipients(cfg.recipients, env)
-    if not recipients:
-        log("decks: no recipient address available")
-        result.failed.append("recipients")
-        return result
-
     for kind in ("monthly", "weekly"):
         if not getattr(cfg, kind):
             continue
+        # the owner (SMTP_USER) always gets the deck; other people are in To, the owner in Bcc
+        to, bcc = mailer.split_recipients(
+            mailer.resolve_recipients(cfg.recipients_for(kind), env), smtp.user)
         load = dd.load_monthly if kind == "monthly" else dd.load_weekly
         report = load(sheets, reports_id, site)
         if report is None:
@@ -116,7 +113,7 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
                                        T["monthly_report" if kind == "monthly" else "weekly_report"],
                                        period)
             filename = mailer.safe_filename(cfg.site_label, report.period)
-            message = mailer.build_message(smtp.user, recipients, subject, body, filename, payload)
+            message = mailer.build_message(smtp.user, to, subject, body, filename, payload, bcc=bcc)
             send(smtp, message)
         except Exception as e:                           # noqa: BLE001  one deck never blocks the other
             result.failed.append(kind)
@@ -124,5 +121,6 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             continue
         write_state(sheets, reports_id, state, STATE_KEY[kind], report.period)
         result.sent.append(kind)
-        log(f"decks: {kind} deck sent ({len(recipients)} recipient{'s' if len(recipients) != 1 else ''})")
+        count = len(to) + len(bcc)
+        log(f"decks: {kind} deck sent ({count} recipient{'s' if count != 1 else ''})")
     return result

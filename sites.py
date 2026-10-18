@@ -88,7 +88,8 @@ class Site:
 # Decks (PowerPoint reports by email)
 # --------------------------------------------------------------------------- #
 
-DECK_FIELDS = ("enabled", "language", "site_label", "recipients", "weekly", "monthly",
+DECK_FIELDS = ("enabled", "language", "site_label", "recipients", "weekly_recipients",
+               "monthly_recipients", "weekly", "monthly",
                "brand_color", "accent_color", "logo_url", "ai_summary")
 DECK_LANGUAGES = ("en", "fa")
 EMAIL_PATTERN = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
@@ -104,6 +105,8 @@ class DeckConfig:
     language: str = "en"
     site_label: str = ""
     recipients: list = field(default_factory=list)       # addresses, or "env:NAME" for a secret
+    weekly_recipients: list = None                       # None: same as recipients
+    monthly_recipients: list = None
     weekly: bool = True
     monthly: bool = True
     brand_color: str = ""                                # overrides the impressions series colour
@@ -111,9 +114,29 @@ class DeckConfig:
     logo_url: str = ""
     ai_summary: bool = False
 
+    def recipients_for(self, kind: str) -> list:
+        """The addresses of the 'weekly' or 'monthly' deck: its own list, else `recipients`."""
+        own = self.weekly_recipients if kind == "weekly" else self.monthly_recipients
+        return self.recipients if own is None else own
+
     def sensitive_values(self) -> list:
-        fixed = [r for r in self.recipients if not ENV_RECIPIENT.fullmatch(r)]
+        every = self.recipients + (self.weekly_recipients or []) + (self.monthly_recipients or [])
+        fixed = [r for r in every if not ENV_RECIPIENT.fullmatch(r)]
         return [v for v in [self.site_label, self.logo_url] + fixed if v]
+
+
+def _parse_recipients(rec, at: str, key: str) -> list:
+    """A recipients list. Empty means the owner only (SMTP_USER), who also gets every deck that
+    goes to other people (see mailer.split_recipients)."""
+    if not isinstance(rec, list) or len(rec) > MAX_RECIPIENTS:
+        raise SitesConfigError(f"{at}: '{key}' must be a list of up to {MAX_RECIPIENTS} "
+                               f"email addresses (empty means: send to SMTP_USER only)")
+    for r in rec:
+        if not isinstance(r, str) or not (EMAIL_PATTERN.fullmatch(r.strip())
+                                          or ENV_RECIPIENT.fullmatch(r.strip())):
+            raise SitesConfigError(f"{at}: every recipient must be an email address "
+                                   f"(or env:NAME for an address kept in a secret)")
+    return [r.strip() for r in rec] or [OWN_ADDRESS]
 
 
 def _parse_deck(value, where: str) -> DeckConfig:
@@ -141,18 +164,10 @@ def _parse_deck(value, where: str) -> DeckConfig:
             or any(ord(c) < 32 for c in label):
         raise SitesConfigError(f"{at}: 'site_label' is required (short text, at most 60 characters)")
     cfg.site_label = label.strip()
-    rec = value.get("recipients")
-    if not isinstance(rec, list) or len(rec) > MAX_RECIPIENTS:
-        raise SitesConfigError(f"{at}: 'recipients' must be a list of up to {MAX_RECIPIENTS} "
-                               f"email addresses (empty means: send to SMTP_USER only)")
-    if not rec:
-        rec = [OWN_ADDRESS]
-    for r in rec:
-        if not isinstance(r, str) or not (EMAIL_PATTERN.fullmatch(r.strip())
-                                          or ENV_RECIPIENT.fullmatch(r.strip())):
-            raise SitesConfigError(f"{at}: every recipient must be an email address "
-                                   f"(or env:NAME for an address kept in a secret)")
-    cfg.recipients = [r.strip() for r in rec]
+    cfg.recipients = _parse_recipients(value.get("recipients"), at, "recipients")
+    for key in ("weekly_recipients", "monthly_recipients"):
+        if key in value:
+            setattr(cfg, key, _parse_recipients(value[key], at, key))
     for key in ("brand_color", "accent_color"):
         v = value.get(key, "")
         if v and (not isinstance(v, str) or not HEX_COLOR.fullmatch(v)):

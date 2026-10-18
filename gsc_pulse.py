@@ -671,7 +671,8 @@ def main():
     if os.environ.get("ANTHROPIC_API_KEY"):
         _SENSITIVE.append(os.environ["ANTHROPIC_API_KEY"].strip())
     for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
-        _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients, os.environ))
+        for kind in ("weekly", "monthly"):
+            _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients_for(kind), os.environ))
 
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
     enabled = [r for r in runs if r.status != "disabled"]

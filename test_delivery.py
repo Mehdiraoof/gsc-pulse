@@ -88,6 +88,30 @@ class DeckConfigTests(unittest.TestCase):
         for text in secret:
             self.assertNotIn(text, str(cm.exception))
 
+    def test_per_deck_type_recipients(self):
+        d = self.parse(site_label="Acme", recipients=["a@b.test"], weekly_recipients=[],
+                       monthly_recipients=["c@d.test", "env:SMTP_USER"]).deck
+        self.assertEqual(d.recipients_for("weekly"), ["env:SMTP_USER"])        # [] means the owner only
+        self.assertEqual(d.recipients_for("monthly"), ["c@d.test", "env:SMTP_USER"])
+        plain = self.parse(site_label="Acme", recipients=["a@b.test"]).deck
+        self.assertEqual((plain.weekly_recipients, plain.monthly_recipients), (None, None))
+        self.assertEqual(plain.recipients_for("weekly"), ["a@b.test"])
+        self.assertEqual(plain.recipients_for("monthly"), ["a@b.test"])
+        self.assertIn("c@d.test", d.sensitive_values())                       # scrubbed from logs
+        self.assertNotIn("env:SMTP_USER", d.sensitive_values())
+
+    def test_per_deck_type_recipients_are_validated_without_echoing(self):
+        self.fails("secret-text", site_label="Acme", recipients=[], weekly_recipients="secret-text")
+        self.fails("not-an-address", site_label="Acme", recipients=[], monthly_recipients=["not-an-address"])
+        self.fails(site_label="Acme", recipients=[], weekly_recipients=["a@b.test"] * 21)
+
+    def test_split_recipients(self):
+        self.assertEqual(mailer.split_recipients([], USER), ([USER], []))
+        self.assertEqual(mailer.split_recipients([USER], USER), ([USER], []))
+        self.assertEqual(mailer.split_recipients(["a@b.test"], USER), (["a@b.test"], [USER]))
+        self.assertEqual(mailer.split_recipients(["a@b.test", USER, "A@B.test"], USER),
+                         (["a@b.test"], [USER]))
+
     def test_a_full_block(self):
         s = self.parse(enabled=True, language="fa", site_label="Acme", recipients=["a@b.test", "env:SMTP_USER"],
                        weekly=True, monthly=False, brand_color="#1F3A5F", accent_color="#E07A2E",
@@ -328,6 +352,60 @@ class DeckRunnerTests(ReportsTestCase):
         only_monthly = site_with(deck=deck(weekly=False))
         self.assertEqual(self.run_decks(site=only_monthly).sent, ["monthly"])
 
+    def parsed_site(self, **fields):
+        entry = {"name": "site-a", "site_url": "sc-domain:a.test", "sheet_id": "m",
+                 "reports_sheet_id": RID,
+                 "deck": {"enabled": True, "site_label": "Example", "recipients": [], **fields}}
+        return sites.parse_sites_json(json.dumps([entry]))[0]
+
+    def recipients_of(self, **fields):
+        """{'monthly': (To, Bcc), 'weekly': (To, Bcc)} of the decks sent for this deck block."""
+        self.sent.clear()
+        self.assertEqual(sorted(self.run_decks(site=self.parsed_site(**fields), rebuild=True).sent),
+                         ["monthly", "weekly"])
+        got = {}
+        for m in self.sent:
+            kind = "monthly" if "Monthly" in m["Subject"] else "weekly"
+            got[kind] = (m["To"], m["Bcc"])
+        return got
+
+    CLIENT = "client@example.test"
+
+    def test_weekly_to_the_owner_only_and_monthly_also_to_the_client(self):
+        got = self.recipients_of(weekly_recipients=[], monthly_recipients=[self.CLIENT])
+        self.assertEqual(got["weekly"], (USER, None))
+        self.assertEqual(got["monthly"], (self.CLIENT, USER))                 # the owner in blind copy
+
+    def test_without_a_list_per_deck_type_recipients_applies_to_both(self):
+        got = self.recipients_of(recipients=[self.CLIENT])
+        self.assertEqual((got["weekly"], got["monthly"]), ((self.CLIENT, USER), (self.CLIENT, USER)))
+
+    def test_an_empty_list_per_deck_type_overrides_recipients(self):
+        got = self.recipients_of(recipients=[self.CLIENT], weekly_recipients=[])
+        self.assertEqual(got["weekly"], (USER, None))
+        self.assertEqual(got["monthly"], (self.CLIENT, USER))
+
+    def test_no_lists_at_all_means_the_owner_only_as_before(self):
+        got = self.recipients_of()
+        self.assertEqual(got["weekly"], (USER, None))
+        self.assertEqual(got["monthly"], (USER, None))
+
+    def test_the_owner_is_never_listed_twice(self):
+        got = self.recipients_of(monthly_recipients=[USER.upper(), self.CLIENT, self.CLIENT.upper(), "env:SMTP_USER"])
+        self.assertEqual(got["monthly"], (self.CLIENT, USER))
+        self.assertEqual(self.recipients_of(monthly_recipients=[USER])["monthly"], (USER, None))
+
+    def test_a_client_address_kept_in_a_secret_works_too(self):
+        self.env["CLIENT_MAIL"] = self.CLIENT
+        got = self.recipients_of(monthly_recipients=["env:CLIENT_MAIL"])
+        self.assertEqual(got["monthly"], (self.CLIENT, USER))
+
+    def test_the_attachment_is_the_same_for_everyone_and_nothing_is_stored(self):
+        self.recipients_of(monthly_recipients=[self.CLIENT])
+        for m in self.sent:
+            self.assertEqual(len(list(m.iter_attachments())), 1)
+        self.assertEqual(glob.glob("*.pptx"), [])
+
     def test_a_failed_send_keeps_the_state_of_the_deck_that_did_send(self):
         def flaky(settings, message):
             if "Monthly" in message["Subject"]:
@@ -354,10 +432,10 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertNotIn(USER, text)
         self.assertIn("(hidden)", text)
 
-    def test_no_recipient_available_is_a_failure(self):
+    def test_the_owner_gets_the_deck_even_when_the_secret_recipient_is_not_in_the_environment(self):
         result = self.run_decks(env={})
-        self.assertEqual(result.failed, ["recipients"])
-        self.assertEqual(self.sent, [])
+        self.assertEqual(result.failed, [])
+        self.assertEqual([m["To"] for m in self.sent], [USER, USER])
 
     def test_no_report_data_yet(self):
         self.sheets = FakeSheets()

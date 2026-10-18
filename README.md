@@ -415,11 +415,27 @@ opens .pptx files directly.
    | `enabled` | `false` (or no `deck` block) means no decks for the site. |
    | `language` | `en` or `fa` (see below). |
    | `site_label` | The client-facing name shown on the decks and in the email. It lives in the secret only. |
-   | `recipients` | One or more addresses. `"env:SMTP_USER"` means "the address in the `SMTP_USER` secret", so it never has to be written anywhere else. Start with only yourself, review the look, then add team members. |
+   | `recipients` | One or more addresses. `"env:SMTP_USER"` means "the address in the `SMTP_USER` secret", so it never has to be written anywhere else. `[]` means yourself only. Start with only yourself, review the look, then add team members or clients. |
+   | `weekly_recipients`, `monthly_recipients` | Optional, same format: who gets the weekly or the monthly deck. If one is missing, `recipients` is used for that deck type. `[]` means yourself only. |
    | `weekly`, `monthly` | Which decks to send (default: both). |
    | `brand_color`, `accent_color` | Optional. They only change the chart colours (impressions and clicks); fonts, colours and layout come from the template. |
    | `logo_url` | Optional `https://` image, downloaded when the deck is built and shown on the title slide. If it cannot be downloaded the deck is built without it. |
    | `ai_summary` | `true` writes the Summary slide with Claude (below). |
+
+**Adding client emails.** Edit the site's `deck` block in the secret that holds the site (`SITES_JSON`
+or `SITES_JSON_EXTRA`). For example, weekly decks to you only and monthly decks also to the client:
+
+```json
+"deck": {"enabled": true, "language": "en", "site_label": "Example",
+         "recipients": [], "weekly_recipients": [], "monthly_recipients": ["client@example.com"]}
+```
+
+The address in the `SMTP_USER` secret (you) **always gets every deck**. When a deck goes to other
+people they are in *To* and you get a **blind copy** (Bcc), so they never see your address list
+and you always have what they received. Empty lists mean you only. Decks exist only in the
+email: nothing is saved to Drive or anywhere else. The change applies from the next run; to send
+the current decks to the new address right away, run the workflow with *rebuild_decks* ticked
+(this also resends them to everyone on the list).
 
 Each email has its own subject, a short body with three headline numbers and the top alarm,
 and the deck attached, so your inbox is the archive. If sending fails, it is retried once, the
@@ -467,6 +483,14 @@ account, PulseO can read it **as you**, so nobody has to add anything. This is c
   down). Once per new site you get an email, `PulseO · sheets ready · <label>`, with the links. Ids
   you do put in `SITES_JSON` win over the Index, but they must be sheets PulseO created.
 * `"recipients": []` in a `deck` means: send to the address in the `SMTP_USER` secret.
+
+**Moving and renaming is safe.** Once the sheets exist, PulseO finds them by the IDs it keeps in
+`PulseO · Index`, never by folder name or location. You can move the site folders and sheets that
+PulseO created anywhere in your Drive, into project folders, and rename them (for example to
+`Example · PulseO`); nothing breaks. Keep `PulseO · Index` where it is: it is found by its exact
+name, so do not rename it. If you delete one of a site's sheets, the Index still lists it and the
+site fails with a Google "not found" error until you clear that ID cell in the Index; PulseO then
+creates a new, empty sheet for it on the next run.
 
 Before a `me` site is synced PulseO checks that the exact `site_url` is in your Search Console
 property list with a permission above *unverified user*. If not, the site is skipped, the run goes
