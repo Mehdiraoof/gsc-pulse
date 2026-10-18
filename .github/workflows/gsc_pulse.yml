@@ -54,6 +54,7 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
           SITES_JSON: ${{ secrets.SITES_JSON }}
+          SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
           DISCOVER_SITE: ${{ inputs.discover_site }}
           REBUILD_ALARMS: ${{ inputs.rebuild_alarms }}
           REBUILD_DECKS: ${{ inputs.rebuild_decks }}

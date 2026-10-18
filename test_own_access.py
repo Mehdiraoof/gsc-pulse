@@ -164,6 +164,67 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(site.deck.recipients, ["a@b.test"])
 
 
+class ExtraSitesTests(unittest.TestCase):
+    """SITES_JSON_EXTRA: same format, merged in, its entries win by name."""
+
+    OLD2 = {"name": "site-2", "site_url": "sc-domain:old.test", "sheet_id": "OLD-MAIN",
+            "history_sheet_id": "OLD-HIST", "enabled": False}
+
+    def load(self, base, extra, **kw):
+        return sites.load_sites(json.dumps(base) if base is not None else None, "", "", "",
+                                sites_json_extra=json.dumps(extra) if extra is not None else None, **kw)
+
+    def test_new_names_are_added_after_the_existing_sites(self):
+        got = self.load([S1], [S2, dict(S2, name="site-3", site_url="https://x.test/")])
+        self.assertEqual([s.name for s in got], ["site-1", "site-2", "site-3"])
+        self.assertEqual([s.auth for s in got], ["robot", "me", "me"])
+
+    def test_an_extra_entry_replaces_the_entry_of_the_same_name_in_its_place(self):
+        got = self.load([S1, self.OLD2, dict(S1, name="site-9", site_url="sc-domain:z.test",
+                                             sheet_id="Z", history_sheet_id="", reports_sheet_id="")],
+                        [S2])
+        self.assertEqual([s.name for s in got], ["site-1", "site-2", "site-9"])
+        site2 = got[1]
+        self.assertEqual((site2.site_url, site2.auth, site2.enabled), (S2_URL, "me", True))
+        self.assertEqual((site2.sheet_id, site2.history_sheet_id), ("", ""))     # nothing of the old entry is left
+
+    def test_names_match_without_regard_to_case(self):
+        got = self.load([S1, self.OLD2], [dict(S2, name="SITE-2")])
+        self.assertEqual([s.name for s in got], ["site-1", "SITE-2"])
+
+    def test_without_extra_nothing_changes(self):
+        self.assertEqual([s.name for s in self.load([S1, self.OLD2], None)], ["site-1", "site-2"])
+        self.assertEqual([s.name for s in sites.load_sites(json.dumps([S1]), "", "", "",
+                                                           sites_json_extra="  ")], ["site-1"])
+
+    def test_the_extra_list_alone_is_enough(self):
+        self.assertEqual([s.name for s in self.load(None, [S2])], ["site-2"])
+
+    def test_the_command_line_single_site_ignores_both(self):
+        got = sites.load_sites(json.dumps([S1]), "sc-domain:cli.test", "CLI-SHEET", "",
+                               force_single=True, sites_json_extra=json.dumps([S2]))
+        self.assertEqual([s.site_url for s in got], ["sc-domain:cli.test"])
+
+    def test_the_merged_list_is_validated_as_a_whole(self):
+        clash = dict(S2, name="site-4", sheet_id="S1-MAIN")           # the sheet of site-1
+        with self.assertRaises(sites.SitesConfigError):
+            self.load([S1], [clash])
+        with self.assertRaises(sites.SitesConfigError):
+            self.load([S1], [dict(S2, name="a"), dict(S2, name="A")])     # the same name twice in the extra
+        with self.assertRaises(sites.SitesConfigError):
+            self.load([dict(S1, enabled=False)], [dict(S2, enabled=False)])    # no site enabled
+
+    def test_errors_name_the_secret_but_never_echo_it(self):
+        for raw in ("{not json secret-token", json.dumps({"name": "secret-token"})):
+            with self.assertRaises(sites.SitesConfigError) as cm:
+                sites.load_sites(json.dumps([S1]), "", "", "", sites_json_extra=raw)
+            self.assertIn("SITES_JSON_EXTRA", str(cm.exception))
+            self.assertNotIn("secret-token", str(cm.exception))
+        with self.assertRaises(sites.SitesConfigError) as cm:
+            self.load([S1], [dict(S2, auth="secret-token")])
+        self.assertNotIn("secret-token", str(cm.exception))
+
+
 # --------------------------------------------------------------------------- #
 # auth.py
 # --------------------------------------------------------------------------- #
@@ -373,7 +434,7 @@ class MainTests(unittest.TestCase):
     def run_main(self, entries=(S1, S2), env=None, oauth=OAUTH, args=()):
         keys = ("SITES_JSON", "SITE_URL", "SHEET_ID", "HISTORY_SHEET_ID", "DAYS", "GITHUB_ACTIONS",
                 "DISCOVER_SITE", "REBUILD_VIEWS", "REBUILD_ALARMS", "REBUILD_DECKS", "GSC_OAUTH_JSON",
-                "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD")
+                "SITES_JSON_EXTRA", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD")
         clean = {k: v for k, v in os.environ.items() if k not in keys}
         clean.update({"SITES_JSON": json.dumps(list(entries)), "GITHUB_ACTIONS": "true",
                       **SMTP_ENV, **(env or {})})
@@ -404,6 +465,17 @@ class MainTests(unittest.TestCase):
 
     def book(self, name):
         return self.sheets.books[self.drive.id_of(name)]
+
+    def test_sites_json_extra_adds_and_replaces_sites_in_a_real_run(self):
+        old2 = {"name": "site-2", "site_url": "sc-domain:old.test", "sheet_id": "OLD-MAIN",
+                "history_sheet_id": "OLD-HIST", "enabled": False}
+        out, err = self.run_main((S1, old2), env={"SITES_JSON_EXTRA": json.dumps([S2])})
+        self.assertIsNone(err, out)
+        self.assertNotIn("site-2: disabled", out)
+        self.assertIn("site-2: ok", self.summary_line(out, "site-2"))
+        self.assertEqual(set(self.me.site_urls), {S2_URL})
+        self.assertNotIn("OLD-MAIN", self.sheets.books)              # the old entry's sheets are not used
+        self.assertIn("site-2 · PulseO Reports", self.drive.names(provision.SHEET))
 
     # ---- the happy path -----------------------------------------------------------------
     def test_each_site_is_read_with_its_own_auth(self):

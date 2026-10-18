@@ -631,6 +631,7 @@ def main():
 
     # Which sites? SITES_JSON (several sites) or the older single-site settings.
     sites_json = os.environ.get("SITES_JSON")
+    sites_json_extra = os.environ.get("SITES_JSON_EXTRA")
     try:
         site_list = sites.load_sites(
             sites_json,
@@ -639,11 +640,13 @@ def main():
             (args.history_sheet or os.environ.get("HISTORY_SHEET_ID")
              or cfg.get("history_sheet_id")),
             force_single=bool(args.site or args.sheet),
+            sites_json_extra=sites_json_extra,
         )
     except sites.SitesConfigError as e:
         print(f"\n  ERROR: {e}")
         sys.exit(1)
-    multi = bool(sites_json and sites_json.strip()) and not (args.site or args.sheet)
+    multi = (bool((sites_json or "").strip() or (sites_json_extra or "").strip())
+             and not (args.site or args.sheet))
     history_off_text = ("no history_sheet_id for this site" if multi else "no HISTORY_SHEET_ID")
 
     for s in site_list:                     # every id, even of disabled sites, is scrubbed

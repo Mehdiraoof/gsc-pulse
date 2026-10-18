@@ -320,14 +320,56 @@ def legacy_sites(site_url, sheet_id, history_sheet_id) -> list:
                  history_sheet_id=history_sheet_id or "")]
 
 
-def load_sites(sites_json, site_url, sheet_id, history_sheet_id, force_single=False) -> list:
+def _json_list(raw: str, label: str) -> list:
+    """The entries of a SITES_JSON-style secret. Messages say where, never what."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SitesConfigError(
+            f"{label} is not valid JSON ({e.msg} at line {e.lineno}, column {e.colno})") from None
+    if not isinstance(data, list):
+        raise SitesConfigError(f"{label} must be a JSON list of site objects")
+    return data
+
+
+def merge_sites_json(base: str, extra: str) -> str:
+    """
+    SITES_JSON plus SITES_JSON_EXTRA as one JSON text. An entry of the extra list replaces the
+    entry of the same name (case does not matter) at its place; new names are added at the end.
+    The merged text is validated like any SITES_JSON, so the same checks apply to the whole list.
+    """
+    entries = _json_list(base, "SITES_JSON") if base and base.strip() else []
+    seen = set()
+    for item in _json_list(extra, "SITES_JSON_EXTRA"):
+        name = item.get("name") if isinstance(item, dict) else None
+        key = name.strip().lower() if isinstance(name, str) else None
+        if key is not None:
+            if key in seen:
+                raise SitesConfigError("SITES_JSON_EXTRA: the name is used by another entry")
+            seen.add(key)
+        at = next((i for i, e in enumerate(entries) if key is not None and isinstance(e, dict)
+                   and isinstance(e.get("name"), str) and e["name"].strip().lower() == key), None)
+        if at is None:
+            entries.append(item)
+        else:
+            entries[at] = item
+    return json.dumps(entries)
+
+
+def load_sites(sites_json, site_url, sheet_id, history_sheet_id, force_single=False,
+               sites_json_extra=None) -> list:
     """
     Which sites to run.
       * force_single (command-line --site / --sheet given): just that one site.
-      * SITES_JSON set and not blank: the list from it.
+      * SITES_JSON set and not blank: the list from it, with SITES_JSON_EXTRA (same format,
+        optional) merged in: an extra entry replaces the entry of the same name.
+      * only SITES_JSON_EXTRA set: the list from it.
       * otherwise: the single site from site_url / sheet_id / history_sheet_id.
     """
-    if not force_single and sites_json and sites_json.strip():
+    has_extra = bool(sites_json_extra and sites_json_extra.strip())
+    if not force_single and (has_extra or (sites_json and sites_json.strip())):
+        if has_extra:
+            return parse_sites_json(merge_sites_json(sites_json or "", sites_json_extra))
         return parse_sites_json(sites_json)
     sites = legacy_sites(site_url, sheet_id, history_sheet_id)
     if not sites[0].site_url or not sites[0].sheet_id:

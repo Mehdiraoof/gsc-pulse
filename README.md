@@ -518,6 +518,12 @@ actual numbers.
 
 ## Multiple sites
 
+**Adding sites without retyping `SITES_JSON`:** a second, optional secret `SITES_JSON_EXTRA` has
+the same format and is merged into the list at run time. If a name appears in both, the entry in
+`SITES_JSON_EXTRA` wins (it replaces the whole entry, in its place), so you can also use it to
+replace a site. The merged list is validated like any `SITES_JSON`. Secrets cannot be read back, so
+this way you only ever paste the new sites.
+
 One run can sync several sites, each into **its own** sheets (nothing is shared between
 sites). Put them in a single secret called `SITES_JSON`, a JSON list with one object per site:
 
