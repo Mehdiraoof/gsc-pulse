@@ -50,6 +50,7 @@ jobs:
       - name: Sync Search Console to Google Sheets
         env:
           GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
           SITE_URL: ${{ secrets.SITE_URL }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
