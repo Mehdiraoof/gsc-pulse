@@ -107,12 +107,15 @@ class Segment:
     kind: str                       # all | type | other
     regex: str = ""
     rules: list = field(default_factory=list)      # other: every rule it excludes
+    before: list = field(default_factory=list)     # type: rules of the types checked earlier (first match wins)
 
     def filter_groups(self):
         """dimensionFilterGroups for the Search Console API (None = no filter)."""
         if self.kind == "type":
-            return [{"groupType": "and", "filters": [
-                {"dimension": "page", "operator": "includingRegex", "expression": self.regex}]}]
+            filters = [{"dimension": "page", "operator": "includingRegex", "expression": self.regex}]
+            filters += [{"dimension": "page", "operator": "excludingRegex", "expression": rx}
+                        for rx in self.before]
+            return [{"groupType": "and", "filters": filters}]
         if self.kind == "other":
             return [{"groupType": "and", "filters": [
                 {"dimension": "page", "operator": "excludingRegex", "expression": rx}
@@ -123,17 +126,25 @@ class Segment:
         if self.kind == "all":
             return True
         if self.kind == "type":
-            return re.search(self.regex, url) is not None
+            return (re.search(self.regex, url) is not None
+                    and not any(re.search(rx, url) for rx in self.before))
         return not any(re.search(rx, url) for rx in self.rules)
 
 
-def build_segments(page_types: list) -> list:
-    """All, each page type, and (only when page types exist) Other. Types may overlap."""
+def build_segments(page_types: list, first_match_wins: bool = False, other_label: str = "Other") -> list:
+    """
+    All, each page type, and (only when page types exist) the rest, named `other_label`.
+    By default types may overlap. With `first_match_wins` the types are checked in the order
+    given and a page belongs to the first one that matches, so the types and the rest add up to All.
+    """
     segments = [Segment("All", "all")]
-    segments += [Segment(t["name"], "type", t["regex"]) for t in page_types]
+    for i, t in enumerate(page_types):
+        before = [p["regex"] for p in page_types[:i]] if first_match_wins else []
+        segments.append(Segment(t["name"], "type", t["regex"], before=before))
     if page_types:
-        segments.append(Segment("Other", "other", rules=[t["regex"] for t in page_types]))
+        segments.append(Segment(other_label, "other", rules=[t["regex"] for t in page_types]))
     return segments
+
 
 
 def page_types_of(segments: list, url: str) -> str:
@@ -310,7 +321,10 @@ def aio_page_rows(period: str, cur: dict, prev: dict, top_n: int) -> list:
 
 def notes_rows(segments: list, th: dict) -> list:
     types = [s.name for s in segments if s.kind == "type"]
-    defined = (", ".join(types) + (", Other (pages that match none of these)" if types else "")
+    rest = next((s.name for s in segments if s.kind == "other"), "Other")
+    exclusive = any(s.before for s in segments)
+    defined = (", ".join(types) + f", {rest} (pages that match none of these)"
+               + (". Checked in this order; a page belongs to the first type that matches." if exclusive else "")
                if types else "None. Only the All segment is reported.")
     return [
         ["Data lag", "Search Console data is final about two to three days after a day ends. "
@@ -323,7 +337,8 @@ def notes_rows(segments: list, th: dict) -> list:
                            "Overview export for that month is imported."],
         ["All and segments", "All totals come from a date-only query, like the Search Console "
                              "page with no filter. Segment totals use a page filter. Page types "
-                             "can overlap, so segment rows do not add up to All."],
+                             + ("are checked in order, so the segments add up to All."
+                                if exclusive else "can overlap, so segment rows do not add up to All.")],
         ["Anonymized queries", "Query-level data leaves out anonymized queries. A keyword that is "
                                "'lost' or 'new' is lost from, or new to, the data Search Console "
                                "returns, not necessarily from Google."],
@@ -383,7 +398,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
     rebuild_alarms  recompute R Alarms for every past period with the current rules
     """
     th = {k: site.threshold(k) for k in sites.THRESHOLD_DEFAULTS}
-    segments = build_segments(site.page_types)
+    segments = build_segments(site.page_types, site.first_match_wins, site.other_label)
     result = ReportsResult()
 
     titles, _ = history.grid_info(sheets, reports_id)

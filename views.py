@@ -176,7 +176,8 @@ def expected_tabs(site) -> list:
     for t in site.page_types:
         out.append(TabSpec(SEGMENT_PREFIX + t["name"], "monthly", INK, 200, 13, 2, segment=t["name"]))
     if site.page_types:
-        out.append(TabSpec(SEGMENT_PREFIX + "Other", "monthly", INK, 200, 13, 2, segment="Other"))
+        label = getattr(site, "other_label", "Other")
+        out.append(TabSpec(SEGMENT_PREFIX + label, "monthly", INK, 200, 13, 2, segment=label))
     out.append(TabSpec(WEEKLY_TAB, "weekly", INK, 400, 12, 2))
     for name, spec in LISTS.items():
         big = spec.kind in ("Lost", "New")

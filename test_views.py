@@ -5,6 +5,7 @@ what is built and written (tabs, order, colours, formulas, dropdowns, versions),
 error stands in for a broken formula when the read-back is tested.
 """
 
+import json
 import re
 import unittest
 from datetime import date
@@ -614,6 +615,92 @@ class ReadBackTests(ViewsTestCase):
             self.run_views(rebuild=True)
         self.assertGreater(len(calls), 0)
         self.assertLess(len(calls), 40)                       # a few dozen calls, once
+
+
+class FirstMatchSegmentTests(unittest.TestCase):
+    """Page types checked in order (first match wins) and a named rest segment."""
+
+    TYPES = [{"name": "English", "regex": "/en/"}, {"name": "Article", "regex": "/article/"},
+             {"name": "Shop", "regex": "^https://shop\."}]
+    EN_ARTICLE = "https://www.alpha.test/en/article/a"
+
+    def test_by_default_types_overlap_as_before(self):
+        segs = reports.build_segments(self.TYPES)
+        self.assertEqual([s.name for s in segs], ["All", "English", "Article", "Shop", "Other"])
+        self.assertTrue(all(not s.before for s in segs))
+        self.assertEqual(reports.page_types_of(segs, self.EN_ARTICLE), "English, Article")
+
+    def test_the_first_matching_type_wins(self):
+        segs = reports.build_segments(self.TYPES, first_match_wins=True, other_label="Blog & other")
+        self.assertEqual([s.name for s in segs], ["All", "English", "Article", "Shop", "Blog & other"])
+        self.assertEqual(reports.page_types_of(segs, self.EN_ARTICLE), "English")
+        self.assertEqual(reports.page_types_of(segs, "https://www.alpha.test/fa/article/c"), "Article")
+        self.assertEqual(reports.page_types_of(segs, "https://shop.alpha.test/en/p"), "Shop")
+        self.assertEqual(reports.page_types_of(segs, "https://www.alpha.test/blog/x"), "Blog & other")
+
+    def test_the_search_console_filter_excludes_the_types_before_it(self):
+        segs = {s.name: s for s in reports.build_segments(self.TYPES, first_match_wins=True)}
+        filters = segs["Shop"].filter_groups()[0]["filters"]
+        self.assertEqual([(f["operator"], f["expression"]) for f in filters], [
+            ("includingRegex", "^https://shop\."), ("excludingRegex", "/en/"),
+            ("excludingRegex", "/article/")])
+        self.assertEqual(len(segs["English"].filter_groups()[0]["filters"]), 1)
+
+    def test_the_types_and_the_rest_add_up_to_all(self):
+        segs = reports.build_segments(self.TYPES, first_match_wins=True)
+        urls = [self.EN_ARTICLE, "https://www.alpha.test/en/guide/b", "https://www.alpha.test/fa/article/c",
+                "https://shop.alpha.test/p/1", "https://www.alpha.test/"]
+        for url in urls:
+            owners = [s.name for s in segs if s.kind != "all" and s.matches(url)]
+            self.assertEqual(len(owners), 1, (url, owners))
+
+
+class FirstMatchConfigTests(unittest.TestCase):
+
+    def parse(self, **extra):
+        entry = {"name": "site-a", "site_url": "sc-domain:a.test", "sheet_id": "m",
+                 "page_types": [{"name": "English", "regex": "/en/"}], **extra}
+        return sites.parse_sites_json(json.dumps([entry]))[0]
+
+    def test_defaults(self):
+        s = self.parse()
+        self.assertEqual((s.first_match_wins, s.other_label), (False, "Other"))
+
+    def test_the_options(self):
+        s = self.parse(first_match_wins=True, other_label="Blog & other")
+        self.assertEqual((s.first_match_wins, s.other_label), (True, "Blog & other"))
+
+    def test_bad_values_are_refused_without_echoing_them(self):
+        for extra in ({"first_match_wins": "yes-secret"}, {"other_label": "<secret>"},
+                      {"other_label": 5}, {"other_label": "English"}, {"other_label": "all"},
+                      {"other_label": "x" * 41}):
+            with self.assertRaises(sites.SitesConfigError) as cm:
+                self.parse(**extra)
+            self.assertNotIn("secret", str(cm.exception))
+
+
+class FirstMatchRunTests(ViewsTestCase):
+    SITE = site_with(page_types=TYPES, first_match_wins=True, other_label="Blog & other")
+
+    def test_the_segments_add_up_to_all_in_every_month(self):
+        rows = self.rows(reports.MONTHLY)
+        self.assertEqual({r[1] for r in rows}, {"All", "English", "Article", "Blog & other"})
+        for label in {r[0] for r in rows}:
+            clicks = {r[1]: int(r[2]) for r in rows if r[0] == label}
+            self.assertEqual(clicks["English"] + clicks["Article"] + clicks["Blog & other"],
+                             clicks["All"], label)
+
+    def test_a_page_in_two_types_is_reported_in_the_first(self):
+        by_url = {r[2]: r[3] for r in self.rows(reports.PAGES)}
+        self.assertEqual(by_url.get("https://www.alpha.test/en/article/a", "English"), "English")
+
+    def test_the_rest_has_its_own_name_everywhere(self):
+        self.assertIn("Monthly \u00b7 Blog & other", self.titles())
+        self.assertNotIn("Monthly \u00b7 Other", self.titles())
+        self.assertIn('"Blog & other"', self.cell("Monthly \u00b7 Blog & other", 3, 1))
+        notes = {r[0]: r[1] for r in self.rows(reports.NOTES)}
+        self.assertIn("Blog & other", notes["Page types"])
+        self.assertIn("first type that matches", notes["Page types"])
 
 
 if __name__ == "__main__":

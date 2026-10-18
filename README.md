@@ -258,6 +258,12 @@ They live in `SITES_JSON`, because URL patterns can reveal a client. Types **may
 reported, there is no `Other`, and there is no "new URL pattern" alarm. A site whose URLs are
 flat slugs with no structure should simply have no page types.
 
+Two optional settings of the site: `"first_match_wins": true` makes the types **exclusive**: they are
+checked in the order given and a page belongs to the first one that matches, so the types and the
+rest add up to `All` (an English article is then only English). `"other_label": "Blog & other"` renames
+the segment of the pages that match no type (default `Other`; use it before the first reports are
+written, because existing rows keep the old name).
+
 To find good rules, write the discovery tab:
 
 ```bash

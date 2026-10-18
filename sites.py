@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 
 AUTH_MODES = ("robot", "me")
 ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "reports_sheet_id",
-                  "page_types", "thresholds", "weekly_segments", "deck", "enabled")
+                  "page_types", "first_match_wins", "other_label", "thresholds", "weekly_segments",
+                  "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
 TYPE_NAME_PATTERN = re.compile(r"[\w][\w \-]{0,39}")  # letters (any script), digits, space, - _
@@ -65,6 +66,8 @@ class Site:
     page_types: list = field(default_factory=list)       # [{"name": ..., "regex": ...}]
     thresholds: dict = field(default_factory=dict)       # overrides of THRESHOLD_DEFAULTS
     weekly_segments: bool = False
+    first_match_wins: bool = False       # page types checked in order; a page is in the first that matches
+    other_label: str = "Other"           # name of the segment for the pages that match no page type
     deck: "DeckConfig" = None
     enabled: bool = True
     auth: str = "robot"             # robot: the service account; me: the owner's own Google account
@@ -223,6 +226,18 @@ def _parse_page_types(value, where: str) -> list:
     return out
 
 
+OTHER_LABEL_PATTERN = re.compile(r"[\w][\w &\-]{0,39}")        # like a type name, and &
+
+
+def _parse_other_label(value, where: str) -> str:
+    if value is None:
+        return "Other"
+    if not isinstance(value, str) or not OTHER_LABEL_PATTERN.fullmatch(value.strip()):
+        raise SitesConfigError(f"{where}: 'other_label' must be a short label (letters, digits, "
+                               f"space, - _ and &)")
+    return value.strip()
+
+
 def _parse_thresholds(value, where: str) -> dict:
     if value is None:
         return {}
@@ -302,9 +317,14 @@ def parse_sites_json(raw: str) -> list:
             page_types=_parse_page_types(entry.get("page_types"), where),
             thresholds=_parse_thresholds(entry.get("thresholds"), where),
             weekly_segments=_flag(entry, "weekly_segments", where),
+            first_match_wins=_flag(entry, "first_match_wins", where),
+            other_label=_parse_other_label(entry.get("other_label"), where),
             deck=_parse_deck(entry.get("deck"), where),
             enabled=enabled,
         )
+        if site.other_label.lower() in {t["name"].lower() for t in site.page_types} | {"all"}:
+            raise SitesConfigError(f"{where}: 'other_label' is already used by a page type "
+                                   f"(or is 'All')")
         own = [site.sheet_id, site.history_sheet_id, site.reports_sheet_id]
         if len({v for v in own if v}) != len([v for v in own if v]):
             raise SitesConfigError(f"{where}: sheet_id, history_sheet_id and reports_sheet_id "
