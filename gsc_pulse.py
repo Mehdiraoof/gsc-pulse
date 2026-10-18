@@ -42,9 +42,11 @@ except ImportError:
     print("Missing dependencies. Run: pip install -r requirements.txt")
     sys.exit(1)
 
+import auth
 import deck_runner
 import mailer
 import page_discovery
+import provision
 import reports
 import views
 import history
@@ -313,6 +315,9 @@ class SiteRun:
     reports_result: object = None    # reports.ReportsResult, when the reports ran
     views_text: str = "off"
     decks_text: str = "off"
+    gsc: object = None               # the Google clients this site is read and written with
+    sheets: object = None
+    drive: object = None
 
     @property
     def name(self) -> str:
@@ -492,6 +497,93 @@ def discover_page_types(gsc_service, sheets_service, site, start_date: str, end_
     print("  Nothing is written automatically.\n")
 
 
+NO_ACCESS = 'no Search Console access with "me" auth'
+LOST_ACCESS_SUBJECT = "PulseO · lost access to your Google account"
+LOST_ACCESS_BODY = ("PulseO lost access to your Google account, re-authorize (README steps: "
+                    "'Using your own Google access'). Sites that use the service account kept "
+                    "running; the sites that use your own access were skipped.")
+
+
+def notify_owner(smtp, subject: str, body: str) -> bool:
+    """Emails the owner (SMTP_USER). Never raises; says only whether it worked."""
+    if smtp is None:
+        print("  (no SMTP settings: the owner cannot be emailed)")
+        return False
+    try:
+        mailer.send(smtp, mailer.build_plain(smtp.user, [smtp.user], subject, body))
+    except mailer.MailError as e:
+        print(f"  could not send the email ({scrub(str(e))})")
+        return False
+    return True
+
+
+def check_own_sheets(site, sheets_service):
+    """Sheets named in the configuration must be sheets PulseO created: the drive.file
+    permission cannot open any other file."""
+    for sheet_id in (site.sheet_id, site.history_sheet_id, site.reports_sheet_id):
+        if not sheet_id:
+            continue
+        try:
+            history._read(sheets_service.spreadsheets().get(spreadsheetId=sheet_id,
+                                                           fields="spreadsheetId"))
+        except HttpError as e:
+            if e.resp.status in (403, 404):
+                raise GscPulseError(
+                    "a sheet in the configuration was not created by PulseO, so the "
+                    "\"me\" permission cannot open it: remove its id from SITES_JSON and "
+                    "PulseO creates its own") from None
+            raise
+
+
+def connect_me(runs: list, smtp):
+    """
+    Clients for the sites that run with the owner's own Google account, then, per site: the
+    Search Console property check and the creation of its sheets. A site that cannot go on is
+    marked failed here and skipped by every later phase; sites of the other auth type are untouched.
+    """
+    try:
+        clients = auth.build_me_clients(os.environ, build)
+    except auth.AccessLost as e:
+        for r in runs:
+            r.history_text = "skipped"
+            fail_site(r, e)
+        notify_owner(smtp, LOST_ACCESS_SUBJECT, LOST_ACCESS_BODY)           # one email per run
+        return
+    except auth.AuthError as e:
+        for r in runs:
+            r.history_text = "skipped"
+            fail_site(r, e)
+        return
+
+    notify = (lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None
+    refused = []
+    for r in runs:
+        site = r.site
+        try:
+            if not auth.access_to_property(clients.gsc, site.site_url):
+                refused.append(site.site_url)
+                raise GscPulseError(NO_ACCESS)
+            check_own_sheets(site, clients.sheets)
+            made = provision.provision_site(clients.drive, clients.sheets, site, notify)
+            _SENSITIVE.extend(site.sensitive_values())                    # the new ids, too
+            print(f"{r.name}: {made.text}")
+        except Exception as e:
+            r.history_text = "skipped"
+            fail_site(r, e)
+            continue
+        r.gsc, r.sheets, r.drive = clients.gsc, clients.sheets, clients.drive
+    if refused:
+        notify_owner(smtp, "PulseO · no Search Console access",
+                     "PulseO could not read these Search Console properties with your Google "
+                     "account (not in your property list, or only an unverified owner):\n\n"
+                     + "\n".join(refused) + "\n\nSites that were fine kept running.")
+
+
+def notify_owner_or_raise(smtp, subject: str, body: str):
+    """Like notify_owner, but a failure raises (provision logs it and tries again next run)."""
+    mailer.send(smtp, mailer.build_plain(smtp.user, [smtp.user], subject, body))
+
+
 def pick_discovery_site(site_list: list, name: str):
     """The enabled site to run discovery for. Errors never echo the requested name."""
     match = [s for s in site_list if s.name.lower() == name.strip().lower()]
@@ -500,7 +592,7 @@ def pick_discovery_site(site_list: list, name: str):
     site = match[0]
     if not site.enabled:
         raise GscPulseError("page type discovery: that site is disabled")
-    if not site.reports_sheet_id:
+    if not site.reports_sheet_id and site.auth != "me":
         raise GscPulseError("page type discovery: that site has no reports_sheet_id")
     return site
 
@@ -556,6 +648,7 @@ def main():
 
     for s in site_list:                     # every id, even of disabled sites, is scrubbed
         _SENSITIVE.extend(s.sensitive_values())
+    _SENSITIVE.extend(auth.secret_values(os.environ))       # the OAuth client and token
 
     # GSC data runs ~2-3 days behind, so stop 3 days ago to avoid half-empty days
     end_dt     = datetime.today() - timedelta(days=3)
@@ -593,22 +686,35 @@ def main():
             print(f"{r.name}: disabled")
     print()
 
-    # ---- Auth (once, shared by every site) ---------------------------------
+    # ---- Auth (one set of clients per auth type, shared by its sites) ------
     print("Authenticating...")
-    creds          = get_credentials(oauth_file)
-    gsc_service    = build("webmasters", "v3",  credentials=creds)
-    sheets_service = build("sheets",    "v4",  credentials=creds)
+    targets = [r for r in enabled if r.site is discover_site] if discover_site else enabled
+    robot_runs = [r for r in targets if r.site.auth == "robot"]
+    me_runs = [r for r in targets if r.site.auth == "me"]
+    if robot_runs or not me_runs:
+        creds = get_credentials(oauth_file)
+        gsc_service = build("webmasters", "v3", credentials=creds)
+        sheets_service = build("sheets", "v4", credentials=creds)
+        for r in robot_runs:
+            r.gsc, r.sheets = gsc_service, sheets_service
+    if me_runs:
+        print("  Using your own Google account for the sites marked \"me\"")
+        connect_me(me_runs, smtp)
     print("  ✓  Connected to Google APIs\n")
     if discover_site:
-        discover_page_types(gsc_service, sheets_service, discover_site, start_date, end_date)
+        run = targets[0]
+        if run.status == "failed":
+            raise GscPulseError("page type discovery: the site could not be reached")
+        discover_page_types(run.gsc, run.sheets, discover_site, start_date, end_date)
         print(f"  ✅  Done — updated at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         return
 
-
     # ---- Phase 1: v1 tabs of every site, one after another -----------------
     for r in enabled:
+        if r.status == "failed":
+            continue                        # no access with its auth type: nothing to read
         try:
-            sync_main_tabs(gsc_service, sheets_service, r, start_date, end_date)
+            sync_main_tabs(r.gsc, r.sheets, r, start_date, end_date)
         except Exception as e:
             r.history_text = "skipped"
             fail_site(r, e)
@@ -619,7 +725,7 @@ def main():
         if not r.v1_done:
             continue
         try:
-            sync_reports(gsc_service, sheets_service, r, rebuild_alarms)
+            sync_reports(r.gsc, r.sheets, r, rebuild_alarms)
         except Exception as e:
             fail_site(r, e)
             print()
@@ -629,7 +735,7 @@ def main():
         if not r.v1_done or r.status == "failed" and r.reports_result is None:
             continue
         try:
-            sync_views(sheets_service, r, rebuild_views)
+            sync_views(r.sheets, r, rebuild_views)
         except Exception as e:
             fail_site(r, e)
             print()
@@ -639,7 +745,7 @@ def main():
         if not r.v1_done:
             continue
         try:
-            sync_decks(sheets_service, r, smtp, rebuild_decks)
+            sync_decks(r.sheets, r, smtp, rebuild_decks)
         except Exception as e:
             r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
             fail_site(r, e)
@@ -649,14 +755,14 @@ def main():
     for r in enabled:
         if not r.v1_done:
             continue                        # v1 failed (no access?): nothing to append
-        sync_history(gsc_service, sheets_service, r, started_at, history_off_text)
+        sync_history(r.gsc, r.sheets, r, started_at, history_off_text)
 
     # ---- Phase 3: Meta tab of every site -----------------------------------
     for r in enabled:
         if not r.v1_done:
             continue                        # the v1 phase failed: nothing to describe
         try:
-            write_meta(sheets_service, r, start_date, end_date, days)
+            write_meta(r.sheets, r, start_date, end_date, days)
         except Exception as e:
             fail_site(r, e)
         if r.status == "pending":

@@ -110,7 +110,7 @@ class DeckConfigTests(unittest.TestCase):
     def test_validation_without_echoing_values(self):
         self.fails(site_label="", recipients=["a@b.test"])
         self.fails(recipients=["a@b.test"])
-        self.fails(site_label="Acme", recipients=[])
+        self.fails("a@b.test", site_label="Acme", recipients="a@b.test")       # a list, or [] for the owner only
         self.fails("not-an-address", site_label="Acme", recipients=["not-an-address"])
         self.fails(site_label="Acme", recipients=["a@b.test"], language="de")
         self.fails("ff0000", site_label="Acme", recipients=["a@b.test"], brand_color="ff0000")

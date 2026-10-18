@@ -22,7 +22,8 @@ import json
 import re
 from dataclasses import dataclass, field
 
-ALLOWED_FIELDS = ("name", "site_url", "sheet_id", "history_sheet_id", "reports_sheet_id",
+AUTH_MODES = ("robot", "me")
+ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "reports_sheet_id",
                   "page_types", "thresholds", "weekly_segments", "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
@@ -66,6 +67,7 @@ class Site:
     weekly_segments: bool = False
     deck: "DeckConfig" = None
     enabled: bool = True
+    auth: str = "robot"             # robot: the service account; me: the owner's own Google account
 
     def sensitive_values(self) -> list:
         """Everything that must never appear in a public log."""
@@ -93,6 +95,7 @@ EMAIL_PATTERN = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
 ENV_RECIPIENT = re.compile(r"env:([A-Z][A-Z0-9_]*)")       # e.g. env:SMTP_USER: read at send time
 HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
 MAX_RECIPIENTS = 20
+OWN_ADDRESS = "env:SMTP_USER"          # what an empty recipients list stands for
 
 
 @dataclass
@@ -139,9 +142,11 @@ def _parse_deck(value, where: str) -> DeckConfig:
         raise SitesConfigError(f"{at}: 'site_label' is required (short text, at most 60 characters)")
     cfg.site_label = label.strip()
     rec = value.get("recipients")
-    if not isinstance(rec, list) or not rec or len(rec) > MAX_RECIPIENTS:
-        raise SitesConfigError(f"{at}: 'recipients' must be a list of 1 to {MAX_RECIPIENTS} "
-                               f"email addresses")
+    if not isinstance(rec, list) or len(rec) > MAX_RECIPIENTS:
+        raise SitesConfigError(f"{at}: 'recipients' must be a list of up to {MAX_RECIPIENTS} "
+                               f"email addresses (empty means: send to SMTP_USER only)")
+    if not rec:
+        rec = [OWN_ADDRESS]
     for r in rec:
         if not isinstance(r, str) or not (EMAIL_PATTERN.fullmatch(r.strip())
                                           or ENV_RECIPIENT.fullmatch(r.strip())):
@@ -268,10 +273,15 @@ def parse_sites_json(raw: str) -> list:
         names.add(name.lower())
 
         where = f"SITES_JSON site '{name}'"
+        auth = entry.get("auth", "robot")
+        if auth not in AUTH_MODES:
+            raise SitesConfigError(f"{where}: 'auth' must be one of {', '.join(AUTH_MODES)}")
         site = Site(
             name=name,
+            auth=auth,
             site_url=_text(entry, "site_url", where, required=enabled),
-            sheet_id=_text(entry, "sheet_id", where, required=enabled),
+            # a site that runs with the owner's own access gets its sheets created by PulseO
+            sheet_id=_text(entry, "sheet_id", where, required=enabled and auth == "robot"),
             history_sheet_id=_text(entry, "history_sheet_id", where, required=False),
             reports_sheet_id=_text(entry, "reports_sheet_id", where, required=False),
             page_types=_parse_page_types(entry.get("page_types"), where),

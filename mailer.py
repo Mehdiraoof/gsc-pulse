@@ -74,6 +74,16 @@ def build_message(sender: str, recipients: list, subject: str, body: str, filena
     return msg
 
 
+def build_plain(sender: str, recipients: list, subject: str, body: str) -> EmailMessage:
+    """A text-only message (notices to the owner)."""
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = subject
+    msg.set_content(body)
+    return msg
+
+
 def send(settings: SmtpSettings, message: EmailMessage, attempts: int = 2, wait: float = 5.0,
          sleep=None, smtp_class=None):
     """Sends the message; after a failure it waits and tries once more, then raises MailError."""

@@ -335,6 +335,8 @@ class BuildTests(ViewsTestCase):
         self.assertIn("SPARKLINE", self.cell("Dashboard", 10, 2))
         self.assertIn('"All"', self.cell("Dashboard", 7, 2))                       # no segment dropdown
         self.assertEqual(self.cell("Dashboard", 6, 6), "AIO impressions")
+        self.assertEqual([self.cell("Dashboard", r, 1) for r in (7, 8, 9, 10)],
+                         ["This month", "vs last month", "vs last year", "Last 13 months"])
         self.assertEqual(self.cell("Dashboard", 2, 5), "")
 
     def test_the_title_uses_the_site_label_or_a_neutral_name(self):
@@ -488,6 +490,16 @@ class RunRulesTests(ViewsTestCase):
         self.assertEqual(self.book["Events"].sheet_id, before["Events"])
         self.assertEqual(self.state_value("views_version"), str(newer))
         self.assertEqual(self.cell("Dashboard", 2, 3), "2026-09")               # a new build starts on the newest month
+
+    def test_a_sheet_built_by_version_one_is_rebuilt_with_the_this_month_label(self):
+        for r in self.book["State"].data:
+            if r and r[0] == "views_version":
+                r[1] = "1"
+        self.book["Dashboard"].data[6][0] = ""                      # how version 1 left cell A7
+        result = self.run_views(newest_month="2026-09")
+        self.assertEqual(result.mode, "built")
+        self.assertEqual(self.cell("Dashboard", 7, 1), "This month")
+        self.assertEqual(self.state_value("views_version"), str(views.VIEWS_VERSION))
 
     def test_the_stored_version_is_raised_after_an_upgrade(self):
         with mock.patch.object(views, "VIEWS_VERSION", 7):

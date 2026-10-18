@@ -34,7 +34,7 @@ import reports
 import state
 import tabs
 
-VIEWS_VERSION = 1
+VIEWS_VERSION = 2          # 2: "This month" label in Dashboard!A7
 VERSION_KEY = "views_version"
 
 DASHBOARD, MONTHLY_TAB, WEEKLY_TAB, EVENTS = "Dashboard", "Monthly", "Weekly", "Events"
@@ -478,7 +478,8 @@ def build_dashboard(sid, t: TabSpec, ctx: dict) -> tuple:
     # scorecard
     for col, name in zip("BCDEF", ("Clicks", "Impressions", "CTR", "Avg. position", "AIO impressions")):
         cells.append(_cell(DASHBOARD, f"{col}6", name))
-    cells += [_cell(DASHBOARD, "A8", "vs last month"), _cell(DASHBOARD, "A9", "vs last year"),
+    cells += [_cell(DASHBOARD, "A7", "This month"), _cell(DASHBOARD, "A8", "vs last month"),
+              _cell(DASHBOARD, "A9", "vs last year"),
               _cell(DASHBOARD, "A10", "Last 13 months")]
     req += [repeat(sid, 5, 10, 1, 6, bg=TINT, h="CENTER", v="MIDDLE"),
             repeat(sid, 5, 6, 1, 6, bg=TINT, text=text(10, True, color=MUTED), h="CENTER", v="MIDDLE"),

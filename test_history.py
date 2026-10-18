@@ -243,6 +243,11 @@ class FakeSheets:
                 elif "updateSheetProperties" in req:
                     props = req["updateSheetProperties"]["properties"]
                     title = next(k for k, t in book.items() if t.sheet_id == props["sheetId"])
+                    if "title" in props and props["title"] != title:
+                        items = [(props["title"] if k == title else k, v) for k, v in book.items()]
+                        book.clear()
+                        book.update(items)
+                        title = props["title"]
                     if "tabColorStyle" in props:
                         book[title].color = props["tabColorStyle"]["rgbColor"]
                     if "index" in props:

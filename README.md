@@ -448,6 +448,61 @@ paste into Claude yourself.
 
 ---
 
+## Using your own Google access
+
+Clients are sometimes uneasy about adding a strange robot address (`…@…iam.gserviceaccount.com`)
+to their Search Console. If you already have access to a client's property with your own Google
+account, PulseO can read it **as you**, so nobody has to add anything. This is chosen per site:
+
+```json
+{"name": "site-2", "site_url": "sc-domain:example.com", "auth": "me",
+ "deck": {"enabled": true, "language": "en", "site_label": "Example", "recipients": []}}
+```
+
+* `"auth": "robot"` (the default, and what every older site keeps doing): the service account,
+  as before.
+* `"auth": "me"`: your own Google account. `sheet_id`, `history_sheet_id` and `reports_sheet_id`
+  are optional: PulseO **creates the sheets itself** in your Drive (folder `PulseO`, a folder per site,
+  and `PulseO · Index` that remembers which sheet belongs to which site, so no ID has to be written
+  down). Once per new site you get an email, `PulseO · sheets ready · <label>`, with the links. Ids
+  you do put in `SITES_JSON` win over the Index, but they must be sheets PulseO created.
+* `"recipients": []` in a `deck` means: send to the address in the `SMTP_USER` secret.
+
+Before a `me` site is synced PulseO checks that the exact `site_url` is in your Search Console
+property list with a permission above *unverified user*. If not, the site is skipped, the run goes
+red (`site-2: failed (… no Search Console access with "me" auth)`, no property name in the log) and you
+get an email with the name. If Google says the refresh token is no longer valid (`invalid_grant`), all
+`me` sites are skipped, the `robot` sites keep running, the run goes red and you get one email.
+
+**What the two permissions mean**
+* `webmasters.readonly`: read Search Console. PulseO can never change anything there.
+* `drive.file`: create files, and open only the files **PulseO itself created**. It cannot see
+  the rest of your Drive.
+
+**One-time setup (about 15 minutes, all in the browser)**
+1. Google Cloud console → your project → *APIs & Services → Library* → enable **Google Drive API**
+   (Search Console and Sheets are already on).
+2. *Google Auth Platform → Audience*: user type **External**, then **Publish app** so the status is
+   **In production**. (In *Testing* the token stops working after 7 days.)
+3. *Data access*: add the two scopes above.
+4. *Clients → Create client → Web application*, with the authorized redirect URI
+   `https://developers.google.com/oauthplayground`. Keep the client ID and secret to yourself.
+5. Open the [OAuth 2.0 Playground](https://developers.google.com/oauthplayground), gear icon →
+   *Use your own OAuth credentials*, paste the ID and secret. Enter the two scopes, **Authorize APIs**
+   with the Google account that has the Search Console access, then **Exchange authorization code for
+   tokens** and copy the **refresh token**.
+6. GitHub → *Settings → Secrets and variables → Actions* → new secret `GSC_OAUTH_JSON`:
+   `{"client_id":"…","client_secret":"…","refresh_token":"…"}`
+
+Google shows *"Google hasn't verified this app"* during step 5: that is expected for a personal
+tool. Choose *Advanced → Go to … (unsafe)*; it is your own app. The token is never printed or written
+to a file; it is scrubbed from the logs like the other secrets.
+
+**To revoke access:** myaccount.google.com → *Security* → *Third-party apps with account access*
+→ remove the app. PulseO then reports `lost access` on the next run.
+
+---
+
 ## Using it with Claude
 
 Once the sheet is updated, open a Claude session that has the Google Sheets
