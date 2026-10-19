@@ -62,10 +62,11 @@ def content_slide(ctx, kicker_text: str, title: str):
     return slide
 
 
-def bar_card(slide, ctx, x, y, w, h, tone: str, radius: float = 0.05):
-    """A tinted rounded card with a thin coloured bar on its leading edge."""
+def bar_card(slide, ctx, x, y, w, h, tone: str, radius: float = 0.05, tint_bg: bool = False):
+    """A rounded card with a thin coloured bar on its leading edge (tinted in the tone colour, or
+    plain tint when `tint_bg`)."""
     fill, bar = TONES[tone]
-    card(slide, x, y, w, h, fill, radius)
+    card(slide, x, y, w, h, TINT if tint_bg else fill, radius)
     if bar:
         bx = x if not ctx.rtl else x + w - 0.1
         shape(slide, MSO_SHAPE.RECTANGLE, bx, y + 0.02, 0.1, h - 0.04, bar)
@@ -186,7 +187,9 @@ def slide_climbs(ctx, c, d):
     rows = [[Cell(r["label"], "query"), Cell(r["prev"], "num"), Cell(r["now"], "num", GREEN, True),
              Cell(r["change"], "change", GREEN, True)] for r in d["rows"]]
     decks.add_table(slide, ctx, table_x, 1.65, widths, d["header"], rows, row_height=0.58, size=14)
-    foot_note(slide, ctx, d["footnote"], y=6.45)
+    if d["footnote"]:
+        text_box(slide, table_x, 6.4, table_w, 0.4, [d["footnote"]], ctx, size=12, color=MUTED,
+                 align="r" if ctx.rtl else "l")
 
 
 def slide_grew(ctx, c, d):
@@ -255,7 +258,7 @@ def slide_trend(ctx, c, d):
     x = mirror_x(ctx, 9.2, 3.53)
     for i, n in enumerate(d["notes"]):
         y = 1.65 + i * 1.3
-        bar_card(slide, ctx, x, y, 3.53, 1.18, n["tone"] if n["tone"] != "grey" else "grey", 0.05)
+        bar_card(slide, ctx, x, y, 3.53, 1.18, n["tone"], 0.05, tint_bg=True)
         text_box(slide, x + 0.25, y + 0.1, 3.1, 0.35, [n["title"]], ctx, size=14, color=INK, bold=True,
                  align="r" if ctx.rtl else "l")
         text_box(slide, x + 0.25, y + 0.45, 3.1, 0.7, [n["body"]], ctx, size=12, color=SLATE,
@@ -299,7 +302,7 @@ def slide_pages(ctx, c, d):
     rows = [[Cell(r["page"], "page"), Cell(r["impr"], "num"), Cell(r["position"], "num"),
              Cell(r["ctr"], "num"), Cell(r["text"], "text")] for r in d["rows"]]
     decks.add_table(slide, ctx, mirror_x(ctx, LEFT, WIDTH), 2.1, [3.3, 1.55, 1.15, 1.05, 5.08],
-                    d["header"], rows, row_height=0.78, size=12)
+                    d["header"], rows, row_height=0.78, size=12, text_cols=(4,))
 
 
 def slide_ideas(ctx, c, d):
@@ -318,7 +321,7 @@ def slide_ideas(ctx, c, d):
         text_box(slide, x + 0.25, y + 0.75, w - 0.5, 0.3, [k["sub"]], ctx, size=12, color=SLATE,
                  align=align_for(ctx, k["keyword"]))
     if d["merge"]:
-        top = 5.0 if d["cards"] else 1.75
+        top = (2.15 + (1 if len(d["cards"]) <= 3 else 2) * 1.35 + 0.25) if d["cards"] else 1.75
         card(slide, mirror_x(ctx, LEFT, WIDTH), top, WIDTH, 1.5, TINT, 0.05)
         box = text_box(slide, mirror_x(ctx, LEFT + 0.35, WIDTH - 0.7), top + 0.1, WIDTH - 0.7, 1.3, [""],
                        ctx, size=15, anchor=MSO_ANCHOR.MIDDLE, align="r" if ctx.rtl else "l")

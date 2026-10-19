@@ -6,14 +6,18 @@ PulseO: deciding when decks are built, building them, and emailing them
 * "Already sent" is tracked in the `State` tab of the site's Reports sheet, and moved
   forward right after each email went out, so a failure of one deck never loses the
   state of a deck that did send.
-* `rebuild` builds and sends both decks now, whatever the state says.
+* `rebuild` builds and sends decks now, whatever the state says: True for both decks, or a set of
+  kinds ({"monthly"}) for just those.
 
 The deck is built in memory and lives only in the email: nothing is uploaded, committed or
 stored as a workflow artifact.
 """
 
+import io
 import os
 from dataclasses import dataclass, field
+
+from pptx import Presentation
 
 import client_deck
 import deck_data as dd
@@ -79,6 +83,7 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
               scrub=lambda s: s, template_dir: str = TEMPLATE_DIR, send=mailer.send,
               post=summary._post, fetch_logo=decks.fetch_logo) -> DeckResult:
     cfg = site.deck
+    wanted = {"monthly", "weekly"} if rebuild is True else set(rebuild or ())     # decks to build whatever the state says
     result = DeckResult()
     titles, _ = history.grid_info(sheets, reports_id)
     tabs.ensure_tab(sheets, reports_id, titles, STATE_TAB, STATE_HEADER)
@@ -95,7 +100,7 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             log(f"decks: {kind}: no report data yet")
             result.skipped.append(kind)
             continue
-        if not rebuild and state.get(STATE_KEY[kind], (0, ""))[1] == report.period:
+        if kind not in wanted and state.get(STATE_KEY[kind], (0, ""))[1] == report.period:
             log(f"decks: {kind} already sent for the latest period")
             result.skipped.append(kind)
             continue
@@ -124,5 +129,6 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
         write_state(sheets, reports_id, state, STATE_KEY[kind], report.period)
         result.sent.append(kind)
         count = len(to) + len(bcc)
-        log(f"decks: {kind} deck sent ({count} recipient{'s' if count != 1 else ''})")
+        slides = len(Presentation(io.BytesIO(payload)).slides)
+        log(f"decks: {kind} deck sent ({count} recipient{'s' if count != 1 else ''}, {slides} slides)")
     return result

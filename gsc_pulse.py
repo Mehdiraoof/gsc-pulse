@@ -434,7 +434,20 @@ def sync_views(sheets_service, run: SiteRun, rebuild_views: bool = False):
     print()
 
 
-def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks: bool = False):
+def deck_rebuild_for(run: SiteRun, everything: bool, site_name: str, kind: str):
+    """
+    What to rebuild for this site: True (both decks, every site: the rebuild_decks input), a set
+    of kinds for the one site named by rebuild_deck_site ("monthly", "weekly", or both when the
+    kind is empty or "both"), or False.
+    """
+    if everything:
+        return True
+    if site_name and run.name.lower() == site_name:
+        return {"monthly", "weekly"} if kind in ("", "both") else {kind} & {"monthly", "weekly"}
+    return False
+
+
+def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False):
     """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed."""
     site = run.site
     if not site.deck.enabled:
@@ -664,6 +677,8 @@ def main():
     discover_site = pick_discovery_site(site_list, discover_name) if discover_name else None
     rebuild_alarms = os.environ.get("REBUILD_ALARMS", "").strip().lower() in ("1", "true", "yes")
     rebuild_decks = os.environ.get("REBUILD_DECKS", "").strip().lower() in ("1", "true", "yes")
+    rebuild_deck_site = os.environ.get("REBUILD_DECK_SITE", "").strip().lower()      # one site only
+    rebuild_deck_kind = os.environ.get("REBUILD_DECK_KIND", "").strip().lower()       # monthly | weekly | both
     rebuild_views = os.environ.get("REBUILD_VIEWS", "").strip().lower() in ("1", "true", "yes")
     smtp = mailer.settings_from_env(os.environ)
     if smtp:
@@ -749,7 +764,8 @@ def main():
         if not r.v1_done:
             continue
         try:
-            sync_decks(r.sheets, r, smtp, rebuild_decks)
+            sync_decks(r.sheets, r, smtp, deck_rebuild_for(r, rebuild_decks, rebuild_deck_site,
+                                                          rebuild_deck_kind))
         except Exception as e:
             r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
             fail_site(r, e)

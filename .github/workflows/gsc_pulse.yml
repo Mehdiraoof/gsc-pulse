@@ -19,6 +19,14 @@ on:
         required: false
         type: boolean
         default: false
+      rebuild_deck_site:
+        description: "Build and email the decks of this one site now (a name from SITES_JSON); other sites are not resent"
+        required: false
+        default: ""
+      rebuild_deck_kind:
+        description: "With rebuild_deck_site: monthly, weekly or both (default both)"
+        required: false
+        default: ""
       rebuild_decks:
         description: "Build and email the weekly and monthly decks now, even if already sent (normal sync otherwise)"
         required: false
@@ -59,6 +67,8 @@ jobs:
           DISCOVER_SITE: ${{ inputs.discover_site }}
           REBUILD_ALARMS: ${{ inputs.rebuild_alarms }}
           REBUILD_DECKS: ${{ inputs.rebuild_decks }}
+          REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
+          REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
           REBUILD_VIEWS: ${{ inputs.rebuild_views }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}

@@ -336,9 +336,11 @@ only, so they refresh by themselves when the R tabs grow; the weekly run never r
 | `Weekly` | The same per ISO week (for example `W41 · 5 Oct – 11 Oct 2026`), compared with the week before. |
 | `Lost Keywords`, `New Keywords`, `Growing Keywords`, `Declining Keywords` | A *Month* dropdown and the whole list for that month. |
 | `Growing Pages`, `Declining Pages`, `YoY Growing Pages`, `YoY Declining Pages` | The same for pages (shown by their readable path). YoY compares with the same month last year. |
+| `Gone Pages` | Pages that had impressions last month (or in the same month last year) and **none this month**: most likely redirected or removed, so they are not counted as declines. Check that the redirects pass the traffic. |
 | `Growing AIO Pages`, `Declining AIO Pages` | Pages by AI Overview impressions. A month without an import says so. |
-| `Events` | The one tab you write in (see below). |
-| `R ...`, `Notes`, `AIO Raw`, `State`, `Page Type Discovery` | The data, in grey, at the end. Do not edit them. |
+| `Impact Checker` | What did a change on a page do? You enter rows, formulas answer (see below). |
+| `Events` | The tab you write in: events by month, and the Resolved list (see below). |
+| `Opportunities`, `R ...`, `Notes`, `AIO Raw`, `State`, `Page Type Discovery` | The data, in grey, at the end. Do not edit them. |
 
 Tab colours: amber is the Dashboard, dark blue the views, slate the Events tab, grey the data.
 Green numbers are good and red are bad; for the average position it is the other way round, because
@@ -353,6 +355,45 @@ sheet opens on the newest report; on other runs your choices are left alone.
 and what happened in the second ("Site migration", "Core update", ...). The note then shows on the
 Dashboard under the takeaway, in the *Note* column of `Monthly`, and, for a week, in `Weekly` (by the
 month of its Monday). The rows with a note are highlighted. Nothing ever overwrites `Events`.
+
+**The Resolved list.** On the right of `Events` (columns D to G: `kind | value | note | added`) you list what
+is already known and fixed. `kind` is a dropdown: `page` (the URL, or just its path), `keyword`, `month`
+(`YYYY-MM`) or `segment` (the segment label). Anything listed here **never appears in the monthly
+client deck**: not as a decline, not under "What we're watching", not as a trend annotation (a resolved
+month is shown as "known and fixed"). The weekly deck, which is for you only, still shows everything.
+
+**Gone pages.** A page that had impressions last month (or a year ago) and has none this month is
+called *gone*, not a decliner: after a migration old URLs disappear and that is expected. They are
+left out of every decline list in the monthly deck, which only says "N old URLs no longer show in
+Google (expected after redirects)" from five pages on. The weekly deck has a table *Pages that
+disappeared* (the top 10 by clicks last week) so you can check the redirects. The full list is in the
+`Gone Pages` tab.
+
+**Impact Checker.** Type a page URL (exactly as Search Console shows it), the date of a change and a
+note. Formulas compare the 28 days before with the 28 days after, from the History sheet: clicks,
+impressions, CTR and average position, with the change. Until 28 days have passed after the date (plus
+Search Console's two-day lag) it says *too early*. The first time, Google asks you to connect the
+sheets: click *Allow access* in the cell. Row 4 is only an example. Your rows are never overwritten.
+
+**Opportunities.** Every run the `Opportunities` tab is rewritten with a list of concrete things to do,
+computed from the last 90 days (the Data sheet's Queries, Pages and Query×Page tabs) and the latest
+month. Types: `quick_win` (a query at position 4 to 20), `ctr_fix` (top 5 but under half the usual
+click rate), `update_page` (a page at position 4 to 10 with many impressions and a low click rate, with
+a diagnosis), `decliner` (down on last month **and** last year, still visible), `question` (question
+searches where the site ranks low), `cannibal` (several own pages competing for one query),
+`check_page` (impressions down 80% or more), `aio` (AI Overview impressions up, clicks down) and
+`seasonal` (grew strongly into next month last year). The *potential_gain_month* is an **estimate**:
+`impressions_90d / 3 × max(0, target CTR − CTR)`, target 8% by default (a conservative top-3 click rate),
+rounded to 5. The expected click rate by position is an industry-average estimate (position 1: 28%,
+2: 15%, 3: 10%, 4: 7%, 5: 5%, 6: 4%, 7: 3%, 8: 2.5%, 9: 2%, 10: 1.8%, 11 to 20: 1%). Per site, in
+`SITES_JSON`, all optional:
+
+```json
+"opportunities": {"brand_terms": ["yourbrand"], "min_impressions_90d": 300, "target_ctr_top3": 0.08}
+```
+
+Searches that contain a brand term are skipped. Not built: the "all its top 5 queries fell in position
+at once" variant of `check_page` (it needs per-month query data for each page).
 
 **Repairing and rebuilding.** The tool stores a `views_version` in the `State` tab. If you delete a view
 tab, the next run creates it again. When a new version of PulseO changes the views, the next run
@@ -371,18 +412,26 @@ site by email, built from the numbers in the site's Reports sheet (so [Reports](
 must be set up first). Anyone who prefers Google Slides opens the attachment there: Slides
 opens .pptx files directly.
 
-- **Monthly deck** (about 12 slides): summary, alarms, scorecard, 13-month trend, segments (only
-  for sites with page types), lost and new keywords, growing and declining keywords and pages,
-  year over year, AI search, and a data-notes slide. It is sent when a new complete month exists
-  that was not sent yet.
-- **Weekly deck** (6 slides): summary, alarms (week-on-week drops of 20% or more), scorecard,
-  12-week trend and the top keyword movers. It is sent once for the latest complete week.
+- **Monthly deck** (up to 15 slides): a **client-ready report**, progress first, with real keyword and
+  page names and numbers, concrete recommendations and an estimated gain. Title; this month in one
+  line; scorecard; rankings that climbed; what grew; new searches; *Our work this month* (an empty,
+  editable placeholder you fill in before forwarding); 13-month trend; performance by section (only for
+  sites with page types); quick wins; pages to update; new content ideas; get ready for next month;
+  what we're watching; next month's focus. Declines are shown in grey, not red, unless rankings really
+  fell; there is no alarm slide, and anything on the Resolved list is left out. A slide without data
+  is skipped. It is sent when a new complete month exists that was not sent yet.
+- **Weekly deck** (6 slides, 7 when pages disappeared): summary, alarms (week-on-week drops of 20% or
+  more), scorecard, 12-week trend, the top keyword movers and a table of pages that disappeared. It is
+  for you: it stays issue-focused. It is sent once for the latest complete week.
 - Slide titles state the takeaway ("Clicks down 32% this month, 91% vs last year"), generated
   from the data by fixed rules. Empty data becomes a sentence, never an empty table.
 - The deck is built **in memory during the run** and exists only in the email. Nothing is
   uploaded, committed or stored as a workflow artifact (the repository and its artifacts are public).
 - Which periods were sent is remembered in the `State` tab of the Reports sheet. Run the
-  workflow manually with **rebuild_decks** ticked to build and send both decks now.
+  workflow manually with **rebuild_decks** ticked to build and send both decks of every site now, or
+  fill in **rebuild_deck_site** (a site name) and optionally **rebuild_deck_kind** (`monthly`, `weekly`
+  or `both`) to rebuild just that site's decks; the other sites are not resent.
+- The monthly deck has no summary slide, so `ai_summary` only applies to the weekly deck.
 
 **Set it up**
 

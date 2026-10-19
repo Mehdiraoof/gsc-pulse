@@ -347,6 +347,28 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertEqual(result.sent, ["monthly", "weekly"])
         self.assertEqual(len(self.sent), 4)
 
+    def test_a_rebuild_can_name_one_deck_kind(self):
+        self.run_decks()
+        self.sent.clear()
+        result = self.run_decks(rebuild={"monthly"})
+        self.assertEqual(result.sent, ["monthly"])
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Monthly", self.sent[0]["Subject"])
+        self.assertTrue(any("weekly already sent" in l for l in self.logs))
+
+    def test_which_site_and_which_decks_a_rebuild_covers(self):
+        site_2 = gsc_pulse.SiteRun(site_with(name="site-2", deck=deck()))
+        site_3 = gsc_pulse.SiteRun(site_with(name="site-3", deck=deck()))
+        f = gsc_pulse.deck_rebuild_for
+        self.assertIs(f(site_2, True, "", ""), True)                              # the old input: everything
+        self.assertEqual(f(site_2, False, "site-2", "monthly"), {"monthly"})
+        self.assertEqual(f(site_2, False, "site-2", "weekly"), {"weekly"})
+        self.assertEqual(f(site_2, False, "site-2", ""), {"monthly", "weekly"})
+        self.assertEqual(f(site_2, False, "site-2", "both"), {"monthly", "weekly"})
+        self.assertEqual(f(site_2, False, "site-2", "nonsense"), set())
+        self.assertFalse(f(site_3, False, "site-2", "monthly"))                   # other sites: untouched
+        self.assertFalse(f(site_3, False, "", ""))
+
     def test_weekly_and_monthly_switches(self):
         only_weekly = site_with(deck=deck(monthly=False))
         self.assertEqual(self.run_decks(site=only_weekly).sent, ["weekly"])
@@ -584,7 +606,7 @@ class DecksInTheRunTests(unittest.TestCase):
         self.assertIsNone(err, out)
         self.assertLess(out.index("a · Reports"), out.index("a · Decks"))
         self.assertLess(out.index("a · Decks"), out.index("a · History"))
-        self.assertIn("decks: monthly deck sent (1 recipient)", out)
+        self.assertRegex(out, r"decks: monthly deck sent \(1 recipient, \d+ slides\)")
         summary_line = [l for l in out.splitlines() if l.strip().startswith("site-a: ok")][0]
         self.assertIn("decks: sent monthly + weekly", summary_line)
         self.assertEqual(len(FakeSMTP.sent), 2)

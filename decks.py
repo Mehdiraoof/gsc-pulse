@@ -373,7 +373,7 @@ class Cell:
 
 
 def add_table(slide, ctx: Ctx, x, y, col_widths: list, header: list, rows: list,
-              row_height: float = 0.42, size: int = 12):
+              row_height: float = 0.42, size: int = 12, text_cols: tuple = ()):
     """header: list of str. rows: list of list of Cell. Returns the table graphic frame."""
     w = sum(col_widths)
     frame = slide.shapes.add_table(len(rows) + 1, len(col_widths), Emu(inch(x)), Emu(inch(y)),
@@ -412,7 +412,8 @@ def add_table(slide, ctx: Ctx, x, y, col_widths: list, header: list, rows: list,
     persian_cols = {j for row in rows for j, c in enumerate(row)
                     if c.kind in ("query", "page") and dd_has_arabic(c.text)}
     for j, h in enumerate(header):
-        put(table.cell(0, j), Cell(h, "num" if j > 0 else "query"), True, force_right=j in persian_cols)
+        put(table.cell(0, j), Cell(h, "text" if j in text_cols else ("num" if j > 0 else "query")), True,
+            force_right=j in persian_cols)
     for i, row in enumerate(rows, start=1):
         for j, spec in enumerate(row):
             put(table.cell(i, j), spec, False)
