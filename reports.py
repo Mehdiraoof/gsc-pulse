@@ -30,9 +30,14 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from googleapiclient.errors import HttpError
+
+import i18n
 import aio_import
 import alarms
 import history
+import opportunities
+import resolved
 import sites
 import periods
 import state
@@ -43,6 +48,8 @@ MONTHLY, WEEKLY = "R Monthly", "R Weekly"
 KEYWORDS, PAGES = "R Keywords", "R Pages"
 AIO_PAGES, ALARMS, NOTES = "R AIO Pages", "R Alarms", "Notes"
 WEEKLY_MOVERS = "R Weekly Movers"
+GONE, OPPORTUNITIES = "R Gone Pages", "Opportunities"
+GONE_MAX = 500                   # gone pages kept per period (by clicks last month)
 
 
 def _change_header(unit: str) -> list:       # unit: "MoM" or "WoW"
@@ -64,11 +71,13 @@ PAGES_HEADER = ["Period", "Type", "Page", "Page type(s)", "Clicks", "Clicks prev
                 "Impressions", "Impr prev", "Impr diff", "Position", "Position prev",
                 "Position diff", "Path"]
 AIO_PAGES_HEADER = ["Period", "Type", "Page", "AIO Impr", "AIO Impr prev", "AIO Impr diff", "Path"]
+GONE_HEADER = ["Period", "Type", "Page", "Clicks prev", "Impr prev", "Clicks yoy", "Impr yoy", "Path"]
 
 TABS = [(MONTHLY, MONTHLY_HEADER, "Q"), (WEEKLY, WEEKLY_HEADER, "Q"),
         (KEYWORDS, KEYWORDS_HEADER, "L"), (PAGES, PAGES_HEADER, "N"),
         (AIO_PAGES, AIO_PAGES_HEADER, "G"), (ALARMS, alarms.HEADER, "E"),
-        (WEEKLY_MOVERS, KEYWORDS_HEADER, "L"),
+        (WEEKLY_MOVERS, KEYWORDS_HEADER, "L"), (GONE, GONE_HEADER, "H"),
+        (OPPORTUNITIES, opportunities.HEADER, "L"),
         (NOTES, ["Topic", "Explanation"], "B"), (aio_import.RAW_TAB, aio_import.RAW_HEADER, "D")]
 
 AIO_COLS = (6, 11, 12)      # AIO Impressions, AIO change, AIO change % (0-based)
@@ -80,6 +89,8 @@ class ReportsResult:
     weeks: int = 0
     keyword_periods: int = 0
     page_periods: int = 0
+    gone_periods: int = 0                    # periods whose gone pages were worked out in this run
+    opportunities: dict = field(default_factory=dict)    # type -> rows in the Opportunities tab
     alarms: int = 0
     alarm_counts: dict = field(default_factory=dict)      # area -> rows in R Alarms
     aio_months: int = 0
@@ -315,6 +326,31 @@ def aio_page_rows(period: str, cur: dict, prev: dict, top_n: int) -> list:
             + [[period, "Declining", u, a, b, a - b, tabs.path_of(u)] for u, (a, b) in down[:top_n]])
 
 
+def gone_rows(period: str, cur: dict, prev: dict, yoy: dict = None, cap: int = GONE_MAX) -> list:
+    """
+    Pages that had impressions in the previous period (or, for a month, in the same month a year
+    earlier) and none in this one: most likely redirected or removed, so they are not "decliners".
+    Biggest by clicks last period first. A period with no such page gets one marker row (Type
+    "None") so it counts as done and is never fetched again.
+    """
+    found = []
+    for url in set(prev) | set(yoy or {}):
+        now = cur.get(url)
+        if now and now[1] > 0:
+            continue
+        p = prev.get(url, (0, 0, 0.0))
+        y = (yoy or {}).get(url, (0, 0, 0.0))
+        if p[1] <= 0 and y[1] <= 0:
+            continue
+        found.append((url, p[0], p[1], y[0], y[1]))
+    found.sort(key=lambda f: (-f[1], -f[2], -f[4], f[0]))
+    if not found:
+        return [[period, "None", "", "", "", "", "", ""]]
+    no_yoy = yoy is None
+    return [[period, "Gone", url, pc, pi, "" if no_yoy else yc, "" if no_yoy else yi, tabs.path_of(url)]
+            for url, pc, pi, yc, yi in found[:cap]]
+
+
 # --------------------------------------------------------------------------- #
 # Notes
 # --------------------------------------------------------------------------- #
@@ -457,7 +493,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
 
     existing = {name: tabs.read_rows(sheets, reports_id, name, last)
                 for name, _, last in TABS
-                if name in (MONTHLY, WEEKLY, KEYWORDS, PAGES, AIO_PAGES, WEEKLY_MOVERS)}
+                if name in (MONTHLY, WEEKLY, KEYWORDS, PAGES, AIO_PAGES, WEEKLY_MOVERS, GONE)}
     series = {"All": all_series}
 
     def segment_series(seg):
@@ -591,6 +627,30 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
                     label, [u for u in cur if other.matches(u)],
                     [u for u in prev if other.matches(u)], th)
 
+    # ---- R Gone Pages: per month, and for the latest week (once each) --------
+    gone_done = {r[0] for r in existing[GONE] if r}
+    for label, first, last in months:
+        prev_label = periods.month_label(periods.add_months(first, -1))
+        if label in gone_done or prev_label not in month_by_label:
+            continue
+        pfirst, plast = month_by_label[prev_label][1:]
+        ylabel = periods.month_label(periods.add_months(first, -12))
+        yoy = (by_page(fetch(["page"], *month_by_label[ylabel][1:]))
+               if ylabel in month_by_label else None)
+        tabs.append(sheets, reports_id, GONE,
+                    gone_rows(label, by_page(fetch(["page"], first, last)),
+                              by_page(fetch(["page"], pfirst, plast)), yoy, GONE_MAX), log)
+        result.gone_periods += 1
+    if weeks:
+        label, monday, sunday = weeks[-1]
+        prev_monday = monday - timedelta(days=7)
+        if label not in gone_done and periods.week_label(prev_monday) in week_by_label:
+            tabs.append(sheets, reports_id, GONE,
+                        gone_rows(label, by_page(fetch(["page"], monday, sunday)),
+                                  by_page(fetch(["page"], prev_monday, prev_monday + timedelta(days=6))),
+                                  None, GONE_MAX), log)
+            result.gone_periods += 1
+
     # ---- Alarms from the totals of the months in question ------------------
     segment_months = sorted(month_by_label) if rebuild else sorted({r[0] for r in monthly_new})
     for label in segment_months:
@@ -619,6 +679,7 @@ def run_reports(sheets, reports_id: str, site, gsc_fetch, final, today, log=prin
             aio.month(label, first, periods.month_end(first), all_seg),
             aio.month(periods.month_label(pfirst), pfirst, periods.month_end(pfirst), all_seg), th)
 
+    _opportunities(sheets, reports_id, site, segments, months, fetch, earliest, result, log)
     _finish(sheets, reports_id, segments, new_alarms, rebuild, cap, th, result, log, st)
     return result
 
@@ -683,6 +744,60 @@ def _save_alarms(sheets, reports_id, candidates: list, rebuild: bool, cap: int,
     result.alarms = sum(1 for a in ordered if a.key not in known)
     for a in ordered:
         result.alarm_counts[a.area] = result.alarm_counts.get(a.area, 0) + 1
+
+
+V1_QUERIES, V1_PAGES, V1_PAIRS = "Queries", "Pages", "Query×Page"      # the Data sheet's v1 tabs
+
+
+def _dicts(rows: list, header: list) -> list:
+    return [dict(zip(header, list(r) + [""] * (len(header) - len(r)))) for r in rows]
+
+
+def _opportunities(sheets, reports_id, site, segments, months, fetch, earliest, result, log):
+    """
+    Rewrites the Opportunities tab: the last 90 days from the Data sheet (Queries, Pages,
+    Query×Page, written earlier in this run) plus the latest month of the report tabs and, for
+    the seasonal rule, what pages did into next month a year ago. See opportunities.py.
+    """
+    if not site.sheet_id or not months:
+        return
+    newest, first, _ = months[-1]
+    try:
+        queries = opportunities.parse_queries(tabs.read_tab(sheets, site.sheet_id, V1_QUERIES))
+        pages = opportunities.parse_pages(tabs.read_tab(sheets, site.sheet_id, V1_PAGES))
+        pairs = opportunities.parse_pairs(tabs.read_tab(sheets, site.sheet_id, V1_PAIRS))
+    except HttpError:
+        log("  reports: Opportunities skipped (the Data sheet could not be read)")
+        return
+    month_pages = [d for d in _dicts(tabs.read_rows(sheets, reports_id, PAGES, "N"), PAGES_HEADER)
+                   if d["Period"] == newest]
+    aio_pages = [d for d in _dicts(tabs.read_rows(sheets, reports_id, AIO_PAGES, "G"), AIO_PAGES_HEADER)
+                 if d["Period"] == newest]
+    gone = {r[2] for r in tabs.read_rows(sheets, reports_id, GONE, "H")
+            if len(r) > 2 and r[0] == newest and r[1] == "Gone"}
+
+    seasonal = {}
+    last_year, next_year = periods.add_months(first, -12), periods.add_months(first, -11)
+    if last_year >= earliest:                       # Search Console still has both months
+        before = by_page(fetch(["page"], last_year, periods.month_end(last_year)))
+        after = by_page(fetch(["page"], next_year, periods.month_end(next_year)))
+        seasonal = {u: (before.get(u, (0,))[0], after.get(u, (0,))[0]) for u in set(before) | set(after)}
+
+    def segment_of(url):
+        names = page_types_of(segments, url)
+        return names.split(", ")[0] if names else ""
+
+    rows = opportunities.build(opportunities.Inputs(
+        queries=queries, pages=pages, pairs=pairs, month_pages=month_pages, aio_pages=aio_pages,
+        gone=gone, seasonal=seasonal,
+        next_month=i18n.month_name(periods.month_label(periods.add_months(first, 1)), "en"),
+        brand_terms=site.opportunity_setting("brand_terms"),
+        min_impressions=site.opportunity_setting("min_impressions_90d"),
+        target_ctr=site.opportunity_setting("target_ctr_top3"),
+        segment_of=segment_of, resolved=resolved.load(sheets, reports_id)))
+    tabs.rewrite(sheets, reports_id, OPPORTUNITIES, opportunities.HEADER, rows)
+    result.opportunities = opportunities.counts(rows)
+    log("  reports: Opportunities " + ", ".join(f"{k} {n}" for k, n in result.opportunities.items()))
 
 
 def _finish(sheets, reports_id, segments, new_alarms: list, rebuild: bool, cap: int, th: dict,

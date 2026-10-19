@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 
 AUTH_MODES = ("robot", "me")
 ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "reports_sheet_id",
-                  "page_types", "first_match_wins", "other_label", "thresholds", "weekly_segments",
+                  "page_types", "first_match_wins", "other_label", "opportunities", "thresholds",
+                  "weekly_segments",
                   "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
@@ -68,6 +69,7 @@ class Site:
     weekly_segments: bool = False
     first_match_wins: bool = False       # page types checked in order; a page is in the first that matches
     other_label: str = "Other"           # name of the segment for the pages that match no page type
+    opportunities: dict = field(default_factory=dict)    # overrides of OPPORTUNITY_DEFAULTS (+ brand_terms)
     deck: "DeckConfig" = None
     enabled: bool = True
     auth: str = "robot"             # robot: the service account; me: the owner's own Google account
@@ -76,11 +78,18 @@ class Site:
         """Everything that must never appear in a public log."""
         ids = [v for v in (self.site_url, self.sheet_id, self.history_sheet_id,
                            self.reports_sheet_id) if v]
-        return ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
+        return (ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
+                + list(self.opportunities.get("brand_terms", [])))
 
     def __post_init__(self):
         if self.deck is None:
             self.deck = DeckConfig()
+
+    def opportunity_setting(self, key: str):
+        """A setting of the opportunity engine: the site's own value, else the default."""
+        if key == "brand_terms":
+            return self.opportunities.get("brand_terms", [])
+        return self.opportunities.get(key, OPPORTUNITY_DEFAULTS[key])
 
     def threshold(self, key: str):
         """A report threshold: the site's own value, else the default."""
@@ -226,7 +235,46 @@ def _parse_page_types(value, where: str) -> list:
     return out
 
 
-OTHER_LABEL_PATTERN = re.compile(r"[\w][\w &\-]{0,39}")        # like a type name, and &
+OPPORTUNITY_DEFAULTS = {
+    "min_impressions_90d": 300,      # queries / pages with fewer impressions in 90 days are ignored
+    "target_ctr_top3": 0.08,         # conservative click rate "if it reached the top 3"
+}
+MAX_BRAND_TERMS = 30
+
+
+def _parse_opportunities(value, where: str) -> dict:
+    """Optional settings of the opportunity engine. Messages say where, never what."""
+    if value is None:
+        return {}
+    at = f"{where}, opportunities"
+    if not isinstance(value, dict):
+        raise SitesConfigError(f"{at}: must be a JSON object")
+    allowed = ("brand_terms",) + tuple(OPPORTUNITY_DEFAULTS)
+    if set(value) - set(allowed):
+        raise SitesConfigError(f"{at}: has an unknown setting (allowed: {', '.join(allowed)})")
+    out = {}
+    if "brand_terms" in value:
+        terms = value["brand_terms"]
+        if (not isinstance(terms, list) or len(terms) > MAX_BRAND_TERMS
+                or any(not isinstance(t, str) or not t.strip() or len(t) > 60 for t in terms)):
+            raise SitesConfigError(f"{at}: 'brand_terms' must be a list of up to {MAX_BRAND_TERMS} "
+                                   f"short words")
+        out["brand_terms"] = [t.strip() for t in terms]
+    if "min_impressions_90d" in value:
+        v = value["min_impressions_90d"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 1:
+            raise SitesConfigError(f"{at}: 'min_impressions_90d' must be a number, 1 or more")
+        out["min_impressions_90d"] = v
+    if "target_ctr_top3" in value:
+        v = value["target_ctr_top3"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v <= 1:
+            raise SitesConfigError(f"{at}: 'target_ctr_top3' must be a number above 0, at most 1 "
+                                   f"(0.08 means 8%)")
+        out["target_ctr_top3"] = v
+    return out
+
+
+OTHER_LABEL_PATTERN =re.compile(r"[\w][\w &\-]{0,39}")        # like a type name, and &
 
 
 def _parse_other_label(value, where: str) -> str:
@@ -318,6 +366,7 @@ def parse_sites_json(raw: str) -> list:
             thresholds=_parse_thresholds(entry.get("thresholds"), where),
             weekly_segments=_flag(entry, "weekly_segments", where),
             first_match_wins=_flag(entry, "first_match_wins", where),
+            opportunities=_parse_opportunities(entry.get("opportunities"), where),
             other_label=_parse_other_label(entry.get("other_label"), where),
             deck=_parse_deck(entry.get("deck"), where),
             enabled=enabled,

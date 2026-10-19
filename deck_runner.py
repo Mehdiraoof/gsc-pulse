@@ -15,6 +15,7 @@ stored as a workflow artifact.
 import os
 from dataclasses import dataclass, field
 
+import client_deck
 import deck_data as dd
 import decks
 import history
@@ -64,7 +65,7 @@ def email_text(report: dd.Report, cfg, lang: str, report_title: str, period: str
         T["mail_greeting"], "",
         T["mail_intro"].format(report_lc=report_lc, label=cfg.site_label, period=period), "",
         T["mail_headlines"], *lines, "",
-        f"{T['mail_top_alarm']}: {top}", "",
+        *([] if report.kind == "monthly" else [f"{T['mail_top_alarm']}: {top}", ""]),   # the client deck has no alarms
         T["mail_attached"], "", T["mail_sign"], ""])
     subject = T["mail_subject"].format(report=report_title, label=cfg.site_label, period=period)
     return subject, body
@@ -100,13 +101,14 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             continue
         try:
             ai = None
-            if cfg.ai_summary:
+            if cfg.ai_summary and kind == "weekly":            # the client deck has no summary slide
                 ai = summary.request_summary(
                     dd.aggregated_text(report, cfg.site_label), cfg.language, env, post)
                 if ai is None:
                     log("decks: AI summary not available, using the placeholder slide")
             logo = fetch_logo(cfg.logo_url) if cfg.logo_url else None
-            payload = decks.build_deck(report, cfg, template_dir, ai, logo)
+            payload = (client_deck.build_monthly(report, cfg, template_dir, logo) if kind == "monthly"
+                       else decks.build_deck(report, cfg, template_dir, ai, logo))
             period = decks.period_title(report, cfg.language)
             T = i18n.table(cfg.language)
             subject, body = email_text(report, cfg, cfg.language,

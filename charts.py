@@ -11,7 +11,7 @@ second series is moved into a line chart on a secondary axis by editing the char
 from lxml import etree
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
-from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_MARKER_STYLE
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
@@ -199,7 +199,7 @@ def column_chart(slide, box, categories, series_name, values, color, title="", f
     return frame
 
 
-def bar_chart(slide, box, categories, series_name, values, color, font=""):
+def bar_chart(slide, box, categories, series_name, values, color, font="", title=""):
     """Horizontal bars (clicks by segment), the biggest on top."""
     frame, chart = _base_chart(slide, XL_CHART_TYPE.BAR_CLUSTERED, *box, categories,
                                [(series_name, values, "#,##0")], font)
@@ -219,4 +219,46 @@ def bar_chart(slide, box, categories, series_name, values, color, font=""):
     va.has_major_gridlines = False
     va.visible = False
     _style_axis_text(ca, 12, SLATE, font)
+    if title:
+        _chart_title(chart, title, font)
+    return frame
+
+
+def _chart_title(chart, text: str, font: str):
+    chart.has_title = True
+    tf = chart.chart_title.text_frame
+    tf.text = text
+    run = tf.paragraphs[0].runs[0]
+    run.font.size = Pt(14)
+    run.font.bold = False
+    run.font.color.rgb = _rgb(INK)
+    if font:
+        run.font.name = font
+    chart.chart_title.include_in_layout = False
+
+
+def line_chart(slide, box, categories, series_name, values, color, title="", font=""):
+    """One line with round markers (clicks per month)."""
+    frame, chart = _base_chart(slide, XL_CHART_TYPE.LINE_MARKERS, *box, categories,
+                               [(series_name, values, "#,##0")], font)
+    chart.has_legend = False
+    series = chart.plots[0].series[0]
+    series.smooth = False
+    series.format.line.color.rgb = _rgb(color)
+    series.format.line.width = Pt(3)
+    series.marker.style = XL_MARKER_STYLE.CIRCLE
+    series.marker.size = 8
+    series.marker.format.fill.solid()
+    series.marker.format.fill.fore_color.rgb = _rgb(color)
+    series.marker.format.line.color.rgb = _rgb(color)
+    va = chart.value_axis
+    va.has_major_gridlines = True
+    va.major_gridlines.format.line.color.rgb = _rgb(LINE)
+    va.tick_labels.number_format = "#,##0"
+    va.tick_labels.number_format_is_linked = False
+    va.minimum_scale = 0
+    _style_axis_text(va, 12, SLATE, font)
+    _style_axis_text(chart.category_axis, 12, SLATE, font)
+    if title:
+        _chart_title(chart, title, font)
     return frame

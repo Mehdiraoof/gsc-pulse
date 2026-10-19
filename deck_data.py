@@ -13,8 +13,12 @@ from datetime import date
 from datetime import timedelta
 from urllib.parse import unquote, urlsplit
 
+from googleapiclient.errors import HttpError
+
 import i18n
+import opportunities
 import periods
+import resolved
 import reports
 import tabs
 
@@ -83,6 +87,9 @@ class Report:
     lost_new_floor: int = 10
     monday: object = None
     sunday: object = None
+    gone: list = field(default_factory=list)           # R Gone Pages rows of the period
+    opps: list = field(default_factory=list)           # Opportunities rows (monthly deck)
+    resolved: object = None                            # resolved.Resolved (monthly deck)
 
     def row(self, period=None, segment="All"):
         return self.rows.get((period or self.period, segment))
@@ -122,6 +129,9 @@ def load_monthly(sheets, reports_id: str, site, period: str = None):
                   if r[0] == period]
     rep.notes = _notes(sheets, reports_id)
     rep.page_types = [t["name"] for t in site.page_types]
+    rep.gone = _gone(sheets, reports_id, period)
+    rep.opps = _opps(sheets, reports_id)
+    rep.resolved = resolved.load(sheets, reports_id)
     rep.lost_new_floor = int(site.threshold("lost_new_min_impressions"))
     return rep
 
@@ -149,8 +159,27 @@ def load_weekly(sheets, reports_id: str, site, period: str = None):
     rep.alarms = weekly_alarms(rep)
     rep.notes = _notes(sheets, reports_id)
     rep.page_types = [t["name"] for t in site.page_types]
+    rep.gone = _gone(sheets, reports_id, period)
     rep.lost_new_floor = int(site.threshold("lost_new_min_impressions"))
     return rep
+
+
+def _gone(sheets, reports_id: str, period: str) -> list:
+    """The pages of R Gone Pages that disappeared in `period` (empty without the tab)."""
+    try:
+        rows = as_dicts(tabs.read_rows(sheets, reports_id, reports.GONE, "H"), reports.GONE_HEADER)
+    except HttpError:
+        return []
+    return [r for r in rows if r["Period"] == period and r["Type"] == "Gone"]
+
+
+def _opps(sheets, reports_id: str) -> list:
+    """All rows of the Opportunities tab as dicts keyed by its header (empty without the tab)."""
+    try:
+        return as_dicts(tabs.read_rows(sheets, reports_id, reports.OPPORTUNITIES, "L"),
+                        opportunities.HEADER)
+    except HttpError:
+        return []
 
 
 def _notes(sheets, reports_id: str) -> list:

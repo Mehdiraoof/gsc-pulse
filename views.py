@@ -34,10 +34,12 @@ import reports
 import state
 import tabs
 
-VIEWS_VERSION = 2          # 2: "This month" label in Dashboard!A7
+VIEWS_VERSION = 3          # 2: "This month" label in Dashboard!A7; 3: Gone Pages, Impact Checker, Resolved list
 VERSION_KEY = "views_version"
 
 DASHBOARD, MONTHLY_TAB, WEEKLY_TAB, EVENTS = "Dashboard", "Monthly", "Weekly", "Events"
+IMPACT = "Impact Checker"
+KEPT_KINDS = ("events", "impact")          # tabs people write in: never deleted or overwritten
 SEGMENT_PREFIX = "Monthly · "
 SHEET1 = "Sheet1"
 ERRORS = ("#REF!", "#NAME?", "#VALUE!", "#ERROR!")
@@ -111,6 +113,8 @@ class ListSpec:
 KEYWORD_COLS = ["C", "D", "E", "F", "G", "H", "I", "J", "K"]
 PAGE_COLS = ["N", "E", "F", "G", "H", "I", "J", "K", "L"]
 AIO_COLS = ["G", "D", "E", "F"]
+GONE_COLS = ["H", "D", "E", "G"]
+GONE_EMPTY = "No pages disappeared this month."
 NUMBER_HEADERS = ["Clicks", "Clicks before", "Change", "Impressions", "Impr. before", "Change",
                   "Position", "Pos. before"]
 NUMBER_FORMATS = [COUNT, COUNT, DELTA, COUNT, COUNT, DELTA, POSITION, POSITION]
@@ -147,6 +151,11 @@ LISTS = {
         "YoY Declining", reports.PAGES, "Declining pages, year on year",
         "The pages that lost the most clicks compared with the same month last year "
         "('before' is last year).", 4, True),
+    "Gone Pages": ListSpec(
+        "Gone", reports.GONE, "Gone pages",
+        "Had impressions last month (or in the same month last year) and none this month: most "
+        "likely redirected or removed, so not counted as declines. Check that the redirects pass "
+        "the traffic. Sorted by clicks last month.", 2),
     "Growing AIO Pages": ListSpec(
         "Growing", reports.AIO_PAGES, "Growing pages in AI Overviews",
         "The pages that gained the most AI Overview impressions compared with last month.", 4),
@@ -181,14 +190,15 @@ def expected_tabs(site) -> list:
     out.append(TabSpec(WEEKLY_TAB, "weekly", INK, 400, 12, 2))
     for name, spec in LISTS.items():
         big = spec.kind in ("Lost", "New")
-        width = 4 if spec.source == reports.AIO_PAGES else 9
+        width = 4 if spec.source in (reports.AIO_PAGES, reports.GONE) else 9
         out.append(TabSpec(name, "list", INK, 3000 if big else 1000, width, 4, spec=spec))
-    out.append(TabSpec(EVENTS, "events", SLATE, 500, 4, 1))
+    out.append(TabSpec(IMPACT, "impact", INK, 100, 19, 3))
+    out.append(TabSpec(EVENTS, "events", SLATE, 500, 9, 1))
     return out
 
 
 def is_view_name(title: str) -> bool:
-    return title in (DASHBOARD, MONTHLY_TAB, WEEKLY_TAB, EVENTS) or title in LISTS \
+    return title in (DASHBOARD, MONTHLY_TAB, WEEKLY_TAB, EVENTS, IMPACT) or title in LISTS \
         or title.startswith(SEGMENT_PREFIX)
 
 
@@ -406,9 +416,9 @@ def weekly_formula() -> str:
 
 def list_formula(spec: ListSpec) -> str:
     cols = {reports.KEYWORDS: KEYWORD_COLS, reports.PAGES: PAGE_COLS,
-            reports.AIO_PAGES: AIO_COLS}[spec.source]
+            reports.AIO_PAGES: AIO_COLS, reports.GONE: GONE_COLS}[spec.source]
     array = ",".join(f"'{spec.source}'!{c}2:{c}" for c in cols)
-    empty = AIO_MISSING if spec.source == reports.AIO_PAGES else LIST_EMPTY
+    empty = {reports.AIO_PAGES: AIO_MISSING, reports.GONE: GONE_EMPTY}.get(spec.source, LIST_EMPTY)
     return (f"=IFERROR(SORT(FILTER({{{array}}},'{spec.source}'!A2:A=$B$2,"
             f"'{spec.source}'!B2:B=\"{spec.kind}\"),{spec.sort},"
             f'{"TRUE" if spec.ascending else "FALSE"}),"{empty}")')
@@ -586,10 +596,16 @@ def build_monthly(sid, t: TabSpec, ctx: dict) -> tuple:
 def build_list(sid, t: TabSpec, ctx: dict) -> tuple:
     spec: ListSpec = t.spec
     aio = spec.source == reports.AIO_PAGES
+    gone = spec.source == reports.GONE
     first_head = "Keyword" if spec.source == reports.KEYWORDS else "Page"
-    heads = ([first_head, "AIO impressions", "AIO before", "Change"] if aio
-             else [first_head] + NUMBER_HEADERS)
-    formats = ([None, COUNT, COUNT, DELTA] if aio else [None] + NUMBER_FORMATS)
+    if gone:
+        heads, formats = [first_head, "Clicks before", "Impr. before", "Impr. a year ago"], \
+            [None, COUNT, COUNT, COUNT]
+    elif aio:
+        heads, formats = [first_head, "AIO impressions", "AIO before", "Change"], \
+            [None, COUNT, COUNT, DELTA]
+    else:
+        heads, formats = [first_head] + NUMBER_HEADERS, [None] + NUMBER_FORMATS
     ncols = len(heads)
     req = _base(sid, t)
     cells = [_cell(t.name, "A1", literal(spec.title)), _cell(t.name, "A2", "Month"),
@@ -612,28 +628,136 @@ def build_list(sid, t: TabSpec, ctx: dict) -> tuple:
     for i, number in enumerate(formats):
         if number:
             req.append(repeat(sid, 4, t.rows, i, i + 1, number=number))
-    for i in ((3,) if aio else CHANGE_COLUMNS):
+    for i in (() if gone else ((3,) if aio else CHANGE_COLUMNS)):
         req += green_red(sid, 4, t.rows, i, i + 1)
     return req, cells
 
 
+RESOLVED_KINDS = ["page", "keyword", "month", "segment"]
+RESOLVED_HINT = ("Left: write the month as YYYY-MM (for example 2026-09); the note shows in Monthly, Weekly "
+                 "and on the Dashboard. Right (Resolved list): anything listed here never appears in the "
+                 "monthly client deck. kind is page (a URL or its path), keyword, month (YYYY-MM) or "
+                 "segment; the weekly deck still shows everything.")
+OLD_HINT_START = "Write the month as YYYY-MM"
+
+
 def build_events(sid, t: TabSpec, ctx: dict) -> tuple:
     req = [repeat(sid, 0, t.rows, 0, t.cols, text=text(), v="MIDDLE"),
-           *_header_row(sid, 0, 0, 2),
-           repeat(sid, 0, 1, 3, 4, text=text(10, False, True, MUTED), v="MIDDLE"),
-           width(sid, 0, 1, 110), width(sid, 1, 2, 620), width(sid, 2, 3, 30), width(sid, 3, 4, 420),
+           *_header_row(sid, 0, 0, 2), *_header_row(sid, 0, 3, 7),
+           repeat(sid, 0, 1, 8, 9, text=text(10, False, True, MUTED), v="MIDDLE"),
+           width(sid, 0, 1, 110), width(sid, 1, 2, 520), width(sid, 2, 3, 30),
+           width(sid, 3, 4, 100), width(sid, 4, 5, 380), width(sid, 5, 6, 300), width(sid, 6, 7, 110),
+           width(sid, 7, 8, 30), width(sid, 8, 9, 520),
            repeat(sid, 1, t.rows, 0, 1, number="@", h="CENTER"),
-           repeat(sid, 1, t.rows, 1, 2, text=text(11, font=PERSIAN), wrap="WRAP", v="MIDDLE")]
+           repeat(sid, 1, t.rows, 1, 2, text=text(11, font=PERSIAN), wrap="WRAP", v="MIDDLE"),
+           repeat(sid, 1, t.rows, 3, 4, h="CENTER"),
+           repeat(sid, 1, t.rows, 4, 5, number="@", text=text(11, font=PERSIAN), v="MIDDLE"),
+           repeat(sid, 1, t.rows, 5, 6, text=text(11, font=PERSIAN), wrap="WRAP", v="MIDDLE"),
+           repeat(sid, 1, t.rows, 6, 7, number="@", h="CENTER"),
+           {"setDataValidation": {"range": rng(sid, 1, t.rows, 3, 4), "rule": {
+               "condition": {"type": "ONE_OF_LIST",
+                             "values": [{"userEnteredValue": k} for k in RESOLVED_KINDS]},
+               "showCustomUi": True, "strict": True}}}]
     cells = []
     if ctx.get("events_new", True):
-        cells = [_cell(EVENTS, "A1", "Month"), _cell(EVENTS, "B1", "What happened"),
-                 _cell(EVENTS, "D1", "Write the month as YYYY-MM (for example 2026-09). The note shows "
-                                     "in Monthly, Weekly and on the Dashboard.")]
+        cells += [_cell(EVENTS, "A1", "Month"), _cell(EVENTS, "B1", "What happened")]
+    if ctx.get("events_new", True) or ctx.get("resolved_headers", False):
+        cells += [_cell(EVENTS, "D1", "kind"), _cell(EVENTS, "E1", "value"), _cell(EVENTS, "F1", "note"),
+                  _cell(EVENTS, "G1", "added"), _cell(EVENTS, "I1", literal(RESOLVED_HINT))]
+    return req, cells
+
+
+# --------------------------------------------------------------------------- #
+# Impact Checker: what did a change on a page do? (formulas on the History sheet)
+# --------------------------------------------------------------------------- #
+
+IMPACT_HEADS = ["Page (URL)", "Change date", "Note", "Status", "Clicks before", "Clicks after", "Change",
+                "Impr. before", "Impr. after", "Change", "CTR before", "CTR after", "Change (pts)",
+                "Position before", "Position after", "Change"]
+IMPACT_NOTE = ("Enter the page URL exactly as Search Console shows it and the date of the change. The tab "
+               "compares the 4 weeks before with the 4 weeks after, from the History sheet. The first time, "
+               "Google asks you to connect the sheets: click Allow access in the cell. Row 4 is only an "
+               "example. Windows that are not complete yet show 'too early'.")
+IMPACT_FIRST, IMPACT_ROWS = 5, 10            # first input row (1-based) and number of input rows
+IMPACT_EXAMPLE = ["https://example.com/blog/example-page/", "2026-01-15",
+                  "Example: rewrote the title (this row is only an example)"]
+
+
+def impact_formulas(row: int, history_id: str) -> dict:
+    """{cell: formula} of one input row. Windows are 28 days: before = date-28 .. date-1,
+    after = date+1 .. date+28. The History sheet is read with IMPORTRANGE."""
+    r = row
+    url = f"https://docs.google.com/spreadsheets/d/{history_id}"
+
+    def window(first: str, last: str) -> str:
+        # no row in the window gives zeros; a failing IMPORTRANGE (not connected yet) gives "ERR"
+        return (f'=IF(OR($A{r}="",$B{r}=""),"",IFERROR(LET(h,IMPORTRANGE("{url}","\'H Pages\'!A2:F"),'
+                f'd,INDEX(h,0,1),u,INDEX(h,0,2),f,TEXT({first},"yyyy-mm-dd"),l,TEXT({last},"yyyy-mm-dd"),'
+                f'x,IFERROR(FILTER(h,u=$A{r},d>=f,d<=l),{{0,0,0,0,0,0}}),'
+                f'SUM(INDEX(x,0,3))&"|"&SUM(INDEX(x,0,4))&"|"&IFERROR(SUMPRODUCT(INDEX(x,0,6),'
+                f'INDEX(x,0,4))/SUM(INDEX(x,0,4)),"")),"ERR"))')
+
+    part = lambda col, n: f'INDEX(SPLIT(${col}{r},"|"),1,{n})'            # noqa: E731
+    ok = f'$D{r}="ok"'
+    ratio = lambda a, b: f'=IF({ok},IFERROR({a}/{b}-1,""),"")'            # noqa: E731
+    f = {
+        f"R{r}": window(f"$B{r}-28", f"$B{r}-1") if history_id else '="no History sheet"',
+        f"S{r}": window(f"$B{r}+1", f"$B{r}+28") if history_id else '="no History sheet"',
+        f"D{r}": (f'=IF(OR($A{r}="",$B{r}=""),"",IF(ISNUMBER(SEARCH("no History",$R{r})),'
+                  f'"No History sheet for this site",IF(NOT(ISNUMBER(SEARCH("|",$R{r}&$S{r}))),'
+                  f'"Click Allow access to connect the History sheet",'
+                  f'IF(TODAY()-3<$B{r}+28,"too early ("&MAX(0,TODAY()-$B{r})&" days)","ok"))))'),
+        f"E{r}": f'=IF({ok},VALUE({part("R", 1)}),"")',
+        f"F{r}": f'=IF({ok},VALUE({part("S", 1)}),"")',
+        f"G{r}": ratio(f"$F{r}", f"$E{r}"),
+        f"H{r}": f'=IF({ok},VALUE({part("R", 2)}),"")',
+        f"I{r}": f'=IF({ok},VALUE({part("S", 2)}),"")',
+        f"J{r}": ratio(f"$I{r}", f"$H{r}"),
+        f"K{r}": f'=IF({ok},IFERROR($E{r}/$H{r},""),"")',
+        f"L{r}": f'=IF({ok},IFERROR($F{r}/$I{r},""),"")',
+        f"M{r}": f'=IF({ok},IFERROR($L{r}-$K{r},""),"")',
+        f"N{r}": f'=IF({ok},IFERROR(VALUE({part("R", 3)}),""),"")',
+        f"O{r}": f'=IF({ok},IFERROR(VALUE({part("S", 3)}),""),"")',
+        f"P{r}": f'=IF({ok},IFERROR($O{r}-$N{r},""),"")',
+    }
+    return f
+
+
+def build_impact(sid, t: TabSpec, ctx: dict) -> tuple:
+    last = IMPACT_FIRST + IMPACT_ROWS - 1
+    req = _base(sid, t)
+    cells = []
+    new = ctx.get("impact_new", True)
+    if new:
+        cells += [_cell(IMPACT, "A1", "Impact Checker"), _cell(IMPACT, "A2", literal(IMPACT_NOTE))]
+        cells += [_cell(IMPACT, f"{col_letter(i)}3", h) for i, h in enumerate(IMPACT_HEADS)]
+        cells += [_cell(IMPACT, f"{col_letter(i)}4", literal(v)) for i, v in enumerate(IMPACT_EXAMPLE)]
+        for r in range(IMPACT_FIRST, last + 1):
+            cells += [(f"'{IMPACT}'!{a1}", [[v]]) for a1, v in
+                      impact_formulas(r, ctx.get("history_id", "")).items()]
+    req += [merge(sid, 0, 1, 0, 16), merge(sid, 1, 2, 0, 16), height(sid, 1, 2, 48),
+            repeat(sid, 1, 2, 0, 16, text=text(10, False, True, MUTED), v="MIDDLE", wrap="WRAP"),
+            *_header_row(sid, 2, 0, 16),
+            width(sid, 0, 1, 380), width(sid, 1, 2, 110), width(sid, 2, 3, 260), width(sid, 3, 4, 240),
+            width(sid, 4, 16, 95), hide_columns(sid, 17, 19),
+            height(sid, 3, t.rows, 28),
+            repeat(sid, 3, t.rows, 3, 16, h="CENTER", v="MIDDLE"),
+            repeat(sid, 3, 4, 0, 16, text=text(10, False, True, MUTED), v="MIDDLE"),     # the example row
+            repeat(sid, IMPACT_FIRST - 1, last, 0, 3, bg=CALLOUT, v="MIDDLE"),            # the cells to fill in
+            repeat(sid, IMPACT_FIRST - 1, last, 0, 1, text=text(11, font=PERSIAN), h="RIGHT", rtl=True),
+            repeat(sid, IMPACT_FIRST - 1, last, 1, 2, number="yyyy-mm-dd", h="CENTER"),
+            repeat(sid, IMPACT_FIRST - 1, last, 2, 3, text=text(11, font=PERSIAN), wrap="WRAP")]
+    for col, number in ((4, COUNT), (5, COUNT), (6, PCT), (7, COUNT), (8, COUNT), (9, PCT), (10, CTR),
+                        (11, CTR), (12, PCT_PP), (13, POSITION), (14, POSITION), (15, POSITION_DELTA)):
+        req.append(repeat(sid, IMPACT_FIRST - 1, last, col, col + 1, number=number))
+    for col in (6, 9, 12):
+        req += green_red(sid, IMPACT_FIRST - 1, last, col, col + 1)
+    req += green_red(sid, IMPACT_FIRST - 1, last, 15, 16, reverse=True)
     return req, cells
 
 
 BUILDERS = {"dashboard": build_dashboard, "monthly": build_monthly, "weekly": build_monthly,
-            "list": build_list, "events": build_events}
+            "list": build_list, "events": build_events, "impact": build_impact}
 
 
 # --------------------------------------------------------------------------- #
@@ -663,6 +787,14 @@ def _locale(sheets, reports_id) -> str:
     resp = history._read(sheets.spreadsheets().get(spreadsheetId=reports_id,
                                                    fields="properties.locale"))
     return resp.get("properties", {}).get("locale", "")
+
+
+def _grid_columns(sheets, reports_id) -> dict:
+    """{tab title: number of grid columns}"""
+    resp = history._read(sheets.spreadsheets().get(
+        spreadsheetId=reports_id, fields="sheets.properties(title,gridProperties(columnCount))"))
+    return {s["properties"]["title"]: s["properties"].get("gridProperties", {}).get("columnCount", 0)
+            for s in resp.get("sheets", [])}
 
 
 def _safe_name(name: str) -> str:
@@ -724,7 +856,7 @@ def run_views(sheets, reports_id: str, site, newest_month: str = "", new_month: 
     wanted = expected_tabs(site)
     names = [t.name for t in wanted]
     full = rebuild or stored < VIEWS_VERSION
-    missing = [t for t in wanted if t.name not in titles or (full and t.kind != "events")]
+    missing = [t for t in wanted if t.name not in titles or (full and t.kind not in KEPT_KINDS)]
     if not missing:
         if new_month:
             _write_values(sheets, reports_id, [
@@ -743,7 +875,7 @@ def run_views(sheets, reports_id: str, site, newest_month: str = "", new_month: 
     requests = []
     if full:
         for title, sid in titles.items():
-            if is_view_name(title) and title != EVENTS:
+            if is_view_name(title) and title not in (EVENTS, IMPACT):
                 requests.append({"deleteSheet": {"sheetId": sid}})
     if SHEET1 in titles and not tabs.read_tab(sheets, reports_id, SHEET1):
         requests.append({"deleteSheet": {"sheetId": titles[SHEET1]}})
@@ -763,11 +895,18 @@ def run_views(sheets, reports_id: str, site, newest_month: str = "", new_month: 
         requests.append({"updateSheetProperties": {
             "properties": {"sheetId": sid, "tabColorStyle": {"rgbColor": rgb(GREY)}},
             "fields": "tabColorStyle"}})
-    if EVENTS in titles and full:             # Events stays; only its place and colour are set
-        requests.append({"updateSheetProperties": {
-            "properties": {"sheetId": titles[EVENTS], "index": names.index(EVENTS),
-                           "tabColorStyle": {"rgbColor": rgb(SLATE)}},
-            "fields": "index,tabColorStyle"}})
+    if full and EVENTS in titles and EVENTS not in {t.name for t in missing}:
+        need = next(t.cols for t in wanted if t.name == EVENTS)      # an older Events tab is narrower
+        have = _grid_columns(sheets, reports_id).get(EVENTS, need)
+        if have < need:
+            requests.append({"appendDimension": {"sheetId": titles[EVENTS], "dimension": "COLUMNS",
+                                                 "length": need - have}})
+    for kept, color in ((IMPACT, INK), (EVENTS, SLATE)):       # tabs people write in stay; only
+        if kept in titles and full:                            # their place and colour are set
+            requests.append({"updateSheetProperties": {
+                "properties": {"sheetId": titles[kept], "index": names.index(kept),
+                               "tabColorStyle": {"rgbColor": rgb(color)}},
+                "fields": "index,tabColorStyle"}})
     resp = history._write(sheets.spreadsheets().batchUpdate(
         spreadsheetId=reports_id, body={"requests": requests}))
     ids = {}
@@ -775,8 +914,9 @@ def run_views(sheets, reports_id: str, site, newest_month: str = "", new_month: 
                    if "addSheet" in r]
     for name, sid in zip(adds, add_replies):
         ids[name] = sid
-    if EVENTS in titles and EVENTS not in ids:
-        ids[EVENTS] = titles[EVENTS]
+    for kept in (EVENTS, IMPACT):
+        if kept in titles and kept not in ids:
+            ids[kept] = titles[kept]
     log(f"  views: {len(adds)} tabs created" + (" (rebuild)" if full else ""))
 
     # ---- 2. formatting, then formulas (every tab exists now) --------------------------------
@@ -784,10 +924,18 @@ def run_views(sheets, reports_id: str, site, newest_month: str = "", new_month: 
     ctx = {"label": getattr(getattr(site, "deck", None), "site_label", "") or "",
            "segments": segments,
            "month_source": "Dashboard!$L$2:$L" if segments else "'R Monthly'!A2:A"}
+    ctx["history_id"] = getattr(site, "history_sheet_id", "") or ""
+    ctx["resolved_headers"] = False
+    if EVENTS in titles and EVENTS not in adds and full:         # an older Events tab: add the Resolved list
+        old = history._read(sheets.spreadsheets().values().get(
+            spreadsheetId=reports_id, range=f"'{EVENTS}'!D1:G1")).get("values", [[]])
+        d1 = (old[0][0] if old and old[0] else "")
+        ctx["resolved_headers"] = (not d1) or d1.startswith(OLD_HINT_START)
     format_requests, cells = [], []
     for t in wanted:
-        if t.name in adds or (full and t.kind == "events"):
-            reqs, vals = BUILDERS[t.kind](ids[t.name], t, dict(ctx, events_new=EVENTS in adds))
+        if t.name in adds or (full and t.kind in KEPT_KINDS):
+            reqs, vals = BUILDERS[t.kind](ids[t.name], t, dict(
+                ctx, events_new=EVENTS in adds, impact_new=IMPACT in adds))
             format_requests += reqs
             cells += vals
     for tab, cell in month_dropdowns([t for t in wanted if t.name in adds]):

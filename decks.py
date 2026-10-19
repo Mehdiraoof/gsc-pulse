@@ -27,6 +27,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
 import charts
+import client_i18n
 import deck_data as dd
 import i18n
 
@@ -792,11 +793,33 @@ def slide_weekly_movers(ctx: Ctx):
     return slide
 
 
+def slide_weekly_gone(ctx: Ctx):
+    """Weekly only: pages that had impressions last week and none this week (top 10 by clicks
+    last week), so redirects can be checked. Skipped when no page disappeared."""
+    rep = ctx.report
+    gone = rep.gone[:10]
+    if not gone:
+        return None
+    CT = client_i18n.table(ctx.lang)
+    slide, ph = new_slide(ctx, "Notes", title=CT["c_wk_gone"])
+    drop_placeholder(ph["body"])
+    sentence(slide, ctx, CT["c_wk_gone_intro"], x=0.6, y=1.5, w=12.13)
+    rows = [[Cell(dd.short_path(r["Page"], 60), "page"),
+             Cell(i18n.fmt_int(dd.num(r["Clicks prev"]) or 0), "num"),
+             Cell(i18n.fmt_int(dd.num(r["Impr prev"]) or 0), "num")] for r in gone]
+    add_table(slide, ctx, mirror_x(ctx, 0.6, 12.13), 2.3, [8.1, 2.0, 2.03],
+              [ctx.T["col_page"], CT["c_col_clicks_before"], CT["c_col_impr_before"]], rows,
+              row_height=0.4, size=12)
+    return slide
+
+
+
+
 MONTHLY_SLIDES = [slide_title, slide_summary, slide_alarms, slide_scorecard, slide_trend_monthly,
                   slide_segments, slide_lost_new, slide_keyword_movers, slide_page_movers,
                   slide_yoy_pages, slide_aio, slide_about]
 WEEKLY_SLIDES = [slide_title, slide_summary, slide_alarms, slide_scorecard, slide_trend_weekly,
-                 slide_weekly_movers]
+                 slide_weekly_movers, slide_weekly_gone]
 
 
 # --------------------------------------------------------------------------- #
