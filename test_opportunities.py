@@ -158,6 +158,56 @@ class QueryRuleTests(unittest.TestCase):
         self.assertEqual(cannibal[0]["action"], "Merge into one page or make the pages target different intents.")
 
 
+class BrandDefaultsTests(unittest.TestCase):
+
+    def site(self, url="sc-domain:example.com", label="Example Co", terms=None):
+        deck = sites.DeckConfig(enabled=True, site_label=label)
+        opportunities = {"brand_terms": terms} if terms is not None else {}
+        return sites.Site(name="site-a", site_url=url, sheet_id="m", deck=deck, opportunities=opportunities)
+
+    def test_the_label_and_the_bare_domain_are_always_brand_terms(self):
+        self.assertEqual(op.brand_terms_for(self.site()), ["example co", "example"])
+        self.assertEqual(op.brand_terms_for(self.site("https://www.dubai-shop.com/")), ["example co", "dubai-shop"])
+        self.assertEqual(op.brand_terms_for(self.site("https://blog.example.co.uk/x")), ["example co", "example"])
+
+    def test_configured_terms_come_first_lower_cased_and_without_duplicates(self):
+        got = op.brand_terms_for(self.site(terms=["Example", "کلمه", " EXAMPLE co "]))
+        self.assertEqual(got, ["example", "کلمه", "example co"])
+
+    def test_a_label_that_is_too_short_is_not_a_default_term(self):
+        self.assertEqual(op.brand_terms_for(self.site(label="DT", url="sc-domain:ab.com")), [])
+
+    def test_a_site_without_a_deck_label_still_gets_its_domain(self):
+        s = sites.Site(name="site-a", site_url="sc-domain:example.com", sheet_id="m")
+        self.assertEqual(op.brand_terms_for(s), ["example"])
+
+
+class FrontPageAndAddressRuleTests(unittest.TestCase):
+    MIN = dict(min_impressions=300, target_ctr=0.08)
+
+    def test_a_query_that_lands_on_the_front_page_is_not_a_quick_win_or_a_click_rate_fix(self):
+        rows = op.build(inputs(queries=[q("popular topic", 20, 4000, 3.0), q("another topic", 40, 5000, 9.0)],
+                               pairs=[pair("popular topic", "https://x.test/en", 20, 4000),
+                                      pair("another topic", "https://x.test/", 40, 5000)], **self.MIN))
+        self.assertEqual(rows, [])
+
+    def test_front_pages_are_never_pages_to_update(self):
+        rows = op.build(inputs(pages=[pg("https://x.test/", 100, 20000, 6.0), pg("https://x.test/en/", 100, 20000, 6.0),
+                                      pg("https://x.test/guide/", 100, 20000, 6.0)], **self.MIN))
+        self.assertEqual([r[2] for r in rows if r[0] == "update_page"], ["https://x.test/guide/"])
+
+    def test_a_search_that_lands_on_the_front_page_is_not_cannibalisation(self):
+        pairs = [pair("topic", "https://x.test/", 5, 500), pair("topic", "https://x.test/a/", 3, 60),
+                 pair("topic", "https://x.test/b/", 1, 40)]
+        rows = op.build(inputs(queries=[q("topic", 9, 5000, 7.0)], pairs=pairs, **self.MIN))
+        self.assertEqual(of_type(rows, "cannibal"), [])
+
+    def test_addresses_are_skipped_by_every_query_rule(self):
+        rows = op.build(inputs(queries=[q("app.example.ir", 20, 4000, 3.0), q("www example", 20, 4000, 9.0),
+                                        q("what is app.example.ir", 2, 900, 9.0)], **self.MIN))
+        self.assertEqual(rows, [])
+
+
 class PageRuleTests(unittest.TestCase):
 
     def update_rows(self, page, pairs=(), seasonal=None):
@@ -313,10 +363,12 @@ class EngineIntegrationTests(ReportsTestCase):
     def setUp(self):
         super().setUp()
         self.sheets.add_book("main-id")
-        self.fill("Queries", QUERIES_HEADER, [["alpha query", "30", "2000", "1.5", "8.0"],
+        self.fill("Queries", QUERIES_HEADER, [["garden guide", "30", "2000", "1.5", "8.0"],
+                                              ["alpha shoes", "30", "2000", "1.5", "8.0"],
+                                              ["app.alpha.ir", "30", "2000", "1.5", "8.0"],
                                               ["beta query", "300", "1000", "30", "1.5"]])
         self.fill("Pages", PAGES_HEADER, [["https://www.alpha.test/en/article/a", "30", "2000", "1.5", "8.0"]])
-        self.fill("Query×Page", PAIRS_HEADER, [["alpha query", "https://www.alpha.test/en/article/a",
+        self.fill("Query×Page", PAIRS_HEADER, [["garden guide", "https://www.alpha.test/en/article/a",
                                                     "30", "2000", "1.5", "8.0"]])
 
     def fill(self, tab, header, rows):
@@ -330,7 +382,7 @@ class EngineIntegrationTests(ReportsTestCase):
         result = self.run_reports()
         self.assertEqual(self.tab(reports.OPPORTUNITIES)[0], op.HEADER)
         found = of_type(self.rows(reports.OPPORTUNITIES), "quick_win")
-        self.assertEqual([f["keyword"] for f in found], ["alpha query"])
+        self.assertEqual([f["keyword"] for f in found], ["garden guide"])      # "alpha shoes" is the brand, "app.alpha.ir" an address
         self.assertEqual(found[0]["page"], "https://www.alpha.test/en/article/a")
         self.assertEqual(result.opportunities.get("quick_win"), 1)
 

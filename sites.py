@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 
 AUTH_MODES = ("robot", "me")
 ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "reports_sheet_id",
-                  "page_types", "first_match_wins", "other_label", "opportunities", "thresholds",
+                  "page_types", "first_match_wins", "other_label", "other_deck_label", "opportunities",
+                  "thresholds",
                   "weekly_segments",
                   "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
@@ -69,6 +70,7 @@ class Site:
     weekly_segments: bool = False
     first_match_wins: bool = False       # page types checked in order; a page is in the first that matches
     other_label: str = "Other"           # name of the segment for the pages that match no page type
+    other_deck_label: str = ""           # what the client deck calls that segment (else other_label)
     opportunities: dict = field(default_factory=dict)    # overrides of OPPORTUNITY_DEFAULTS (+ brand_terms)
     deck: "DeckConfig" = None
     enabled: bool = True
@@ -84,6 +86,15 @@ class Site:
     def __post_init__(self):
         if self.deck is None:
             self.deck = DeckConfig()
+
+    def deck_label(self, segment: str) -> str:
+        """What the client deck calls a segment: its page type's deck_label, else the label itself."""
+        for t in self.page_types:
+            if t["name"] == segment:
+                return t.get("deck_label") or segment
+        if segment == self.other_label:
+            return self.other_deck_label or segment
+        return segment
 
     def opportunity_setting(self, key: str):
         """A setting of the opportunity engine: the site's own value, else the default."""
@@ -213,8 +224,8 @@ def _parse_page_types(value, where: str) -> list:
     out, seen = [], set()
     for i, item in enumerate(value, start=1):
         at = f"{where}, page type {i}"
-        if not isinstance(item, dict) or set(item) != {"name", "regex"}:
-            raise SitesConfigError(f"{at}: must be an object with exactly 'name' and 'regex'")
+        if not isinstance(item, dict) or not {"name", "regex"} <= set(item) <= {"name", "regex", "deck_label"}:
+            raise SitesConfigError(f"{at}: must be an object with 'name' and 'regex' (and optionally 'deck_label')")
         name, rx = item["name"], item["regex"]
         if not isinstance(name, str) or not TYPE_NAME_PATTERN.fullmatch(name.strip()):
             raise SitesConfigError(f"{at}: 'name' must be a short label (letters, digits, "
@@ -231,8 +242,18 @@ def _parse_page_types(value, where: str) -> list:
             re.compile(rx)
         except re.error:
             raise SitesConfigError(f"{at}: 'regex' is not a valid regular expression") from None
-        out.append({"name": name, "regex": rx})
+        entry = {"name": name, "regex": rx}
+        if "deck_label" in item:
+            entry["deck_label"] = _parse_deck_label(item["deck_label"], at, "deck_label")
+        out.append(entry)
     return out
+
+
+def _parse_deck_label(value, at: str, key: str) -> str:
+    """The name a page type goes by in the client deck. The segment itself keeps its label."""
+    if not isinstance(value, str) or not OTHER_LABEL_PATTERN.fullmatch(value.strip()):
+        raise SitesConfigError(f"{at}: '{key}' must be a short label (letters, digits, space, - _ and &)")
+    return value.strip()
 
 
 OPPORTUNITY_DEFAULTS = {
@@ -368,6 +389,8 @@ def parse_sites_json(raw: str) -> list:
             first_match_wins=_flag(entry, "first_match_wins", where),
             opportunities=_parse_opportunities(entry.get("opportunities"), where),
             other_label=_parse_other_label(entry.get("other_label"), where),
+            other_deck_label=(_parse_deck_label(entry["other_deck_label"], where, "other_deck_label")
+                              if entry.get("other_deck_label") is not None else ""),
             deck=_parse_deck(entry.get("deck"), where),
             enabled=enabled,
         )

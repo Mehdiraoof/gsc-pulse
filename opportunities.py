@@ -185,13 +185,52 @@ class Inputs:
 # The rules
 # --------------------------------------------------------------------------- #
 
+DOMAIN_LIKE = re.compile(r"www\.|https?:|\.(?:ir|com|net|org|io|app|info|co|me)(?:\b|/)", re.IGNORECASE)
+LANGUAGE_ROOT = re.compile(r"[a-z]{2}(?:-[a-z]{2})?", re.IGNORECASE)
+
+
+def looks_like_domain(query: str) -> bool:
+    """A search for a site or an address ("app.example.ir", "www example"), not a topic."""
+    return bool(DOMAIN_LIKE.search(query))
+
+
+def is_homepage(url: str) -> bool:
+    """The site's front page or a language root (/, /en, /fa/): those pages are reached by name,
+    not by a topic, so they are never an opportunity."""
+    path = tabs.path_of(url).strip("/")
+    return not path or bool(LANGUAGE_ROOT.fullmatch(path))
+
+
+def brand_terms_for(site) -> list:
+    """The brand terms of a site: those in its configuration plus, always, the site label and the
+    bare domain name (kalameh from sc-domain:kalameh.com), lower-cased and without duplicates."""
+    configured = [t.strip().lower() for t in site.opportunity_setting("brand_terms") if t.strip()]
+    label = getattr(getattr(site, "deck", None), "site_label", "") or ""
+    host = re.sub(r"^(?:sc-domain:|https?://)", "", (site.site_url or "").strip().lower()).split("/")[0]
+    labels = [p for p in host.split(".") if p and p != "www"]
+    stem = labels[-2] if len(labels) >= 2 else (labels[0] if labels else "")
+    if len(labels) >= 3 and stem in ("co", "com", "org", "net", "gov", "ac"):      # example.co.uk
+        stem = labels[-3]
+    defaults = [t.strip().lower() for t in (label, stem) if len(t.strip()) >= 3]   # too short would match anything
+    out = []
+    for t in configured + defaults:
+        if t not in out:
+            out.append(t)
+    return out
+
+
 def _is_brand(query: str, terms: list) -> bool:
     q = query.lower()
     return any(t.lower() in q for t in terms)
 
 
+def _skip_query(query: str, terms: list) -> bool:
+    """Brand searches and searches for an address are not opportunities."""
+    return _is_brand(query, terms) or looks_like_domain(query)
+
+
 def _homepage(url: str) -> bool:
-    return not tabs.path_of(url).strip("/")
+    return is_homepage(url)
 
 
 def _row(kind, keyword, page, impressions, clicks, position, ctr, gain_value, diagnosis, action,
@@ -241,9 +280,11 @@ def build(inp: Inputs) -> list:
 
     # 1 quick_win, 2 ctr_fix: query based
     for q in inp.queries:
-        if q.impressions < inp.min_impressions or _is_brand(q.query, inp.brand_terms):
+        if q.impressions < inp.min_impressions or _skip_query(q.query, inp.brand_terms):
             continue
         page = best[q.query].url if q.query in best else ""
+        if page and _homepage(page):                  # reached by name, never an opportunity
+            continue
         if QUICK_WIN_FROM <= q.position <= QUICK_WIN_TO:
             g = gain(q.impressions, q.ctr, inp.target_ctr)
             if g > 0:
@@ -261,7 +302,7 @@ def build(inp: Inputs) -> list:
 
     # 3 update_page
     for p in inp.pages:
-        if not (4 <= p.position <= 10) or p.impressions < UPDATE_MIN_IMPRESSIONS:
+        if not (4 <= p.position <= 10) or p.impressions < UPDATE_MIN_IMPRESSIONS or _homepage(p.url):
             continue
         exp = expected_ctr(p.position)
         if p.ctr >= exp:
@@ -299,12 +340,14 @@ def build(inp: Inputs) -> list:
 
     # 5 question
     for q in inp.queries:
-        if q.impressions < inp.min_impressions / 3 or _is_brand(q.query, inp.brand_terms):
+        if q.impressions < inp.min_impressions / 3 or _skip_query(q.query, inp.brand_terms):
             continue
         if not (QUESTION_FA.search(q.query) or QUESTION_EN.search(q.query)):
             continue
         if q.position > 5 or q.ctr < expected_ctr(q.position):
             page = best[q.query].url if q.query in best else ""
+            if page and _homepage(page):
+                continue
             rows.append(_row("question", q.query, page, q.impressions, q.clicks, q.position, q.ctr,
                              gain(q.impressions, q.ctr, inp.target_ctr),
                              f"Question search ranking at position {q.position:.1f}.",
@@ -312,7 +355,9 @@ def build(inp: Inputs) -> list:
 
     # 6 cannibal
     for q in inp.queries:
-        if _is_brand(q.query, inp.brand_terms):
+        if _skip_query(q.query, inp.brand_terms):
+            continue
+        if q.query in best and _homepage(best[q.query].url):       # a search that lands on the front page
             continue
         competing = [p for p in by_query.get(q.query, [])
                      if p.impressions >= CANNIBAL_MIN_IMPRESSIONS and not _homepage(p.url)]

@@ -68,6 +68,7 @@ def _opp(kind, keyword, page, impr, clicks, pos, ctr, gain, diagnosis, action, s
 
 
 def monthly_report(segments: bool = True, opps: bool = True, gone: int = 6, resolved_list=None,
+                   slugs: bool = False, deck_labels: dict = None, brand_terms: list = None,
                    persian: bool = True) -> dd.Report:
     rep = dd.Report("monthly", MONTHS[-1], MONTHS[-2], MONTHS[-13])
     names = ["All"] + (list(SEGMENT_CLICKS) if segments else [])
@@ -146,6 +147,11 @@ def monthly_report(segments: bool = True, opps: bool = True, gone: int = 6, reso
             _opp("seasonal", ENGLISH[0], "https://example.test/guide/k/", 2000, 40, 5.0, 0.02, 60,
                  "Grew +50% into October last year.", "Update before October.", "Guides"),
         ]
+    if slugs:                                                    # a Persian slug and a very long one
+        rep.pages += [_pg("Growing", "/article/کبوتر", 70, 20, 900, 600, 4.0, 6.5),
+                      _pg("Growing", "/guide/" + "a-very-long-slug-" * 4 + "end/", 65, 30, 800, 700, 3.0, 4.6)]
+    rep.deck_labels = dict(deck_labels or {})
+    rep.brand_terms = list(brand_terms or [])
     rep.resolved = resolved.parse(resolved_list or [])
     rep.lost_new_floor = 10
     return rep

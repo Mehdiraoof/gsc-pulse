@@ -214,22 +214,45 @@ def run_pieces(chunk: str, ctx: Ctx) -> list:
         out += [(p, k, False) for p, k in split_script(chunk[pos:], True)]
     return out
 
+URL_TOKEN = re.compile(r"(?<!\S)(https?://\S+|/[^\s/]\S*)")      # a path or address inside text
+
+
+def is_url_like(text: str) -> bool:
+    """Text that is a path or an address (starts with / or http): always left-to-right."""
+    return text.strip(i18n.LRM + " ").startswith(("/", "http"))
+
+
+def ltr_url(text: str) -> str:
+    """A path or address wrapped in left-to-right marks, so a Persian slug cannot flip it."""
+    core = text.strip(i18n.LRM)
+    return i18n.LRM + core + i18n.LRM
+
+
+def lrm_urls(text: str) -> str:
+    """The paths and addresses inside a sentence, each wrapped in left-to-right marks."""
+    return URL_TOKEN.sub(lambda m: i18n.LRM + m.group(1) + i18n.LRM, text)
+
+
 def write_paragraph(paragraph, text: str, ctx: Ctx, size=None, bold=None, color=None,
-                    align=None, rtl=None, runs=None):
+                    align=None, rtl=None, runs=None, font=None):
     """
     Fills a paragraph. `runs` is a list of (text, {size, bold, color}) for mixed formatting;
     otherwise `text` is one run. Every Persian run gets Vazirmatn (all runs in a Persian deck),
-    and in a Persian deck every run is right-to-left, with numbers wrapped in LRM.
+    and in a Persian deck every run is right-to-left, with numbers wrapped in LRM. Paths and
+    addresses inside the text keep their left-to-right order. `font` forces one font on every run.
     """
     for r in list(paragraph.runs):
         r._r.getparent().remove(r._r)
     items = runs if runs else [(text, {})]
     for chunk, fmt in items:
-        for piece, persian, number in run_pieces(chunk, ctx):
+        for piece, persian, number in run_pieces(lrm_urls(chunk), ctx):
             run = paragraph.add_run()
             run.text = piece
             _style_run(run, ctx, fmt.get("size", size), fmt.get("bold", bold),
                        fmt.get("color", color), persian, number)
+    if font:
+        for r in paragraph.runs:
+            r.font.name = font
     p_pr = paragraph._p.get_or_add_pPr()
     is_rtl = ctx.rtl if rtl is None else rtl
     if is_rtl:
@@ -404,13 +427,18 @@ def add_table(slide, ctx: Ctx, x, y, col_widths: list, header: list, rows: list,
         if force_right:
             align = "r"
         p = cell.text_frame.paragraphs[0]
+        if not header_row and spec.kind in ("query", "page") and is_url_like(spec.text):
+            # a path or address: left-to-right, left-aligned, marked, in Vazirmatn
+            write_paragraph(p, ltr_url(spec.text), ctx, size=size, bold=spec.bold,
+                            color=spec.color or INK, align="l", rtl=False, font=FONT_FA)
+            return
         write_paragraph(p, spec.text, ctx, size=size - 1 if header_row else size,
                         bold=True if header_row else spec.bold,
                         color=SLATE if header_row else (spec.color or INK), align=align,
                         rtl=True if (persian and spec.kind in ("query", "page")) else None)
 
     persian_cols = {j for row in rows for j, c in enumerate(row)
-                    if c.kind in ("query", "page") and dd_has_arabic(c.text)}
+                    if c.kind in ("query", "page") and dd_has_arabic(c.text) and not is_url_like(c.text)}
     for j, h in enumerate(header):
         put(table.cell(0, j), Cell(h, "text" if j in text_cols else ("num" if j > 0 else "query")), True,
             force_right=j in persian_cols)

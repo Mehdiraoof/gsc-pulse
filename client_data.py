@@ -20,6 +20,7 @@ import statistics
 import client_i18n
 import deck_data as dd
 import i18n
+import opportunities as op
 import periods
 import resolved as resolved_mod
 import tabs
@@ -33,6 +34,8 @@ WATCH_SEGMENT_DROP = -20.0          # percent year on year
 WATCH_GONE_MIN = 5
 LOW_MONTH_SHARE = 0.5               # a month under half the median is "low"
 MAX_WATCH = 5
+MAX_LABEL = 40                      # characters of a keyword or path on a slide
+MIN_WATCH_CLICKS = 50               # a decliner needs this many clicks last month to be worth a mention
 
 
 def num(row, key):
@@ -73,7 +76,25 @@ class ClientReport:
                          and rep.row(segment=s)]
         self.pos_worse = self._pos_worse()
         self.gone = [g for g in rep.gone if not self.res.page(g["Page"])]
-        self.opps = [o for o in rep.opps if not self._opp_resolved(o)]
+        self.opps = [o for o in rep.opps if not self._opp_resolved(o) and not self._opp_unfit(o)]
+        self.decisions = []                  # which rules decided what, for the log (numbers only)
+
+    def _opp_unfit(self, o: dict) -> bool:
+        """Brand searches, addresses and front pages are never shown as opportunities, even when an
+        older Opportunities tab still lists them."""
+        if o["type"] in ("quick_win", "ctr_fix", "question", "cannibal") and \
+                (op.looks_like_domain(o["keyword"]) or any(t in o["keyword"].lower() for t in self.rep.brand_terms)):
+            return True
+        return (o["type"] in ("quick_win", "ctr_fix", "update_page", "cannibal", "question")
+                and bool(o["page"]) and op.is_homepage(o["page"]))
+
+    def seg_label(self, segment: str) -> str:
+        """The name of a segment in the deck. The segment's own label stays as it is everywhere else."""
+        return self.rep.deck_labels.get(segment) or segment
+
+    def short(self, text: str, limit: int = MAX_LABEL) -> str:
+        """A keyword or path cut to one line."""
+        return text if len(text) <= limit else text[: limit - 1] + "…"
 
     # ---- small helpers ----------------------------------------------------------------
     def _series(self) -> list:
@@ -95,7 +116,8 @@ class ClientReport:
                 or self.res.segment(o.get("segment", "")))
 
     def label_of_page(self, url: str) -> str:
-        return tabs.path_of(url)
+        """A page as its decoded path, one line long."""
+        return self.short(tabs.path_of(url))
 
     def decline_tone(self) -> str:
         """A drop is grey; red only when rankings really fell (position worse by 0.5 or more)."""
@@ -134,33 +156,48 @@ class ClientReport:
         pos, ctr = num(cur, "Avg. Position"), num(cur, "CTR (%)")
         prev_pos, prev_ctr = num(self.prev, "Avg. Position"), num(self.prev, "CTR (%)")
         earlier = [p for (_, _, _, _, p) in self.series[-12:-1] if p is not None]
-        best = pos is not None and len(earlier) >= 6 and pos <= min(earlier)
+        best_before = round(min(earlier), 1) if earlier else None
+        best = pos is not None and len(earlier) >= 6 and round(pos, 1) <= best_before
         yoy = num(cur, "Clicks YoY %")
         ctr_up = ctr is not None and prev_ctr is not None and ctr > prev_ctr
         lead = self.lead_segment()
         if best:
-            head = T["h_pos"].format(site=self.label)
+            rule, head = "position", T["h_pos"].format(site=self.label)
         elif yoy is not None and yoy >= 10:
-            head = T["h_yoy"].format(pct=pct_abs(yoy))
+            rule, head = "clicks vs last year", T["h_yoy"].format(pct=pct_abs(yoy))
         elif ctr_up:
-            head = T["h_ctr"]
+            rule, head = "click rate", T["h_ctr"]
         elif lead:
-            head = T["h_seg"].format(segment=lead[0])
+            rule, head = "section", T["h_seg"].format(segment=self.seg_label(lead[0]))
         else:
-            head = T["h_flat"].format(site=self.label)
+            rule, head = "none", T["h_flat"].format(site=self.label)
+        # for the (public) log: yes/no answers and the gap in position steps, never the figures themselves
+        gap = (f"{round(pos, 1) - best_before:+.1f}" if (pos is not None and best_before is not None)
+               else "n/a")
+        self.decisions.append(
+            f"headline rule: {rule}. Best position of the last 12 months: {'yes' if best else 'no'} "
+            f"(compared with {len(earlier)} earlier months, gap {gap} steps; it needs at least 6 months). "
+            f"Clicks up 10% or more on last year: "
+            f"{'yes' if (yoy is not None and yoy >= 10) else 'no'}. Click rate up on last month: "
+            f"{'yes' if ctr_up else 'no'}.")
 
+        # the supporting sentence adds numbers; it never repeats the fact the headline states
         a = None
         if pos is not None:
             improved = prev_pos is not None and pos < prev_pos
             a = T["sup_pos_up" if improved else "sup_pos"].format(pos=f1(pos))
-        b = T["sup_ctr"].format(ctr=f"{ctr:.2f}%") if ctr_up else None
+        b = None
+        if ctr is not None and rule == "click rate":
+            b = T["sup_ctr_val"].format(ctr=f"{ctr:.2f}%")
+        elif ctr_up:
+            b = T["sup_ctr"].format(ctr=f"{ctr:.2f}%")
         sentences = []
         if a and b:
             sentences.append(T["sup_and"].format(a=a, b=b))
         elif a or b:
             sentences.append(T["sup_one"].format(a=a or b))
-        if lead and lead[2] is not None:
-            sentences.append(T["sup_seg"].format(segment=lead[0], mom=signed(lead[1]),
+        if lead and lead[2] is not None and rule != "section":
+            sentences.append(T["sup_seg"].format(segment=self.seg_label(lead[0]), mom=signed(lead[1]),
                                                  yoy=signed(lead[2]), month=self.month))
         cards = []
         if pos is not None:
@@ -205,7 +242,7 @@ class ClientReport:
             cards.append({"title": T["c_room_t"], "tone": "amber",
                           "body": T["c_room_b1" if len(wins) == 1 else "c_room_b"].format(
                               n=len(wins), gain=i18n.fmt_int(gain))})
-        return {"headline": head, "support": " ".join(sentences), "cards": cards}
+        return {"headline": head, "support": " ".join(sentences), "cards": cards, "rule": rule}
 
     # ---- slide 3 -------------------------------------------------------------------------
     def scorecard(self):
@@ -294,7 +331,7 @@ class ClientReport:
         cands = []
         for r in self.rep.keywords:
             if r["Type"] in ("Growing", "Declining") and not self.res.keyword(r["Query"]):
-                cands.append(("keyword", r["Query"], r))
+                cands.append(("keyword", self.short(r["Query"]), r))
         for r in self.rep.pages:
             if r["Type"] in ("Growing", "Declining") and not self.res.page(r["Page"]):
                 cands.append(("page", self.label_of_page(r["Page"]), r))
@@ -362,30 +399,32 @@ class ClientReport:
         top = yoy_pages[0] if yoy_pages and (dd.num(yoy_pages[0]["Clicks diff"]) or 0) > 0 else None
         fact = None
         if seg_best and top:
-            fact = T["c_yoy_both"].format(segment=seg_best[0], pct=pct_abs(seg_best[1]),
+            fact = T["c_yoy_both"].format(segment=self.seg_label(seg_best[0]), pct=pct_abs(seg_best[1]),
                                           page=self.label_of_page(top["Page"]),
                                           n=i18n.fmt_int(dd.num(top["Clicks diff"])))
         elif seg_best:
-            fact = T["c_yoy_seg"].format(segment=seg_best[0], pct=pct_abs(seg_best[1]))
+            fact = T["c_yoy_seg"].format(segment=self.seg_label(seg_best[0]), pct=pct_abs(seg_best[1]))
         elif top:
             fact = T["c_yoy_page"].format(page=self.label_of_page(top["Page"]),
                                           n=i18n.fmt_int(dd.num(top["Clicks diff"])))
         return {"left_title": T["c_h_kw_gain"], "right_title": T["c_h_pg_gain"],
-                "keywords": rows(kws, lambda r: r["Query"]),
+                "keywords": rows(kws, lambda r: self.short(r["Query"])),
                 "pages": rows(pgs, lambda r: self.label_of_page(r["Page"])),
                 "fact": fact, "fact_title": T["c_yoy_best"]}
 
     # ---- slide 6 -------------------------------------------------------------------------
     def new_searches(self):
         T = self.T
-        new = [r for r in self.rep.keywords if r["Type"] == "New" and not self.res.keyword(r["Query"])]
+        new = [r for r in self.rep.keywords if r["Type"] == "New" and not self.res.keyword(r["Query"])
+               and not op.looks_like_domain(r["Query"])              # an address, not a topic
+               and not any(t in r["Query"].lower() for t in self.rep.brand_terms)]
         new.sort(key=lambda r: -(dd.num(r["Impressions"]) or 0))
         if not new:
             return None
         cards = []
         for r in new[:3]:
             pos = dd.num(r["Position"])
-            cards.append({"keyword": r["Query"],
+            cards.append({"keyword": self.short(r["Query"]),
                           "pill": T["c_pill_impr"].format(n=i18n.fmt_int(dd.num(r["Impressions"]) or 0)),
                           "position": T["c_new_pos"].format(pos=f1(pos)) if pos else ""})
         return {"intro": T["c_new_intro"].format(site=self.label), "cards": cards}
@@ -452,7 +491,7 @@ class ClientReport:
             clicks = num(row, "Clicks") or 0
             total += clicks
             mom, yoy = num(row, "Clicks MoM %"), num(row, "Clicks YoY %")
-            rows.append({"label": s, "clicks": clicks,
+            rows.append({"label": self.seg_label(s), "clicks": clicks,
                          "mom": signed(mom, 1) if mom is not None else "—",
                          "mom_tone": GOOD if (mom or 0) > 0 else GREY,
                          "yoy": signed(yoy, 1) if yoy is not None else "—",
@@ -484,7 +523,8 @@ class ClientReport:
     # ---- slide 11 ------------------------------------------------------------------------
     def pages_to_update(self):
         T = self.T
-        items = self.opps_of("update_page", "decliner")[:5]
+        items = [o for o in self.opps_of("update_page", "decliner")
+                 if o["type"] == "update_page" or (self.decliner_big_enough(o) and not op.is_homepage(o["page"]))][:5]
         if not items:
             return None
         rows = []
@@ -510,11 +550,11 @@ class ClientReport:
             impr = i18n.fmt_int(dd.num(o["impressions_90d"]) or 0)
             sub = (T["c_q_pos"].format(n=impr, pos=f"{pos:.0f}") if pos > 5
                    else T["c_q_ctr"].format(n=impr, ctr=f"{ctr * 100:.2f}%"))
-            cards.append({"keyword": o["keyword"], "sub": sub})
+            cards.append({"keyword": self.short(o["keyword"]), "sub": sub})
         merge = None
         if cannibal:
             counts = [int(_first_int(o["diagnosis"]) or 2) for o in cannibal]
-            names = [o["keyword"] for o in cannibal]
+            names = [self.short(o["keyword"]) for o in cannibal]
             sep = "، " if self.lang == "fa" else ", "
             joined = (names[0] if len(names) == 1
                       else T["c_and"].format(a=sep.join(names[:-1]), b=names[-1]))
@@ -547,13 +587,13 @@ class ClientReport:
             if ca and cb is not None:
                 growth.append((s, (cb - ca) / ca * 100, num(self.rep.row(segment=s), "Clicks") or 0))
         for s, g, _ in sorted(growth, key=lambda x: -x[2])[:4]:
-            cards.append({"label": s, "value": signed(g, 0), "word": T["c_clicks_word"], "sub": "",
+            cards.append({"label": self.seg_label(s), "value": signed(g, 0), "word": T["c_clicks_word"], "sub": "",
                           "tone": GOOD if g >= 0 else GREY})
         bullets = []
         slide_ref = (nums or {}).get("pages")
         for s, g, _ in sorted((x for x in growth if x[1] > 0), key=lambda x: -x[1])[:2]:
             bullets.append(T["c_do_seg_slide" if slide_ref else "c_do_seg"].format(
-                segment=s, n=slide_ref))
+                segment=self.seg_label(s), n=slide_ref))
         seasonal = [o for o in self.opps_of("seasonal")]
         seasonal.sort(key=lambda o: -(dd.num(o["potential_gain_month"]) or 0))
         for o in seasonal[:3]:
@@ -566,22 +606,39 @@ class ClientReport:
                 "cards": cards, "do_title": T["c_do_now"], "bullets": bullets}
 
     # ---- slide 14 ------------------------------------------------------------------------
-    def watching(self):
+    def plan_sentence(self, nums: dict = None) -> str:
+        """Where the update plan is: 'the update plan on slides 10 to 12 targets this'."""
+        T = self.T
+        shown = sorted((nums or {})[k] for k in ("wins", "pages", "ideas") if k in (nums or {}))
+        if not shown:
+            return T["c_w_plan_none"]
+        if len(shown) == 1 or shown[0] == shown[-1]:
+            return T["c_w_plan_one"].format(a=shown[0])
+        return T["c_w_plan_range"].format(a=shown[0], b=shown[-1])
+
+    def decliner_big_enough(self, o: dict) -> bool:
+        """A decliner is only worth a client's attention with at least MIN_WATCH_CLICKS clicks last month."""
+        row = {r["Page"]: r for r in self.rep.pages if r["Type"] == "Declining"}.get(o["page"])
+        return bool(row) and (dd.num(row["Clicks prev"]) or 0) >= MIN_WATCH_CLICKS
+
+    def watching(self, nums: dict = None):
         T = self.T
         items = []
         for s in self.segments:                                   # segment drops year on year
             row = self.rep.row(segment=s)
             yoy, mom = num(row, "Clicks YoY %"), num(row, "Clicks MoM %")
             if yoy is not None and yoy <= WATCH_SEGMENT_DROP:
-                mom_part = (T["c_w_mom"].format(mom=signed(mom)) if (mom is not None and mom > 0) else "")
-                items.append({"title": s, "body": T["c_w_seg_b"].format(yoy=signed(yoy), mom=mom_part),
+                mom_part = (T["c_w_mom"].format(mom=pct_abs(mom)) if (mom is not None and mom > 0) else "")
+                items.append({"title": self.seg_label(s),
+                              "body": T["c_w_seg_b"].format(yoy=pct_abs(yoy), mom=mom_part,
+                                                            plan=self.plan_sentence(nums)),
                               "weight": yoy})
         items.sort(key=lambda x: x["weight"])
         items = items[:2]
         if len(self.gone) >= WATCH_GONE_MIN:
             items.append({"title": T["c_w_old"], "body": T["c_w_old_b"].format(n=len(self.gone))})
         by_url = {r["Page"]: r for r in self.rep.pages if r["Type"] == "Declining"}
-        for o in self.opps_of("decliner")[:2]:
+        for o in [o for o in self.opps_of("decliner") if self.decliner_big_enough(o)][:2]:
             r = by_url.get(o["page"])
             if r:
                 items.append({"title": self.label_of_page(o["page"]),
@@ -624,12 +681,13 @@ class ClientReport:
     # ---- the whole deck ------------------------------------------------------------------
     def slides(self) -> list:
         """[(id, payload)] in deck order; slides without data are left out."""
+        self.decisions.clear()
         base = [("headline", self.headline()), ("scorecard", self.scorecard()),
                 ("climbs", self.climbs()), ("grew", self.grew()), ("new", self.new_searches()),
                 ("work", self.work()), ("trend", self.trend()), ("sections", self.sections()),
                 ("wins", self.quick_wins()), ("pages", self.pages_to_update()),
                 ("ideas", self.ideas()), ("next", self.next_month_slide()),
-                ("watch", self.watching()), ("focus", self.focus())]
+                ("watch", self.watching(None)), ("focus", self.focus())]
         present = [sid for sid, payload in base if payload]
         # slide numbers (the title is slide 1) for the texts that point at other slides
         nums = {sid: i + 2 for i, sid in enumerate(present)}
@@ -639,6 +697,8 @@ class ClientReport:
                 continue
             if sid == "next":
                 payload = self.next_month_slide(nums)
+            elif sid == "watch":
+                payload = self.watching(nums)
             elif sid == "focus":
                 payload = self.focus(nums)
             out.append((sid, payload))

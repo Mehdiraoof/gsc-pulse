@@ -90,6 +90,8 @@ class Report:
     gone: list = field(default_factory=list)           # R Gone Pages rows of the period
     opps: list = field(default_factory=list)           # Opportunities rows (monthly deck)
     resolved: object = None                            # resolved.Resolved (monthly deck)
+    brand_terms: list = field(default_factory=list)    # lower-cased brand words (config + label + domain)
+    deck_labels: dict = field(default_factory=dict)    # segment label -> the name the client deck uses
 
     def row(self, period=None, segment="All"):
         return self.rows.get((period or self.period, segment))
@@ -130,6 +132,8 @@ def load_monthly(sheets, reports_id: str, site, period: str = None):
     rep.notes = _notes(sheets, reports_id)
     rep.page_types = [t["name"] for t in site.page_types]
     rep.gone = _gone(sheets, reports_id, period)
+    rep.brand_terms = opportunities.brand_terms_for(site)
+    rep.deck_labels = {s: site.deck_label(s) for s in rep.segments if s != "All"}
     rep.opps = _opps(sheets, reports_id)
     rep.resolved = resolved.load(sheets, reports_id)
     rep.lost_new_floor = int(site.threshold("lost_new_min_impressions"))

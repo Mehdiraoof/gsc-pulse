@@ -791,7 +791,7 @@ def _opportunities(sheets, reports_id, site, segments, months, fetch, earliest, 
         queries=queries, pages=pages, pairs=pairs, month_pages=month_pages, aio_pages=aio_pages,
         gone=gone, seasonal=seasonal,
         next_month=i18n.month_name(periods.month_label(periods.add_months(first, 1)), "en"),
-        brand_terms=site.opportunity_setting("brand_terms"),
+        brand_terms=opportunities.brand_terms_for(site),
         min_impressions=site.opportunity_setting("min_impressions_90d"),
         target_ctr=site.opportunity_setting("target_ctr_top3"),
         segment_of=segment_of, resolved=resolved.load(sheets, reports_id)))

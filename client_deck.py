@@ -81,8 +81,18 @@ def para(box, ctx, items: list, first: bool = True):
 
 
 def align_for(ctx, text: str) -> str:
-    """Persian text sits on the right, other text follows the deck direction."""
+    """A path or address is left-aligned, plain Persian text sits on the right, everything else
+    follows the deck direction."""
+    if decks.is_url_like(text):
+        return "l"
     return "r" if (ctx.rtl or decks.dd_has_arabic(text)) else "l"
+
+
+def label_item(text: str):
+    """A label for text_box: a path or address is left-to-right, marked, left-aligned, in Vazirmatn."""
+    if decks.is_url_like(text):
+        return (decks.ltr_url(text), {"rtl": False, "align": "l", "font": decks.FONT_FA})
+    return text
 
 
 def foot_note(slide, ctx, text: str, y: float = 6.35):
@@ -359,12 +369,13 @@ def slide_watch(ctx, c, d):
     T = c.T
     slide = content_slide(ctx, T["c_k_watch"], T["c_t_watch"])
     for i, item in enumerate(d["items"]):
-        y = 1.65 + i * 1.02
-        card(slide, mirror_x(ctx, LEFT, WIDTH), y, WIDTH, 0.88, TINT, 0.08)
-        shape(slide, MSO_SHAPE.OVAL, mirror_x(ctx, 0.9, 0.4), y + 0.24, 0.4, 0.4, AMBER)
-        text_box(slide, mirror_x(ctx, 1.55, 3.4), y + 0.08, 3.4, 0.72, [item["title"]], ctx, size=17,
-                 color=INK, bold=True, anchor=MSO_ANCHOR.MIDDLE, align=align_for(ctx, item["title"]))
-        text_box(slide, mirror_x(ctx, 5.1, 7.4), y + 0.08, 7.4, 0.72, [item["body"]], ctx, size=14,
+        y = 1.6 + i * 1.04
+        card(slide, mirror_x(ctx, LEFT, WIDTH), y, WIDTH, 0.94, TINT, 0.08)
+        shape(slide, MSO_SHAPE.OVAL, mirror_x(ctx, 0.9, 0.44), y + 0.25, 0.44, 0.44, AMBER)
+        text_box(slide, mirror_x(ctx, 1.65, 3.5), y + 0.07, 3.5, 0.8, [label_item(item["title"])], ctx,
+                 size=19, color=INK, bold=True, anchor=MSO_ANCHOR.MIDDLE,
+                 align=align_for(ctx, item["title"]))
+        text_box(slide, mirror_x(ctx, 5.35, 7.2), y + 0.07, 7.2, 0.8, [item["body"]], ctx, size=16,
                  color=SLATE, anchor=MSO_ANCHOR.MIDDLE, align="r" if ctx.rtl else "l")
 
 
@@ -412,7 +423,7 @@ def _set_prepared(layouts, text: str):
             return
 
 
-def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None) -> bytes:
+def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None, log=None) -> bytes:
     """The client-ready monthly deck as .pptx bytes. cfg is the site's DeckConfig."""
     lang = cfg.language
     path = os.path.join(template_dir, "gsc_pulse_template_fa.pptx" if lang == "fa"
@@ -425,7 +436,10 @@ def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None)
                     accent=(cfg.accent_color or AMBER), brand=(cfg.brand_color or PERIWINKLE),
                     logo=logo, mark=decks.template_mark(layouts))
     slide_title(ctx, c)
-    for sid, payload in c.slides():
+    slides = c.slides()
+    for line in c.decisions:                    # which rule decided what: numbers only, safe in a public log
+        (log or (lambda s: None))(f"decks: monthly {line}")
+    for sid, payload in slides:
         RENDERERS[sid](ctx, c, payload)
     core = prs.core_properties
     core.title = f"{c.T['monthly_report']} · {cfg.site_label} · {ctx.period_title}"

@@ -112,7 +112,7 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
                 if ai is None:
                     log("decks: AI summary not available, using the placeholder slide")
             logo = fetch_logo(cfg.logo_url) if cfg.logo_url else None
-            payload = (client_deck.build_monthly(report, cfg, template_dir, logo) if kind == "monthly"
+            payload = (client_deck.build_monthly(report, cfg, template_dir, logo, log) if kind == "monthly"
                        else decks.build_deck(report, cfg, template_dir, ai, logo))
             period = decks.period_title(report, cfg.language)
             T = i18n.table(cfg.language)

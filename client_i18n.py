@@ -19,7 +19,7 @@ EN = {
     "h_seg": "{segment} led the growth.",
     "h_flat": "{site} held its ground this month.",
     "sup_pos_up": "Average position improved to {pos}", "sup_pos": "Average position is {pos}",
-    "sup_ctr": "more searchers clicked through (CTR {ctr})",
+    "sup_ctr": "more searchers clicked through (CTR {ctr})", "sup_ctr_val": "CTR is {ctr}",
     "sup_and": "{a} and {b}.",
     "sup_one": "{a}.",
     "sup_seg": "{segment} led the growth: {mom} this month and {yoy} vs last {month}.",
@@ -144,7 +144,10 @@ EN = {
     "c_w_old": "Old URLs",
     "c_w_old_b": "{n} old URLs no longer show in Google (expected after redirects); we check they "
                  "pass traffic on.",
-    "c_w_seg_b": "{yoy} vs last year{mom}.", "c_w_mom": ", but {mom} this month",
+    "c_w_seg_b": "Down {yoy} on last year{mom}; {plan}.", "c_w_mom": ", but up {mom} this month",
+    "c_w_plan_range": "the update plan on slides {a} to {b} targets this",
+    "c_w_plan_one": "the update plan on slide {a} targets this",
+    "c_w_plan_none": "we are keeping an eye on it",
     "c_w_dec_b": "Clicks {a} → {b}. {diag}",
     "c_w_check_b": "Impressions {drop} on last month. We check indexing and recent changes.",
 
@@ -181,7 +184,7 @@ FA = {
     "h_seg": "{segment} پیشتاز رشد بود.",
     "h_flat": "{site} این ماه جایگاه خود را حفظ کرد.",
     "sup_pos_up": "میانگین جایگاه به {pos} بهتر شد", "sup_pos": "میانگین جایگاه {pos} است",
-    "sup_ctr": "کاربران بیشتری کلیک کردند (نرخ کلیک {ctr})",
+    "sup_ctr": "کاربران بیشتری کلیک کردند (نرخ کلیک {ctr})", "sup_ctr_val": "نرخ کلیک {ctr} است",
     "sup_and": "{a} و {b}.",
     "sup_one": "{a}.",
     "sup_seg": "{segment} پیشتاز رشد بود: {mom} نسبت به ماه قبل و {yoy} نسبت به {month} سال قبل.",
@@ -297,7 +300,10 @@ FA = {
     "c_w_old": "نشانی‌های قدیمی",
     "c_w_old_b": "{n} نشانی قدیمی دیگر در گوگل دیده نمی‌شود (بعد از ریدایرکت‌ها طبیعی است)؛ "
                  "بررسی می‌کنیم که ترافیک را به صفحه جدید برسانند.",
-    "c_w_seg_b": "{yoy} نسبت به سال قبل{mom}.", "c_w_mom": "، اما {mom} نسبت به ماه قبل",
+    "c_w_seg_b": "{yoy} کمتر از سال قبل{mom}؛ {plan}.", "c_w_mom": "، اما {mom} بیشتر نسبت به ماه قبل",
+    "c_w_plan_range": "برنامه به‌روزرسانی در اسلایدهای {a} تا {b} همین را هدف گرفته",
+    "c_w_plan_one": "برنامه به‌روزرسانی در اسلاید {a} همین را هدف گرفته",
+    "c_w_plan_none": "آن را زیر نظر داریم",
     "c_w_dec_b": "کلیک {a} → {b}. {diag}",
     "c_w_check_b": "نمایش‌ها {drop} نسبت به ماه قبل. وضعیت ایندکس و تغییرات اخیر را بررسی می‌کنیم.",
 

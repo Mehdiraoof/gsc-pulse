@@ -364,7 +364,7 @@ class OpportunitySlideTests(unittest.TestCase):
         d = client().watching()
         titles = [i["title"] for i in d["items"]]
         self.assertEqual(titles, ["Shop", "Old URLs", "/guide/old-tips/", "/guide/j/"])
-        self.assertIn("−35% vs last year", d["items"][0]["body"])
+        self.assertIn("Down 35% on last year", d["items"][0]["body"])
         self.assertEqual(d["items"][1]["body"], "6 old URLs no longer show in Google (expected after "
                                                  "redirects); we check they pass traffic on.")
         self.assertEqual(d["items"][2]["body"], "Clicks 137 → 55. Ranking fell.")
@@ -563,6 +563,292 @@ class RunnerTests(unittest.TestCase):
         subject, body = deck_runner.email_text(rep, fx.Cfg(), "en", "Monthly SEO Report", "September 2026")
         self.assertNotIn("Top alarm", body)
         self.assertIn("Clicks:", body)
+
+
+class BrandAndAddressTests(unittest.TestCase):
+    """Brand searches, addresses and front pages are never opportunities or new keywords."""
+
+    def extra_opps(self):
+        return [
+            fx._opp("quick_win", "example web", "https://example.test/guide/a/", 9000, 100, 9.0, 0.011, 375,
+                    "Ranks on page 1 but below the top 3.", "Improve the page.", "Guides"),
+            fx._opp("update_page", "", "https://example.test/", 20000, 100, 6.0, 0.005, 400,
+                    "Ranks well, title doesn't win the click.", "Rewrite title + meta.", ""),
+            fx._opp("update_page", "", "https://example.test/en", 20000, 100, 6.0, 0.005, 390,
+                    "Ranks well.", "Rewrite.", ""),
+            fx._opp("cannibal", "example", "https://example.test/guide/b/", 9000, 90, 3.0, 0.01, 380,
+                    "5 pages compete for this search.", "Merge into one page.", "Guides"),
+            fx._opp("quick_win", "app.example.ir", "https://example.test/guide/c/", 3000, 30, 8.0, 0.01, 300,
+                    "Ranks on page 1 but below the top 3.", "Improve the page.", "Guides"),
+            fx._opp("quick_win", "plain topic", "https://example.test/", 3000, 30, 8.0, 0.01, 290,
+                    "Ranks on page 1 but below the top 3.", "Improve the page.", ""),
+        ]
+
+    def test_the_deck_leaves_them_out_even_when_an_old_opportunities_tab_lists_them(self):
+        rep = report()
+        rep.opps = self.extra_opps() + rep.opps
+        rep.brand_terms = ["example"]
+        c = cd.ClientReport(rep, "en", "Example")
+        slides = dict(c.slides())
+        wins = [r["keyword"] for r in slides["wins"]["rows"]]
+        for gone in ("example web", "app.example.ir", "plain topic"):
+            self.assertNotIn(gone, wins)
+        self.assertEqual(wins[0], fx.PERSIAN[0])                              # the real top item stays
+        pages = [r["page"] for r in slides["pages"]["rows"]]
+        self.assertNotIn("/", pages)
+        self.assertNotIn("/en", pages)
+        self.assertNotIn("5 pages", slides["ideas"]["merge"]["body"])
+        self.assertIn("475 extra clicks", slides["headline"]["cards"][2]["body"])      # the total is unchanged
+
+    def test_new_searches_skip_addresses_and_brand_words(self):
+        rep = report()
+        rep.brand_terms = ["example"]
+        rep.keywords.append(fx._kw("New", "app.example.ir", 3, 0, 5000, 0, 1.2, 0))
+        rep.keywords.append(fx._kw("New", "Example web store", 3, 0, 4000, 0, 1.2, 0))
+        rep.keywords.append(fx._kw("New", "www site", 3, 0, 3000, 0, 1.2, 0))
+        cards = cd.ClientReport(rep, "en", "Example").new_searches()["cards"]
+        self.assertEqual([c["pill"] for c in cards], ["276 impressions", "120 impressions", "90 impressions"])
+
+    def test_addresses_and_front_pages_by_rule(self):
+        import opportunities as op
+        for query in ("app.example.ir", "example.com", "www example", "http://x", "shop.site.ir/path"):
+            self.assertTrue(op.looks_like_domain(query), query)
+        for query in ("blue running shoes", "what is a trail shoe", "mr smith", "کلمه کلیدی", "a.b"):
+            self.assertFalse(op.looks_like_domain(query), query)
+        for url in ("https://x.test/", "https://x.test", "https://x.test/en", "https://x.test/en/",
+                    "https://x.test/fa/", "https://x.test/pt-br"):
+            self.assertTrue(op.is_homepage(url), url)
+        for url in ("https://x.test/article/a", "https://x.test/about", "https://x.test/en/guide/"):
+            self.assertFalse(op.is_homepage(url), url)
+
+
+class PersianPathTests(unittest.TestCase):
+    """A path or address always reads left to right, whatever its slug is written in."""
+
+    SLUG = "کبوتر"
+
+    def cells(self, prs, needle):
+        found = []
+        for slide in prs.slides:
+            for shp in slide.shapes:
+                if getattr(shp, "has_table", False) and shp.has_table:
+                    for row in shp.table.rows:
+                        for cell in row.cells:
+                            if needle in cell.text_frame.text:
+                                found.append(cell)
+        return found
+
+    def deck(self, lang="en"):
+        rep = report(slugs=True)
+        return Presentation(io.BytesIO(client_deck.build_monthly(rep, fx.Cfg(lang), deck_runner.TEMPLATE_DIR)))
+
+    def test_a_persian_slug_is_left_to_right_left_aligned_marked_and_in_vazirmatn(self):
+        for lang in ("en", "fa"):
+            cells = self.cells(self.deck(lang), self.SLUG)
+            self.assertTrue(cells, lang)
+            for cell in cells:
+                p = cell.text_frame.paragraphs[0]
+                self.assertEqual(p._p.pPr.get("algn"), "l", lang)
+                self.assertNotEqual(p._p.pPr.get("rtl"), "1", lang)
+                self.assertTrue(cell.text_frame.text.startswith("‎/article/"), lang)
+                self.assertTrue(cell.text_frame.text.endswith("‎"), lang)
+                self.assertTrue(all(r.font.name == "Vazirmatn" for r in p.runs), lang)
+
+    def test_plain_persian_keywords_stay_right_aligned(self):
+        cells = self.cells(self.deck(), fx.PERSIAN[0])
+        self.assertTrue(cells)
+        self.assertTrue(all(c.text_frame.paragraphs[0]._p.pPr.get("algn") == "r" for c in cells))
+
+    def test_long_slugs_are_cut_to_one_line(self):
+        c = cd.ClientReport(report(slugs=True), "en", "Example")
+        labels = [r["label"] for r in c.climbs()["rows"]]
+        long = [l for l in labels if l.startswith("/guide/a-very-long")]
+        self.assertEqual(len(long), 1)
+        self.assertEqual(len(long[0]), cd.MAX_LABEL)
+        self.assertTrue(long[0].endswith("…"))
+        self.assertTrue(all(len(l) <= cd.MAX_LABEL for l in labels))
+        self.assertEqual(c.short("short"), "short")
+
+    def test_paths_inside_a_sentence_keep_their_order(self):
+        import decks
+        self.assertEqual(decks.lrm_urls("and /a/b gained 5"), "and ‎/a/b‎ gained 5")
+        self.assertEqual(decks.lrm_urls("https://x.test/p is up"), "‎https://x.test/p‎ is up")
+        self.assertEqual(decks.lrm_urls("and/or 50% / more"), "and/or 50% / more")
+        self.assertEqual(decks.lrm_urls("‎/a/b‎"), "‎/a/b‎")             # not wrapped twice
+        self.assertTrue(decks.is_url_like("/a"))
+        self.assertTrue(decks.is_url_like("‎/a‎"))
+        self.assertTrue(decks.is_url_like("https://x"))
+        self.assertFalse(decks.is_url_like("a /b"))
+        self.assertFalse(decks.is_url_like("کلمه"))
+
+    def test_a_path_in_a_text_box_title_is_left_aligned(self):
+        prs = Presentation(io.BytesIO(client_deck.build_monthly(
+            report(), fx.Cfg("fa"), deck_runner.TEMPLATE_DIR)))
+        titles = [s for slide in prs.slides for s in slide.shapes
+                  if s.has_text_frame and s.text_frame.text.startswith("‎/guide/")]
+        self.assertTrue(titles)
+        for shp in titles:
+            p = shp.text_frame.paragraphs[0]
+            self.assertEqual(p._p.pPr.get("algn"), "l")
+            self.assertNotEqual(p._p.pPr.get("rtl"), "1")
+
+
+class HeadlineRepeatTests(unittest.TestCase):
+
+    def c(self, mutate=None):
+        rep = report()
+        if mutate:
+            mutate(rep)
+        return cd.ClientReport(rep, "en", "Example")
+
+    def test_the_click_rate_headline_is_not_repeated_in_the_supporting_sentence(self):
+        def mutate(rep):
+            row = rep.rows[(fx.MONTHS[-1], "All")]
+            row["Avg. Position"], row["Clicks YoY %"] = 8.0, 5.0
+        d = self.c(mutate).headline()
+        self.assertEqual(d["rule"], "click rate")
+        self.assertEqual(d["headline"], "More searchers clicked through.")
+        self.assertNotIn("clicked through", d["support"])
+        self.assertIn("CTR is 3.61%", d["support"])
+
+    def test_the_section_headline_is_not_repeated_either(self):
+        def mutate(rep):
+            row = rep.rows[(fx.MONTHS[-1], "All")]
+            row["Avg. Position"], row["Clicks YoY %"], row["CTR (%)"] = 8.0, 5.0, 1.0
+        d = self.c(mutate).headline()
+        self.assertEqual(d["rule"], "section")
+        self.assertNotIn("led the growth", d["support"])
+
+    def test_the_position_headline_keeps_both_numbers(self):
+        d = self.c().headline()
+        self.assertEqual(d["rule"], "position")
+        self.assertIn("Average position improved to 6.2 and more searchers clicked through (CTR 3.61%)", d["support"])
+
+    def test_a_tie_with_the_best_earlier_month_still_counts_as_the_best(self):
+        def mutate(rep):
+            rep.rows[(fx.MONTHS[-1], "All")]["Avg. Position"] = 6.4          # the best before was 6.4
+        self.assertEqual(self.c(mutate).headline()["rule"], "position")
+
+    def test_which_rule_won_is_logged_without_the_figures(self):
+        c = self.c()
+        c.slides()
+        self.assertEqual(len(c.decisions), 1)
+        line = c.decisions[0]
+        self.assertTrue(line.startswith("headline rule: position."))
+        self.assertIn("Best position of the last 12 months: yes", line)
+        self.assertIn("gap -0.2 steps", line)
+        for figure in ("6.2", "6.4", "1300", "36.8"):
+            self.assertNotIn(figure, line)
+
+        def worse(rep):
+            rep.rows[(fx.MONTHS[-1], "All")]["Avg. Position"] = 6.9
+        c2 = self.c(worse)
+        c2.slides()
+        self.assertIn("Best position of the last 12 months: no", c2.decisions[0])
+        self.assertIn("gap +0.5 steps", c2.decisions[0])
+        c2.slides()
+        self.assertEqual(len(c2.decisions), 1)                               # not piled up by a second call
+
+    def test_the_build_writes_the_decision_to_the_log(self):
+        lines = []
+        client_deck.build_monthly(report(), fx.Cfg(), deck_runner.TEMPLATE_DIR, log=lines.append)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("decks: monthly headline rule: position."))
+
+
+class DeckLabelTests(unittest.TestCase):
+    LABELS = {"Guides": "Guides section", "Shop": "Shop", "Blog & other": "Everything else"}
+
+    def c(self, **kw):
+        return cd.ClientReport(report(deck_labels=self.LABELS, **kw), "en", "Example")
+
+    def test_the_deck_uses_the_display_names_everywhere(self):
+        slides = dict(self.c().slides())
+        self.assertIn("Guides section led the growth", slides["headline"]["support"])
+        self.assertEqual([r["label"] for r in slides["sections"]["rows"]],
+                         ["Guides section", "Everything else", "Shop"])
+        self.assertEqual([k["label"] for k in slides["next"]["cards"]],
+                         ["Whole site", "Guides section", "Everything else", "Shop"])
+        self.assertIn("Guides section grows most next month", slides["next"]["bullets"][0])
+        self.assertIn("Year on year, Guides section is up 70%", slides["grew"]["fact"])
+        self.assertEqual(slides["watch"]["items"][0]["title"], "Shop")
+
+    def test_without_a_display_name_the_label_is_used(self):
+        slides = dict(client().slides())
+        self.assertEqual([r["label"] for r in slides["sections"]["rows"]], ["Guides", "Blog & other", "Shop"])
+
+    def test_the_resolved_list_still_uses_the_segment_label(self):
+        c = cd.ClientReport(report(deck_labels=self.LABELS, resolved_list=[["segment", "Guides", "", ""]]),
+                            "en", "Example")
+        self.assertNotIn("Guides section", [r["label"] for r in dict(c.slides())["sections"]["rows"]])
+
+    def test_page_types_and_the_rest_segment_have_display_names_in_the_site_settings(self):
+        import json
+        import sites
+        entry = {"name": "site-a", "site_url": "sc-domain:a.test", "sheet_id": "m", "first_match_wins": True,
+                 "other_label": "Other", "other_deck_label": "Blog & other",
+                 "page_types": [{"name": "en", "regex": "/en/", "deck_label": "English section"},
+                                {"name": "Song", "regex": "/song/"}]}
+        site = sites.parse_sites_json(json.dumps([entry]))[0]
+        self.assertEqual(site.deck_label("en"), "English section")
+        self.assertEqual(site.deck_label("Song"), "Song")                         # no deck_label: the label
+        self.assertEqual(site.deck_label("Other"), "Blog & other")
+        self.assertEqual(site.deck_label("All"), "All")
+        self.assertEqual([t["name"] for t in site.page_types], ["en", "Song"])    # the segment names did not change
+        for bad in ({"deck_label": "<x>"}, {"deck_label": 5}, {"deck_label": ""}):
+            e = dict(entry, page_types=[dict(entry["page_types"][0], **bad)])
+            with self.assertRaises(sites.SitesConfigError) as cm:
+                sites.parse_sites_json(json.dumps([e]))
+            self.assertNotIn("<x>", str(cm.exception))
+        with self.assertRaises(sites.SitesConfigError):
+            sites.parse_sites_json(json.dumps([dict(entry, other_deck_label="<x>")]))
+        extra = dict(entry["page_types"][0], colour="red")
+        with self.assertRaises(sites.SitesConfigError):
+            sites.parse_sites_json(json.dumps([dict(entry, page_types=[extra])]))
+
+
+class WatchingTests(unittest.TestCase):
+
+    def test_a_segment_gets_a_calm_sentence_that_points_at_the_plan(self):
+        d = dict(client().slides())["watch"]
+        self.assertEqual(d["items"][0]["title"], "Shop")
+        self.assertEqual(d["items"][0]["body"],
+                         "Down 35% on last year; the update plan on slides 10 to 12 targets this.")
+
+    def test_this_months_rise_is_mentioned_calmly(self):
+        rep = report()
+        rep.rows[(fx.MONTHS[-1], "Shop")]["Clicks MoM %"] = 4.2
+        body = dict(cd.ClientReport(rep, "en", "Example").slides())["watch"]["items"][0]["body"]
+        self.assertEqual(body, "Down 35% on last year, but up 4% this month; the update plan on slides 10 to "
+                               "12 targets this.")
+
+    def test_the_plan_sentence_follows_the_slides_that_exist(self):
+        c = client()
+        self.assertEqual(c.plan_sentence({"wins": 10, "pages": 11, "ideas": 12}),
+                         "the update plan on slides 10 to 12 targets this")
+        self.assertEqual(c.plan_sentence({"wins": 10}), "the update plan on slide 10 targets this")
+        self.assertEqual(c.plan_sentence({"pages": 7, "ideas": 8}), "the update plan on slides 7 to 8 targets this")
+        self.assertEqual(c.plan_sentence({}), "we are keeping an eye on it")
+        self.assertEqual(c.plan_sentence(None), "we are keeping an eye on it")
+
+    def test_a_decliner_needs_at_least_50_clicks_last_month(self):
+        rep = report()
+        for r in rep.pages:
+            if r["Type"] == "Declining" and r["Path"] == "/guide/old-tips/":
+                r["Clicks prev"] = 24
+        slides = dict(cd.ClientReport(rep, "en", "Example").slides())
+        self.assertNotIn("/guide/old-tips/", [i["title"] for i in slides["watch"]["items"]])
+        self.assertNotIn("/guide/old-tips/", [r["page"] for r in slides["pages"]["rows"]])
+        slides = dict(client().slides())                          # 137 clicks last month: it stays
+        self.assertIn("/guide/old-tips/", [i["title"] for i in slides["watch"]["items"]])
+        self.assertIn("/guide/old-tips/", [r["page"] for r in slides["pages"]["rows"]])
+
+    def test_the_watching_slide_is_drawn_larger(self):
+        prs = Presentation(io.BytesIO(client_deck.build_monthly(report(), fx.Cfg(), deck_runner.TEMPLATE_DIR)))
+        slide = prs.slides[len(prs.slides) - 2]
+        sizes = {r.font.size.pt for shp in slide.shapes if shp.has_text_frame
+                 for p in shp.text_frame.paragraphs for r in p.runs if r.font.size}
+        self.assertTrue({19.0, 16.0} <= sizes)
 
 
 if __name__ == "__main__":
