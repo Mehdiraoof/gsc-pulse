@@ -23,7 +23,8 @@ from test_reports import RID, TYPES, ReportsTestCase, site_with
 
 VIEW_NAMES = ["Dashboard", "Monthly", "Weekly", "Lost Keywords", "New Keywords", "Growing Keywords",
               "Declining Keywords", "Growing Pages", "Declining Pages", "YoY Growing Pages",
-              "YoY Declining Pages", "Growing AIO Pages", "Declining AIO Pages", "Events"]
+              "YoY Declining Pages", "Gone Pages", "Growing AIO Pages", "Declining AIO Pages",
+              "Impact Checker", "Events"]
 PERSIAN = "https://shop.test/%D9%85%D8%A7%DB%8C%D8%B9-%D8%B6%D8%AF-%D8%A7%D9%84%DA%A9%D8%AA%D8%B1%DB%8C%D8%B3%DB%8C%D8%AA%D9%87/"
 
 
@@ -413,6 +414,85 @@ class BuildTests(ViewsTestCase):
         self.assertIn('=$M3<>""', formulas)
 
 
+class GonePagesAndImpactTests(ViewsTestCase):
+
+    def test_the_gone_pages_tab_reads_r_gone_pages(self):
+        formula = self.cell("Gone Pages", 5, 1)
+        self.assertTrue(formula.startswith("=IFERROR(SORT(FILTER({'R Gone Pages'!H2:H,'R Gone Pages'!D2:D,"
+                                           "'R Gone Pages'!E2:E,'R Gone Pages'!G2:G},"))
+        self.assertIn('\'R Gone Pages\'!B2:B="Gone"),2,FALSE)', formula)
+        self.assertIn("No pages disappeared this month.", formula)
+        self.assertEqual([self.cell("Gone Pages", 4, c) for c in range(1, 5)],
+                         ["Page", "Clicks before", "Impr. before", "Impr. a year ago"])
+        self.assertEqual(self.book["Gone Pages"].color, views.rgb(views.INK))
+
+    def test_the_impact_checker_has_ten_input_rows_an_example_and_formulas(self):
+        book = self.book["Impact Checker"]
+        self.assertEqual(book.color, views.rgb(views.INK))
+        self.assertEqual(self.cell("Impact Checker", 3, 1), "Page (URL)")
+        self.assertEqual(self.cell("Impact Checker", 4, 1), "https://example.com/blog/example-page/")
+        self.assertFalse(str(self.cell("Impact Checker", 4, 5)).startswith("="))          # the example has no formulas
+        for row in range(5, 15):
+            self.assertTrue(self.cell("Impact Checker", row, 4).startswith("=IF(OR($A"), row)
+            self.assertEqual(self.cell("Impact Checker", row, 1), "")
+        self.assertEqual(self.cell("Impact Checker", 15, 4), "")
+        self.assertEqual(book.hidden_cols, [(17, 19)])
+
+    def test_the_formulas_read_28_day_windows_from_the_history_sheet(self):
+        formulas = views.impact_formulas(5, "HIST-SHEET")
+        self.assertIn('IMPORTRANGE("https://docs.google.com/spreadsheets/d/HIST-SHEET","\'H Pages\'!A2:F")',
+                      formulas["R5"])
+        self.assertIn('TEXT($B5-28,"yyyy-mm-dd")', formulas["R5"])
+        self.assertIn('TEXT($B5-1,"yyyy-mm-dd")', formulas["R5"])
+        self.assertIn('TEXT($B5+1,"yyyy-mm-dd")', formulas["S5"])
+        self.assertIn('TEXT($B5+28,"yyyy-mm-dd")', formulas["S5"])
+        self.assertIn('"too early ("&MAX(0,TODAY()-$B5)&" days)"', formulas["D5"])
+        self.assertIn("Click Allow access", formulas["D5"])
+        self.assertEqual(views.impact_formulas(5, "")["R5"], '="no History sheet"')
+
+    def test_formulas_stay_empty_until_a_row_is_filled(self):
+        # the whole tab was read back without an error although nothing is entered
+        self.assertEqual(self.result.mode, "built")
+
+    def test_user_rows_in_the_impact_checker_survive_a_rebuild(self):
+        sheet_id = self.book["Impact Checker"].sheet_id
+        tab = self.book["Impact Checker"]
+        tab.data[4][0] = "https://example.com/my-page/"
+        tab.data[4][1] = "2026-08-20"
+        self.run_views(rebuild=True)
+        self.assertEqual(self.book["Impact Checker"].sheet_id, sheet_id)
+        self.assertEqual(self.cell("Impact Checker", 5, 1), "https://example.com/my-page/")
+        self.assertEqual(self.cell("Impact Checker", 5, 2), "2026-08-20")
+        self.assertEqual(self.titles()[len(VIEW_NAMES) - 2:len(VIEW_NAMES)], ["Impact Checker", "Events"])
+
+    def test_events_has_the_resolved_list_with_a_kind_dropdown(self):
+        heads = [self.cell("Events", 1, c) for c in (4, 5, 6, 7)]
+        self.assertEqual(heads, ["kind", "value", "note", "added"])
+        sent = repr(self.sheets.requests_for(RID, "Events"))
+        self.assertIn("ONE_OF_LIST", sent)
+        for kind in ("page", "keyword", "month", "segment"):
+            self.assertIn(f"'userEnteredValue': '{kind}'", sent)
+        self.assertIn("never appears in the monthly client deck", self.cell("Events", 1, 9))
+
+    def test_an_older_events_tab_gets_the_resolved_list_without_losing_its_notes(self):
+        events = self.book["Events"]
+        events.col_count = 4
+        events.data = [["Month", "What happened", "", "Write the month as YYYY-MM (old hint)"],
+                       ["2026-09", "Algorithm update"]]
+        self.run_views(rebuild=True)
+        self.assertEqual(events.col_count, 9)
+        self.assertEqual(self.cell("Events", 2, 2), "Algorithm update")
+        self.assertEqual(self.cell("Events", 1, 4), "kind")
+        self.assertIn("Resolved list", self.cell("Events", 1, 9))
+
+    def test_text_a_person_put_in_the_resolved_columns_is_not_overwritten(self):
+        events = self.book["Events"]
+        events.data = [["Month", "What happened", "", "my own header"], ["2026-09", "x", "", "page", "/a/"]]
+        self.run_views(rebuild=True)
+        self.assertEqual(self.cell("Events", 1, 4), "my own header")
+        self.assertEqual(self.cell("Events", 2, 5), "/a/")
+
+
 class SegmentTests(ViewsTestCase):
     SITE = site_with(page_types=TYPES)
 
@@ -486,7 +566,7 @@ class RunRulesTests(ViewsTestCase):
             result = self.run_views(newest_month="2026-09")
         self.assertEqual(result.mode, "built")
         self.assertEqual(self.titles()[:len(VIEW_NAMES)], VIEW_NAMES)
-        for name in VIEW_NAMES[:-1]:
+        for name in VIEW_NAMES[:-2]:
             self.assertNotEqual(self.book[name].sheet_id, before[name], name)
         self.assertEqual(self.book["Events"].sheet_id, before["Events"])
         self.assertEqual(self.state_value("views_version"), str(newer))

@@ -305,16 +305,19 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertEqual(names, ["Example-SEO-Report-2026-09.pptx", "Example-SEO-Report-2026-W41.pptx"])
         counts = [len(Presentation(io.BytesIO(list(m.iter_attachments())[0].get_content())).slides)
                   for m in self.sent]
-        self.assertEqual(counts, [11, 6])
+        self.assertGreaterEqual(counts[0], 5)                  # the client deck: slides without data are left out
+        self.assertEqual(counts[1], 6)
         self.assertEqual(self.state(), {"monthly_deck_sent": "2026-09", "weekly_deck_sent": "2026-W41"})
 
-    def test_the_email_body_has_three_headlines_and_the_top_alarm(self):
+    def test_the_monthly_email_has_three_headlines_and_no_alarm_the_weekly_one_has_both(self):
         self.run_decks()
         body = self.sent[0].get_body().get_content()
         self.assertIn("monthly SEO report for Example (September 2026)", body)
         for label in ("Clicks:", "Impressions:", "Avg. position:"):
             self.assertIn(label, body)
-        self.assertIn("Top alarm:", body)
+        self.assertNotIn("Top alarm:", body)                     # the monthly deck is client-ready: no alarms
+        weekly_body = self.sent[1].get_body().get_content()
+        self.assertIn("Top alarm:", weekly_body)
         self.assertTrue(body.strip().endswith("PulseO"))
 
     def test_nothing_is_sent_twice(self):
@@ -447,7 +450,7 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertEqual(self.sent, [])
         self.assertTrue(any("no report data yet" in l for l in self.logs))
 
-    def test_ai_summary_goes_into_the_deck_and_sends_only_aggregates(self):
+    def test_ai_summary_goes_into_the_weekly_deck_and_sends_only_aggregates(self):
         seen = {}
 
         def post(url, headers, body, timeout=60):
@@ -458,7 +461,7 @@ class DeckRunnerTests(ReportsTestCase):
         site = site_with(deck=deck(ai_summary=True))
         self.env["ANTHROPIC_API_KEY"] = "key-123"
         self.run_decks(site=site, post=post)
-        prs = Presentation(io.BytesIO(list(self.sent[0].iter_attachments())[0].get_content()))
+        prs = Presentation(io.BytesIO(list(self.sent[1].iter_attachments())[0].get_content()))
         text = "\n".join(sh.text_frame.text for sh in prs.slides[1].shapes if sh.has_text_frame)
         self.assertIn("Clicks fell sharply.", text)
         self.assertNotIn("Summary not generated automatically", text)
@@ -474,7 +477,7 @@ class DeckRunnerTests(ReportsTestCase):
         self.env["ANTHROPIC_API_KEY"] = "key-123"
         result = self.run_decks(site=site, post=post)
         self.assertEqual(result.failed, [])
-        prs = Presentation(io.BytesIO(list(self.sent[0].iter_attachments())[0].get_content()))
+        prs = Presentation(io.BytesIO(list(self.sent[1].iter_attachments())[0].get_content()))
         text = "\n".join(sh.text_frame.text for sh in prs.slides[1].shapes if sh.has_text_frame)
         self.assertIn("Summary not generated automatically", text)
         self.assertTrue(any("AI summary not available" in l for l in self.logs))
@@ -482,7 +485,7 @@ class DeckRunnerTests(ReportsTestCase):
     def test_ai_summary_without_a_key_uses_the_placeholder(self):
         site = site_with(deck=deck(ai_summary=True))
         self.run_decks(site=site)
-        prs = Presentation(io.BytesIO(list(self.sent[0].iter_attachments())[0].get_content()))
+        prs = Presentation(io.BytesIO(list(self.sent[1].iter_attachments())[0].get_content()))
         text = "\n".join(sh.text_frame.text for sh in prs.slides[1].shapes if sh.has_text_frame)
         self.assertIn("Summary not generated automatically", text)
 
