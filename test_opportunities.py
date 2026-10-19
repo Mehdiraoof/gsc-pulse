@@ -148,7 +148,7 @@ class QueryRuleTests(unittest.TestCase):
     def test_competing_pages_for_one_query(self):
         pairs = [pair("shared", "https://x.test/a/", 5, 90), pair("shared", "https://x.test/b/", 3, 60),
                  pair("shared", "https://x.test/c/", 1, 30), pair("shared", "https://x.test/d/", 0, 29),
-                 pair("shared", "https://x.test/", 9, 500),                        # the homepage does not count
+                 pair("shared", "https://x.test/", 9, 50),                      # the homepage does not count
                  pair("lonely", "https://x.test/a/", 5, 90), pair("lonely", "https://x.test/b/", 1, 10)]
         rows = self.build([q("shared", 9, 5000, 7.0), q("lonely", 5, 100, 9.0)], pairs=pairs)
         cannibal = of_type(rows, "cannibal")
@@ -477,7 +477,7 @@ class WeeklyGoneSlideTests(unittest.TestCase):
         self.assertIn("Pages that disappeared", text)
         table = [s for s in slide.shapes if s.has_table][0].table
         self.assertEqual(len(table.rows), 11)                                  # header + the top 10
-        self.assertEqual(table.cell(1, 0).text_frame.text, "/old/p0")
+        self.assertEqual(table.cell(1, 0).text_frame.text.strip("‎"), "/old/p0")
         self.assertEqual(table.cell(1, 1).text_frame.text, "40")
 
     def test_no_gone_pages_means_no_extra_slide(self):

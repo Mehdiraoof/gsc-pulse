@@ -185,7 +185,7 @@ class Inputs:
 # The rules
 # --------------------------------------------------------------------------- #
 
-DOMAIN_LIKE = re.compile(r"www\.|https?:|\.(?:ir|com|net|org|io|app|info|co|me)(?:\b|/)", re.IGNORECASE)
+DOMAIN_LIKE = re.compile(r"\bwww\b|https?:|\.(?:ir|com|net|org|io|app|info|co|me)(?:\b|/)", re.IGNORECASE)
 LANGUAGE_ROOT = re.compile(r"[a-z]{2}(?:-[a-z]{2})?", re.IGNORECASE)
 
 

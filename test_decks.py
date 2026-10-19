@@ -198,7 +198,7 @@ class MonthlyStructureTests(unittest.TestCase):
     def test_pages_show_paths_and_notes_hold_the_full_urls(self):
         slide = self.prs.slides[7]
         pages = tables(slide)[0].table
-        self.assertTrue(pages.cell(1, 0).text.startswith("/guide/"))
+        self.assertTrue(pages.cell(1, 0).text.lstrip("‎").startswith("/guide/"))     # a path reads left to right
         self.assertNotIn("example.test", pages.cell(1, 0).text)
         notes = slide.notes_slide.notes_text_frame.text
         self.assertIn("https://example.test/guide/", notes)
@@ -406,6 +406,10 @@ class PersianTests(unittest.TestCase):
     def test_every_text_is_right_to_left_in_vazirmatn(self):
         for slide in self.prs.slides:
             for p, r in self.runs(slide):
+                if decks.is_url_like(p.text):                                  # paths: left to right, left-aligned
+                    self.assertIsNone(p._p.find(qn("a:pPr")).get("rtl"), r.text)
+                    self.assertEqual(r.font.name, "Vazirmatn", r.text)
+                    continue
                 is_number = r.text.startswith("‎") and r.text.endswith("‎")
                 p_pr = p._p.find(qn("a:pPr"))
                 self.assertIsNotNone(p_pr, r.text)
@@ -461,6 +465,8 @@ class EnglishDeckWithPersianKeywordsTests(unittest.TestCase):
                 for row in t.table.rows:
                     for cell in row.cells:
                         for p in cell.text_frame.paragraphs:
+                            if decks.is_url_like(p.text):                          # paths are Vazirmatn in any deck
+                                continue
                             for r in p.runs:
                                 (persian_fonts if i18n.has_arabic_script(r.text) else english_fonts).add(r.font.name)
         self.assertEqual(persian_fonts, {"Vazirmatn"})
