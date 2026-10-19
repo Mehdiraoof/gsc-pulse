@@ -264,6 +264,12 @@ rest add up to `All` (an English article is then only English). `"other_label": 
 the segment of the pages that match no type (default `Other`; use it before the first reports are
 written, because existing rows keep the old name).
 
+The client deck can use friendlier names without touching the segment names in the sheets: add an
+optional `"deck_label"` to a page type (`{"name": "Song", "regex": "...", "deck_label": "Songs"}`) and
+`"other_deck_label"` at site level for the pages that match no type. Without them the deck uses the
+segment name. In the deck, any address (`/path` or `http...`) is shown left to right even in Persian, and
+slugs longer than about 40 characters are shortened with "…".
+
 To find good rules, write the discovery tab:
 
 ```bash
@@ -392,7 +398,13 @@ rounded to 5. The expected click rate by position is an industry-average estimat
 "opportunities": {"brand_terms": ["yourbrand"], "min_impressions_90d": 300, "target_ctr_top3": 0.08}
 ```
 
-Searches that contain a brand term are skipped. Not built: the "all its top 5 queries fell in position
+Searches that contain a brand term are skipped. Besides `brand_terms`, the deck's site label and the
+bare domain name (`kalameh` for `sc-domain:kalameh.com`) always count as brand terms. The **front page**
+(`/` and any language root such as `/en`) is never a quick win, a page to update or a cannibalization
+case, whatever the config says, and searches that look like an address (`www`, `http`, `.ir`, `.com`...)
+are never suggested as keywords.
+
+Not built: the "all its top 5 queries fell in position
 at once" variant of `check_page` (it needs per-month query data for each page).
 
 **Repairing and rebuilding.** The tool stores a `views_version` in the `State` tab. If you delete a view
