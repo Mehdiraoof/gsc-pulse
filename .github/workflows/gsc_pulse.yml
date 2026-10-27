@@ -27,6 +27,10 @@ on:
         description: "With rebuild_deck_site: monthly, weekly or both (default both)"
         required: false
         default: ""
+      rebuild_content_site:
+        description: "Refresh the content dashboard of this one site now (a name from SITES_JSON), even if it was refreshed this month"
+        required: false
+        default: ""
       mark_decks_site:
         description: "For a site that just got new Reports sheets: mark its latest decks as already sent, email nothing (a name from SITES_JSON)"
         required: false
@@ -74,6 +78,7 @@ jobs:
           REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
           REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
           MARK_DECKS_SITE: ${{ inputs.mark_decks_site }}
+          REBUILD_CONTENT_SITE: ${{ inputs.rebuild_content_site }}
           REBUILD_VIEWS: ${{ inputs.rebuild_views }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}

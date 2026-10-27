@@ -27,6 +27,7 @@ ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "r
                   "page_types", "first_match_wins", "other_label", "other_deck_label", "opportunities",
                   "thresholds",
                   "weekly_segments",
+                  "content",
                   "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
@@ -73,6 +74,7 @@ class Site:
     other_deck_label: str = ""           # what the client deck calls that segment (else other_label)
     opportunities: dict = field(default_factory=dict)    # overrides of OPPORTUNITY_DEFAULTS (+ brand_terms)
     deck: "DeckConfig" = None
+    content: "ContentConfig" = None                      # the content dashboard (v2.5)
     enabled: bool = True
     auth: str = "robot"             # robot: the service account; me: the owner's own Google account
 
@@ -81,11 +83,13 @@ class Site:
         ids = [v for v in (self.site_url, self.sheet_id, self.history_sheet_id,
                            self.reports_sheet_id) if v]
         return (ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
-                + list(self.opportunities.get("brand_terms", [])))
+                + list(self.opportunities.get("brand_terms", [])) + self.content.sensitive_values())
 
     def __post_init__(self):
         if self.deck is None:
             self.deck = DeckConfig()
+        if self.content is None:
+            self.content = ContentConfig()
 
     def deck_label(self, segment: str) -> str:
         """What the client deck calls a segment: its page type's deck_label, else the label itself."""
@@ -205,6 +209,124 @@ def _parse_deck(value, where: str) -> DeckConfig:
     return cfg
 
 
+
+
+# --------------------------------------------------------------------------- #
+# The content dashboard (v2.5)
+# --------------------------------------------------------------------------- #
+
+CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "seasonal_regex", "min_gap_impressions_90d")
+CONTENT_TAB_FIELDS = ("name", "url_regex", "exclude_regex", "description", "gaps", "landing")
+RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas")
+MAX_CONTENT_TABS = 8
+
+
+@dataclass
+class ContentTab:
+    name: str
+    url_regex: str
+    exclude_regex: str = ""
+    description: str = ""
+    gaps: bool = False             # new-topic rows (content gaps) are proposed for this tab
+    landing: bool = False          # landing pages: Navigational intent, Pillar content type
+
+    def matches(self, url: str) -> bool:
+        """Does this page belong to the tab? Tried on the URL as given and on its readable form."""
+        from urllib.parse import unquote
+        for candidate in {url, unquote(url, errors="replace")}:
+            if re.search(self.url_regex, candidate) and not (
+                    self.exclude_regex and re.search(self.exclude_regex, candidate)):
+                return True
+        return False
+
+
+@dataclass
+class ContentConfig:
+    enabled: bool = False
+    sheet_id: str = ""                                   # empty: PulseO creates the file
+    tabs: list = field(default_factory=list)             # [ContentTab]
+    seasonal_regex: str = ""
+    min_gap_impressions_90d: int = 100
+
+    def sensitive_values(self) -> list:
+        rules = [t.url_regex for t in self.tabs] + [t.exclude_regex for t in self.tabs]
+        return [v for v in [self.sheet_id, self.seasonal_regex] + rules if v]
+
+    def tab_of(self, url: str):
+        """The first tab a page belongs to, or None (pages that match no tab are ignored)."""
+        return next((t for t in self.tabs if t.matches(url)), None)
+
+
+def _regex(value, at: str, key: str, required: bool) -> str:
+    if value is None or value == "":
+        if required:
+            raise SitesConfigError(f"{at}: '{key}' is required")
+        return ""
+    if not isinstance(value, str):
+        raise SitesConfigError(f"{at}: '{key}' must be text")
+    try:
+        re.compile(value)
+    except re.error:
+        raise SitesConfigError(f"{at}: '{key}' is not a valid regular expression") from None
+    return value
+
+
+def _parse_content(value, where: str) -> "ContentConfig":
+    """The optional `content` block. Messages say where the problem is, never what the value is."""
+    if value is None:
+        return ContentConfig()
+    at = f"{where}, content"
+    if not isinstance(value, dict):
+        raise SitesConfigError(f"{at}: must be a JSON object")
+    if set(value) - set(CONTENT_FIELDS):
+        raise SitesConfigError(f"{at}: has an unknown field (allowed: {', '.join(CONTENT_FIELDS)})")
+    enabled = value.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise SitesConfigError(f"{at}: 'enabled' must be true or false")
+    cfg = ContentConfig(enabled=enabled)
+    if not enabled:
+        return cfg
+    sheet_id = value.get("sheet_id", "")
+    if sheet_id is not None and (not isinstance(sheet_id, str) or len(sheet_id) > 200):
+        raise SitesConfigError(f"{at}: 'sheet_id' must be text")
+    cfg.sheet_id = (sheet_id or "").strip()
+    cfg.seasonal_regex = _regex(value.get("seasonal_regex"), at, "seasonal_regex", False)
+    gap = value.get("min_gap_impressions_90d", 100)
+    if isinstance(gap, bool) or not isinstance(gap, (int, float)) or gap < 1:
+        raise SitesConfigError(f"{at}: 'min_gap_impressions_90d' must be a number, 1 or more")
+    cfg.min_gap_impressions_90d = gap
+    tabs = value.get("tabs")
+    if not isinstance(tabs, list) or not 1 <= len(tabs) <= MAX_CONTENT_TABS:
+        raise SitesConfigError(f"{at}: 'tabs' must be a list of 1 to {MAX_CONTENT_TABS} "
+                               f"{{name, url_regex}} objects")
+    seen = set()
+    for i, item in enumerate(tabs, start=1):
+        tat = f"{at}, tab {i}"
+        if not isinstance(item, dict) or "name" not in item or "url_regex" not in item \
+                or set(item) - set(CONTENT_TAB_FIELDS):
+            raise SitesConfigError(f"{tat}: must be an object with 'name' and 'url_regex' "
+                                   f"(optional: {', '.join(CONTENT_TAB_FIELDS[2:])})")
+        name = item["name"]
+        if not isinstance(name, str) or not TYPE_NAME_PATTERN.fullmatch(name.strip()):
+            raise SitesConfigError(f"{tat}: 'name' must be a short label (letters, digits, "
+                                   f"space, - and _)")
+        name = name.strip()
+        if name.lower() in RESERVED_CONTENT_TABS or name.lower() in seen:
+            raise SitesConfigError(f"{tat}: the name is reserved or used by another tab")
+        seen.add(name.lower())
+        for key in ("gaps", "landing"):
+            if key in item and not isinstance(item[key], bool):
+                raise SitesConfigError(f"{tat}: '{key}' must be true or false")
+        description = item.get("description", "")
+        if not isinstance(description, str) or len(description) > 300:
+            raise SitesConfigError(f"{tat}: 'description' must be short text")
+        cfg.tabs.append(ContentTab(
+            name=name, url_regex=_regex(item["url_regex"], tat, "url_regex", True),
+            exclude_regex=_regex(item.get("exclude_regex"), tat, "exclude_regex", False),
+            description=description.strip(),
+            gaps=item.get("gaps", i == 1),              # content gaps go to the first tab unless said otherwise
+            landing=item.get("landing", "landing" in name.lower())))
+    return cfg
 
 
 def _flag(entry: dict, key: str, where: str) -> bool:
@@ -392,6 +514,7 @@ def parse_sites_json(raw: str) -> list:
             other_deck_label=(_parse_deck_label(entry["other_deck_label"], where, "other_deck_label")
                               if entry.get("other_deck_label") is not None else ""),
             deck=_parse_deck(entry.get("deck"), where),
+            content=_parse_content(entry.get("content"), where),
             enabled=enabled,
         )
         if site.other_label.lower() in {t["name"].lower() for t in site.page_types} | {"all"}:

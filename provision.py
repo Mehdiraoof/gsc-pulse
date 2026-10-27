@@ -26,7 +26,8 @@ import tabs
 ROOT_FOLDER = "PulseO"
 INDEX_NAME = "PulseO · Index"
 INDEX_TAB = "Sites"
-INDEX_HEADER = ["name", "data_id", "history_id", "reports_id", "created_at", "emailed_at"]
+INDEX_HEADER = ["name", "data_id", "history_id", "reports_id", "created_at", "emailed_at", "content_id"]
+INDEX_LAST = "G"                # the last column of the Index tab
 FOLDER, SHEET = "application/vnd.google-apps.folder", "application/vnd.google-apps.spreadsheet"
 KINDS = (("data", "PulseO Data"), ("history", "PulseO History"), ("reports", "PulseO Reports"))
 RETRIES = 5
@@ -85,7 +86,7 @@ def _open_index(drive, sheets) -> str:
         "updateSheetProperties": {"properties": {"sheetId": titles[first], "title": INDEX_TAB,
                                                  "gridProperties": {"frozenRowCount": 1}},
                                   "fields": "title,gridProperties.frozenRowCount"}}]}))
-    tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!A1:F1", [INDEX_HEADER])])
+    tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!A1:{INDEX_LAST}1", [INDEX_HEADER])])
     return index_id
 
 
@@ -100,7 +101,7 @@ def _row_of(rows: list, name: str):
 def _save_row(sheets, index_id: str, row_no, row: list, rows_count: int) -> int:
     if row_no is None:
         row_no = rows_count + 2
-    tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!A{row_no}:F{row_no}", [row])])
+    tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!A{row_no}:{INDEX_LAST}{row_no}", [row])])
     return row_no
 
 
@@ -117,7 +118,7 @@ def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
         return result
 
     index_id = _open_index(drive, sheets)
-    rows = tabs.read_rows(sheets, index_id, INDEX_TAB, "F")
+    rows = tabs.read_rows(sheets, index_id, INDEX_TAB, INDEX_LAST)
     row_no, row = _row_of(rows, site.name)
     ids = {kind: configured[kind] or row[1 + i] for i, (kind, _) in enumerate(KINDS)}
     label = site.deck.site_label or site.name
@@ -158,3 +159,50 @@ def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
             _save_row(sheets, index_id, row_no, row, count)
             result.emailed = True
     return result
+
+
+# --------------------------------------------------------------------------- #
+# The content dashboard file (v2.5): one more sheet of a site, remembered in the Index
+# --------------------------------------------------------------------------- #
+
+def _site_folder(drive, site, label: str) -> str:
+    """The folder of the site's other sheets (wherever the owner has moved it), else the one
+    PulseO makes itself."""
+    if site.sheet_id:
+        try:
+            parents = drive.files().get(fileId=site.sheet_id, fields="parents").execute(
+                num_retries=RETRIES).get("parents", [])
+            if parents:
+                return parents[0]
+        except Exception:  # noqa: BLE001  fall back to the folder PulseO keeps
+            pass
+    return ensure_folder(drive, label, ensure_folder(drive, ROOT_FOLDER))
+
+
+def content_file(drive, sheets, site, label: str, notify=None, log=print):
+    """
+    The content dashboard of a site: (spreadsheet id, created in this call). An id in the
+    configuration wins; else the one in the Index; else a new, empty spreadsheet named
+    "[label] Content Dashboard" is made next to the site's other sheets and remembered in the
+    Index. The owner gets one email with the link when it is made. Nothing here prints an ID.
+    """
+    if site.content.sheet_id:
+        return site.content.sheet_id, False
+    index_id = _open_index(drive, sheets)
+    rows = tabs.read_rows(sheets, index_id, INDEX_TAB, INDEX_LAST)
+    row_no, row = _row_of(rows, site.name)
+    if row[6]:
+        return row[6], False
+    file_id = create(drive, f"[{label}] Content Dashboard", SHEET, _site_folder(drive, site, label))
+    row[6] = file_id
+    tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!G1", [[INDEX_HEADER[6]]])])
+    _save_row(sheets, index_id, row_no, row, len(rows))                      # remembered at once
+    if notify:
+        try:
+            notify(f"Content dashboard ready · {label}",
+                   f"The content dashboard for {label} is ready:\n\n{link(file_id)}\n\n"
+                   f"It is in your Drive, next to the other sheets of this site. Move it wherever "
+                   f"you like.\n")
+        except Exception as e:  # noqa: BLE001  the file exists; the Index lists it
+            log(f"  content: could not send the 'dashboard ready' email ({type(e).__name__})")
+    return file_id, True

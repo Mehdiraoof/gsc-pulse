@@ -43,6 +43,7 @@ except ImportError:
     sys.exit(1)
 
 import auth
+import content_run
 import deck_runner
 import mailer
 import page_discovery
@@ -314,6 +315,7 @@ class SiteRun:
     reports_text: str = "off"
     reports_result: object = None    # reports.ReportsResult, when the reports ran
     views_text: str = "off"
+    content_text: str = "off"
     decks_text: str = "off"
     gsc: object = None               # the Google clients this site is read and written with
     sheets: object = None
@@ -434,6 +436,54 @@ def sync_views(sheets_service, run: SiteRun, rebuild_views: bool = False):
     print()
 
 
+def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False):
+    """Phase 1c2: the content dashboard of one site (own-access sites only: PulseO has to be able
+    to create the file in the owner's Drive)."""
+    site = run.site
+    if not site.content.enabled:
+        return
+    site_header(run, "Content")
+    if site.auth != "me" or run.drive is None:
+        run.content_text = "off (needs own access)"
+        print('content: off (the dashboard is created in your Drive: use "auth": "me")\n')
+        return
+    if not site.reports_sheet_id:
+        run.content_text = "off (no reports sheet)"
+        print("content: off (no reports sheet)\n")
+        return
+    today = date.today()
+
+    def fetch(dimensions, first, last, filter_groups=None):
+        rows = []
+        for page in iter_gsc_pages(gsc_service, site.site_url, first.isoformat(), last.isoformat(),
+                                   dimensions, history.HISTORY_ROW_LIMIT,
+                                   num_retries=history.RETRIES, filter_groups=filter_groups):
+            rows.extend(page)
+        return rows
+
+    final = history.last_final_date(
+        functools.partial(iter_gsc_pages, gsc_service, site.site_url, num_retries=history.RETRIES),
+        today)
+    if final is None:
+        run.content_text = "waiting for final data"
+        print("content: no final Search Console data available yet\n")
+        return
+    notify = (lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None
+    try:
+        result = content_run.run_content(run.drive, run.sheets, site, site.reports_sheet_id, fetch,
+                                         final, today, notify, print, force=force)
+    except Exception:
+        run.content_text = "failed"
+        raise
+    run.content_text = result.text()
+    print(f"content: {result.text()}")
+    if result.refreshed and not result.created and smtp:
+        subject, body = content_run.owner_email(result, site.deck.site_label or site.name,
+                                                provision.link(result.file_id))
+        notify_owner(smtp, subject, body)
+    print()
+
+
 def deck_rebuild_for(run: SiteRun, everything: bool, site_name: str, kind: str):
     """
     What to rebuild for this site: True (both decks, every site: the rebuild_decks input), a set
@@ -493,6 +543,7 @@ def print_summary(runs: list):
         print(f"  {run.name}: {run.status} | rows written: v1 {run.v1_rows}, "
               f"history +{appended} | history: {run.history_text} | reports: {run.reports_text}"
               + (f" | views: {run.views_text}" if run.site.reports_sheet_id else "")
+              + (f" | content: {run.content_text}" if run.site.content.enabled else "")
               + (f" | decks: {run.decks_text}" if run.site.deck.enabled else ""))
     print()
 
@@ -680,6 +731,7 @@ def main():
     rebuild_deck_site = os.environ.get("REBUILD_DECK_SITE", "").strip().lower()      # one site only
     rebuild_deck_kind = os.environ.get("REBUILD_DECK_KIND", "").strip().lower()       # monthly | weekly | both
     mark_decks_site = os.environ.get("MARK_DECKS_SITE", "").strip().lower()           # one site: mark decks sent, email nothing
+    rebuild_content_site = os.environ.get("REBUILD_CONTENT_SITE", "").strip().lower() # one site: refresh its content dashboard now
     rebuild_views = os.environ.get("REBUILD_VIEWS", "").strip().lower() in ("1", "true", "yes")
     smtp = mailer.settings_from_env(os.environ)
     if smtp:
@@ -756,6 +808,17 @@ def main():
             continue
         try:
             sync_views(r.sheets, r, rebuild_views)
+        except Exception as e:
+            fail_site(r, e)
+            print()
+
+    # ---- Phase 1c2: content dashboards (a Google Sheet in the owner's Drive) -----
+    for r in enabled:
+        if not r.v1_done or r.status == "failed" and r.reports_result is None:
+            continue
+        try:
+            sync_content(r.gsc, r, smtp,
+                         force=bool(rebuild_content_site) and r.name.lower() == rebuild_content_site)
         except Exception as e:
             fail_site(r, e)
             print()

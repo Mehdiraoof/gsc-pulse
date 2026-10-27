@@ -311,7 +311,7 @@ class FakeValues:
     def __init__(self, fs):
         self.fs = fs
 
-    def get(self, spreadsheetId, range):
+    def get(self, spreadsheetId, range, valueRenderOption=None, dateTimeRenderOption=None):
         def run():
             tab, c1, r1, c2, r2 = parse_range(range)
             t = self.fs._tab(spreadsheetId, tab)
