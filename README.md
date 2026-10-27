@@ -559,6 +559,14 @@ name, so do not rename it. If you delete one of a site's sheets, the Index still
 site fails with a Google "not found" error until you clear that ID cell in the Index; PulseO then
 creates a new, empty sheet for it on the next run.
 
+**Moving an existing `robot` site to `me`.** Change `"auth"` to `"me"` and delete its three
+`sheet_id` / `history_sheet_id` / `reports_sheet_id` lines (the old manually made sheets cannot be
+opened with the `me` permission and stay untouched as an archive). PulseO creates new sheets,
+backfills the history (it can take more than one run) and sends the "sheets ready" email. The new
+Reports sheet has an empty `State`, so to avoid sending the decks again run the workflow with
+**mark_decks_site** set to the site name: it marks the latest weekly and monthly decks as sent and
+emails nothing. Use it for every run until the decks show `marked as sent`.
+
 Before a `me` site is synced PulseO checks that the exact `site_url` is in your Search Console
 property list with a permission above *unverified user*. If not, the site is skipped, the run goes
 red (`site-2: failed (… no Search Console access with "me" auth)`, no property name in the log) and you

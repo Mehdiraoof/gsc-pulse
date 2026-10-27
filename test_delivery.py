@@ -341,6 +341,17 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertIn("monthly", result.sent)
         self.assertEqual(self.state()["monthly_deck_sent"], "2026-10")
 
+    def test_mark_only_moves_the_state_and_emails_nothing(self):
+        self.sent.clear()
+        deck_result = deck_runner.run_decks(
+            self.sheets, RID, self.site, self.smtp, self.env, log=self.logs.append,
+            send=lambda s, m: self.sent.append(m), fetch_logo=lambda url: None, mark_only=True)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(deck_result.sent, [])
+        self.assertEqual(self.state(), {"monthly_deck_sent": "2026-09", "weekly_deck_sent": "2026-W41"})
+        self.run_decks()                                           # a normal run afterwards sends nothing
+        self.assertEqual(self.sent, [])
+
     def test_rebuild_sends_both_even_if_already_sent(self):
         self.run_decks()
         result = self.run_decks(rebuild=True)

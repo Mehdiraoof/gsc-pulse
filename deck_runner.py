@@ -6,6 +6,8 @@ PulseO: deciding when decks are built, building them, and emailing them
 * "Already sent" is tracked in the `State` tab of the site's Reports sheet, and moved
   forward right after each email went out, so a failure of one deck never loses the
   state of a deck that did send.
+* `mark_only` moves the state to the latest period without building or sending anything (used when
+  a site gets new Reports sheets, so the decks that already went out are not sent again).
 * `rebuild` builds and sends decks now, whatever the state says: True for both decks, or a set of
   kinds ({"monthly"}) for just those.
 
@@ -81,7 +83,7 @@ def email_text(report: dd.Report, cfg, lang: str, report_title: str, period: str
 
 def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, log=print,
               scrub=lambda s: s, template_dir: str = TEMPLATE_DIR, send=mailer.send,
-              post=summary._post, fetch_logo=decks.fetch_logo) -> DeckResult:
+              post=summary._post, fetch_logo=decks.fetch_logo, mark_only: bool = False) -> DeckResult:
     cfg = site.deck
     wanted = {"monthly", "weekly"} if rebuild is True else set(rebuild or ())     # decks to build whatever the state says
     result = DeckResult()
@@ -98,6 +100,12 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
         report = load(sheets, reports_id, site)
         if report is None:
             log(f"decks: {kind}: no report data yet")
+            result.skipped.append(kind)
+            continue
+        if mark_only:                                    # new Reports sheet, decks already went out: nothing is emailed
+            if state.get(STATE_KEY[kind], (0, ""))[1] != report.period:
+                write_state(sheets, reports_id, state, STATE_KEY[kind], report.period)
+            log(f"decks: {kind} marked as sent for the latest period (nothing was emailed)")
             result.skipped.append(kind)
             continue
         if kind not in wanted and state.get(STATE_KEY[kind], (0, ""))[1] == report.period:
