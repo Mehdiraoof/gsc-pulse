@@ -296,12 +296,15 @@ def initial_setup(sheets, file_id: str, label: str, tab_list: list):
     reqs = [{"updateSheetProperties": {"properties": {"sheetId": ids[names[0]], "title": names[0]},
                                        "fields": "title"}}]
     extra = names[1:] + [GUIDE, SEEDS, IDEAS, STATE]
-    for i, name in enumerate(extra, start=1):
-        ids[name] = 100 + i
-        props = {"sheetId": ids[name], "title": name}
+    for name in extra:
+        props = {"title": name}
         if name == STATE:
             props["hidden"] = True
         reqs.append({"addSheet": {"properties": props}})
+    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": reqs}))
+    for name, reply in zip(extra, made["replies"][1:]):
+        ids[name] = reply["addSheet"]["properties"]["sheetId"]
+    reqs = []
     for t in tab_list:
         reqs += tab_requests(ids[t.name])
     reqs += small_tab_requests(ids[SEEDS], SEEDS_HEADER, {"Language": ["fa", "en"], "Active": ["Yes", "No"]})
@@ -321,23 +324,24 @@ def initial_setup(sheets, file_id: str, label: str, tab_list: list):
 def ensure_extra_tabs(sheets, file_id: str):
     """Seeds, ideas and state tabs for a file that was made without them (for example by hand)."""
     titles, _ = history.grid_info(sheets, file_id)
-    reqs, made = [], []
-    for name, header, dropdowns, flt in ((SEEDS, SEEDS_HEADER, {"Language": ["fa", "en"], "Active": ["Yes", "No"]}, False),
-                                         (IDEAS, IDEAS_HEADER, {"Decision": ["Add", "Ignore", "Later"]}, True),
-                                         (STATE, STATE_HEADER, None, False)):
-        if name in titles:
-            continue
-        sid = 200 + len(made)
-        props = {"sheetId": sid, "title": name}
+    wanted = [(n, h, d, f) for n, h, d, f in (
+        (SEEDS, SEEDS_HEADER, {"Language": ["fa", "en"], "Active": ["Yes", "No"]}, False),
+        (IDEAS, IDEAS_HEADER, {"Decision": ["Add", "Ignore", "Later"]}, True),
+        (STATE, STATE_HEADER, None, False)) if n not in titles]
+    if not wanted:
+        return
+    reqs = []
+    for name, _, _, _ in wanted:
+        props = {"title": name}
         if name == STATE:
             props["hidden"] = True
         reqs.append({"addSheet": {"properties": props}})
-        reqs += small_tab_requests(sid, header, dropdowns, flt)
-        made.append((name, header))
-    if not reqs:
-        return
+    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": reqs}))
+    reqs = []
+    for (name, header, dropdowns, flt), reply in zip(wanted, made["replies"]):
+        reqs += small_tab_requests(reply["addSheet"]["properties"]["sheetId"], header, dropdowns, flt)
     history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": reqs}))
-    tabs.patch_cells(sheets, file_id, [(f"'{n}'!A1:{letters(len(h) - 1)}1", [h]) for n, h in made])
+    tabs.patch_cells(sheets, file_id, [(f"'{n}'!A1:{letters(len(h) - 1)}1", [h]) for n, h, _, _ in wanted])
 
 
 def sheet_info(sheets, file_id: str) -> dict:
