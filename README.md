@@ -531,6 +531,66 @@ paste into Claude yourself.
 
 ---
 
+## The content dashboard (v2.5)
+
+A content database per site, in your Drive: one row per published page, the keyword it should
+target, how it performs (last 90 days), what to do with it and why, plus rows for new topics the
+site has no page for. It needs a site with `"auth": "me"` (the file is created in your Drive) and a
+`content` block:
+
+```json
+"content": {
+  "enabled": true,
+  "sheet_id": "",
+  "tabs": [
+    {"name": "Articles",      "url_regex": "^https?://(www\\.)?example\\.com/article/.+"},
+    {"name": "Landing Pages", "url_regex": "^https?://(www\\.)?example\\.com/[^/?#.]+$",
+     "exclude_regex": "/(en|home)$"}
+  ],
+  "seasonal_regex": "",
+  "min_gap_impressions_90d": 100
+}
+```
+
+* `tabs`: one tab per page group; a page belongs to the **first** tab whose `url_regex` matches
+  (and `exclude_regex` does not). Pages that match no tab are ignored. Optional per tab:
+  `description` (a line in the Guide), `gaps` (new topics are proposed for this tab; default: the
+  first tab only) and `landing` (Navigational intent, Pillar content type; default: the name contains
+  "landing").
+* `sheet_id` empty: the file `[<site label>] Content Dashboard` is created next to the site's other
+  sheets, remembered in `PulseO · Index` (column `content_id`) and you get one email,
+  `Content dashboard ready · <label>`, with the link. Move it wherever you like. A `sheet_id` you
+  write yourself must be a file created this way (the `drive.file` permission cannot open other files).
+* Brand terms come from `opportunities.brand_terms` (plus the label and the domain name).
+
+**The file never names PulseO or any tool** (titles, headers, notes, guide): you can present it as
+your own work. Tabs: one per page group, `Guide`, `Keyword Seeds`, `Keyword Ideas`, and a hidden
+`_state` (bookkeeping, do not edit).
+
+**Who owns which cell.** PulseO writes the grey and orange columns (priority, score, clicks,
+impressions, CTR, position, change on last month and last year, AI Overview impressions, the
+primary keyword's numbers, ranking queries, secondary keywords, competing pages, impact since update,
+suggested action, why, alerts). Everything else is yours and is **never overwritten** after the row
+exists: primary keyword, status, to do, entities, notes and the planning columns. `Query Fan-outs` and
+`Recommendations` are filled only while empty. Columns are found by their **header name**, so you can
+move or add columns. The only status PulseO ever sets is `Gone` (a published page that had traffic
+and has had no impressions for two full months).
+
+**Each month** (after the monthly report, or with the workflow input **rebuild_content_site**): new
+pages get a row, owned cells are updated, new topics are proposed (searches the site is shown for but
+that no content page answers, grouped by their main words; at most 20 per tab; a row you delete is
+not proposed again) and each tab is sorted by Score. You get a short owner-only email with the
+numbers and the top urgent rows (it is not sent to the deck recipients).
+
+**Keyword ideas.** Fill `Keyword Seeds` (seed, language fa/en, optional country, Active = Yes).
+Once a week PulseO asks Google's suggestion endpoint around each active seed (the seed, the seed
+plus each letter, question words before it) and writes new ideas to `Keyword Ideas`. Mark an idea
+**Add** and the next monthly refresh turns it into a new-topic row. The endpoint is unofficial: it is
+used at one call per second, at most 1,500 calls a run, answers are cached for 30 days, and on HTTP
+429/403 the run stops softly (the rest of the run is not affected).
+
+---
+
 ## Using your own Google access
 
 Clients are sometimes uneasy about adding a strange robot address (`…@…iam.gserviceaccount.com`)
