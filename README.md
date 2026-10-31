@@ -594,9 +594,11 @@ of a row are skipped, so an idea you delete or mark Ignore or Later does not com
 used at one call per second, at most 1,500 calls a run, answers are cached for 30 days, and on HTTP
 429/403 the run stops softly (the rest of the run is not affected).
 
-**Addresses are compared normalized**: `#fragments` and `?queries` are ignored, a trailing or doubled
-slash does not matter, and `http`/`https` and `www.` are the same. So `/page/#2`, `/page/` and `/page`
-are one page.
+**Addresses are compared normalized**: percent-encoding is decoded, letters are NFC, `#fragments` and
+`?queries` are ignored, a trailing or doubled slash does not matter, and `http`/`https` and `www.` are
+the same. So `/page/#2`, `/page/` and `/page` are one page. A half space (ZWNJ) or a tatweel makes a
+**different** address (as in Search Console): each is its own row, and both get the alert
+`Duplicate URL`. Rows are never merged or removed because of that.
 
 ### Importing an old sheet (v2.6)
 
@@ -617,7 +619,9 @@ or let anyone with the link view it); the ids live in the secret, never in the r
   are Notes/Checklist. Columns the dashboard no longer has (Pillar, Cluster, Topic, Page type, ...) are
   written into Notes/Checklist as `Pillar: x · Cluster: y`. `N/A`, `TBD` and empty cells are empty;
   dates such as `October 27, 2024` become `2024-10-27`.
-* Each old row is matched to a page, in this order: the normalized URL, then the old Slug against the
+* Each old row is matched to a page, in this order: the normalized URL (exact); only if that finds
+  nothing, the same address spelled with or without a half space or tatweel (when it points to one
+  free page, never merging two addresses); then the old Slug against the
   page's address, then the old Primary Keyword against the page's top searches, then against a
   new-topic row of the file. The `Import Log` tab says how every row matched.
 * A matched row takes the old values for everything that is yours (Primary Keyword, Status, To Do and

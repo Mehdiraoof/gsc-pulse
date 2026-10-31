@@ -201,12 +201,14 @@ class Index:
 
     def __init__(self, recs: list, ctx):
         self.by_url, self.by_last, self.by_path = {}, {}, {}
+        self.by_folded = {}                 # the fallback: spelling without half space / tatweel
         self.by_query, self.by_topic = {}, {}
         for rec in recs:
             row = rec["row"]
             url = str(row.get(content.URL, "")).strip()
             if url:
                 self.by_url.setdefault(content.url_key(url), rec)
+                self.by_folded.setdefault(content.fold_url(content.url_key(url)), []).append(rec)
                 path = slug_key(url)
                 self.by_path.setdefault(path, []).append(rec)
                 self.by_last.setdefault(path.rsplit("/", 1)[-1], []).append(rec)
@@ -245,6 +247,13 @@ def find_matches(old_rows: list, index: Index) -> dict:
         else:
             claimed.add(id(rec))
             found[old.n] = ("url", rec)
+    for old in old_rows:                          # 1b. the same address spelled with / without a half space
+        if old.n in found or not old.url:         #     or tatweel: only when the exact address found nothing,
+            continue                              #     and only if it points to one free page
+        hits = _free(index.by_folded.get(content.fold_url(content.url_key(old.url)), []), claimed)
+        if len(hits) == 1:
+            claimed.add(id(hits[0]))
+            found[old.n] = ("url~", hits[0])
     for old in old_rows:                                              # 2. the slug
         if old.n in found or not old.slug:
             continue
@@ -325,7 +334,8 @@ class ImportReport:
 
     def text(self) -> str:
         c = self.count
-        return (f"{self.source_rows} old rows: {c('url')} by URL, {c('slug')} by slug, "
+        return (f"{self.source_rows} old rows: {c('url')} by URL, {c('url~')} by URL spelled with or "
+                f"without a half space or tatweel, {c('slug')} by slug, "
                 f"{c('keyword')} by keyword, {c('topic')} to a topic row; "
                 f"{c('added') + c('duplicate')} added as new rows"
                 + (f", {self.skipped} skipped (no keyword, no URL)" if self.skipped else ""))
@@ -339,7 +349,7 @@ def apply(old_rows: list, recs: list, ctx, tab: str) -> ImportReport:
     for old in old_rows:
         kind, rec = matches[old.n]
         status = old.status
-        if kind in ("url", "slug", "keyword", "topic"):
+        if kind in ("url", "url~", "slug", "keyword", "topic"):
             vals = values_for(old, rec, kind)
             rec["row"].update(vals)
             rec["import"] = {**rec.get("import", {}), **vals}
@@ -366,7 +376,7 @@ def apply(old_rows: list, recs: list, ctx, tab: str) -> ImportReport:
 
 
 LOG_HEADER = ["Source tab", "Source row", "Primary Keyword", "Status", "Old URL", "Matched by", "Page"]
-KIND_TEXT = {"url": "URL", "slug": "Slug", "keyword": "Keyword", "topic": "Topic row",
+KIND_TEXT = {"url": "URL", "url~": "URL (half space / tatweel differs)", "slug": "Slug", "keyword": "Keyword", "topic": "Topic row",
              "added": "No match: added as a new row", "duplicate": "Same URL as an earlier row: added",
              "skipped": "Skipped: no keyword and no URL"}
 

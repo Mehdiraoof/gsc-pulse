@@ -116,14 +116,16 @@ _URL_FOLD = re.compile("[‌‍ـ‎‏]")   # ZWNJ, ZWJ, tatweel, LRM, RLM
 
 def fold_url(text: str) -> str:
     """Letters of an address in one form: NFC, no half space (ZWNJ), joiner, tatweel or direction
-    mark. Only for comparing; the sheet keeps the address as it is."""
+    mark. These are different addresses in Search Console, so this is NOT how pages are told apart
+    (url_key keeps them). It is used for two things only: the Duplicate URL alert, and as the
+    fallback when an old sheet's row finds no page by its exact address."""
     return _URL_FOLD.sub("", unicodedata.normalize("NFC", text))
 
 
 def _split_url(url: str):
     """(host without www., path) of a readable address; the path has no query, no fragment, no
     repeated or trailing slash. A relative address has an empty host."""
-    text = fold_url(decode_url(re.sub(r"[?#].*$", "", str(url).strip())))
+    text = unicodedata.normalize("NFC", decode_url(re.sub(r"[?#].*$", "", str(url).strip())))
     m = re.match(r"^(?:[a-z][a-z0-9+.-]*:)?//([^/]*)(.*)$", text, re.IGNORECASE)
     host, path = (m.group(1), m.group(2)) if m else ("", text)
     host = re.sub(r"^www\.", "", host.lower())
@@ -131,8 +133,9 @@ def _split_url(url: str):
 
 
 def url_key(url: str) -> str:
-    """What two rows must share to be the same page: decoded, without #fragment and ?query, a
-    trailing slash or a doubled slash ignored, http/https and www. ignored."""
+    """What two rows must share to be the same page: decoded, NFC, without #fragment and ?query, a
+    trailing slash or a doubled slash ignored, http/https and www. ignored. A half space or a
+    tatweel makes a different address (as it does in Search Console)."""
     host, path = _split_url(url)
     return f"https://{host}{path}" if host else path
 

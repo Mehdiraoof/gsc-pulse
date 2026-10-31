@@ -81,24 +81,31 @@ class CleaningTests(unittest.TestCase):
         self.assertEqual(content.url_key("https://example.test"), content.url_key("https://example.test/"))
         self.assertEqual(content.display_url("https://example.test/a/?x=1#y"), "https://example.test/a/")
 
-    def test_persian_addresses_are_one_page_whatever_the_spelling(self):
+    def test_a_half_space_or_tatweel_makes_a_different_address(self):
         word = "میخواهم"                  # میخواهم
         zwnj = "می‌خواهم"          # می‌خواهم (half space)
         tatweel = "میـخواهم"
         root = "https://example.test/article/"
+        keys = {content.url_key(root + w) for w in (zwnj, word, tatweel)}
+        self.assertEqual(len(keys), 3)                                       # three pages, as in Search Console
+        # ... but the Duplicate URL alert still sees them as look-alikes
+        self.assertEqual(len({content.dup_key(root + w) for w in (zwnj, word, tatweel)}), 1)
+        self.assertEqual(len({content.fold_url(content.url_key(root + w)) for w in (zwnj, word, tatweel)}), 1)
+
+    def test_encoding_nfc_slash_query_fragment_http_and_www_do_not_make_a_different_address(self):
+        zwnj = "می‌خواهم"
+        root = "https://example.test/article/"
         spellings = [
-            root + zwnj, root + word, root + tatweel,
-            root + "%D9%85%DB%8C%E2%80%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85",             # encoded, with half space
-            root + "%D9%85%DB%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85/?x=1#top",              # encoded, slash, query
-            "http://www.example.test/article/" + word + "‌",                      # trailing half space
+            root + zwnj,
+            root + "%D9%85%DB%8C%E2%80%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85",             # percent-encoded
+            root + "%D9%85%DB%8C%E2%80%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85/?x=1#top",     # slash, query, fragment
+            "http://www.example.test/article/" + zwnj,
         ]
         self.assertEqual(len({content.url_key(u) for u in spellings}), 1, [content.url_key(u) for u in spellings])
-        self.assertEqual(len({content.dup_key(u) for u in spellings[:4]}), 1)
         composed, decomposed = root + "آب", root + "آب"   # آب, written two ways
         self.assertNotEqual(composed, decomposed)
         self.assertEqual(content.url_key(composed), content.url_key(decomposed))
-        self.assertNotEqual(content.url_key(root + zwnj), content.url_key(root + word + "ن"))
-        self.assertEqual(ci.slug_key("article/" + zwnj), ci.slug_key("/article/" + tatweel + "/"))
+        self.assertNotEqual(content.url_key(root + zwnj), content.url_key(root + zwnj + "ن"))
 
     def test_the_page_variant_with_most_impressions_names_the_page(self):
         stats = content.build_pages({f"{ROOT}/p/": (1, 10, 5.0), f"{ROOT}/p": (9, 90, 5.0)}, [])
@@ -244,36 +251,65 @@ class MatchingTests(base.Base):
         self.assertTrue(by_row[5].startswith("No match"))
         self.assertTrue(by_row[10].startswith("Skipped"))
 
-    def persian_page(self):
-        word = "میخواهم"
-        gsc = "https://example.test/article/%D9%85%DB%8C%E2%80%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85"
-        pages = dict(base.PAGES)
-        pages[gsc] = (4, 300, 8.0)
-        pairs = list(base.PAIRS) + [("persian search", gsc, 4, 300, 8.0)]
-        return (word, "https://example.test/article/میـخواهم",
-                mock.patch(f"{base.__name__}.PAGES", pages), mock.patch(f"{base.__name__}.PAIRS", pairs))
+    ROOT_A = "https://example.test/article/"
+    ZWNJ_WORD = "می‌خواهم"            # می‌خواهم (half space)
+    PLAIN_WORD = "میخواهم"                  # میخواهم
+    TATWEEL_WORD = "میـخواهم"
 
-    def test_a_persian_page_in_another_spelling_is_matched_by_the_import(self):
-        word, spelled, pages, pairs = self.persian_page()
-        reader = self.reader(rows=[["my keyword", "Briefed", "Write", spelled] + [""] * 8])
+    def with_pages(self, *words):
+        """The invented site also gets articles whose address holds the given spellings (encoded the
+        way Search Console gives them)."""
+        from urllib.parse import quote
+        pages, pairs = dict(base.PAGES), list(base.PAIRS)
+        for i, w in enumerate(words):
+            url = self.ROOT_A + quote(w)
+            pages[url] = (4, 300, 8.0)
+            pairs.append((f"persian search {i}", url, 4, 300, 8.0))
+        return mock.patch(f"{base.__name__}.PAGES", pages), mock.patch(f"{base.__name__}.PAIRS", pairs)
+
+    def persian_rows(self):
+        return [r for r in self.table("Articles")[1]
+                if content.fold_url(str(r.get(content.URL))).endswith(self.PLAIN_WORD)]
+
+    def test_the_import_falls_back_to_the_other_spelling_only_when_the_exact_address_is_missing(self):
+        pages, pairs = self.with_pages(self.ZWNJ_WORD)
+        reader = self.reader(rows=[["my keyword", "Briefed", "Write", self.ROOT_A + self.TATWEEL_WORD] + [""] * 8])
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["url~"])
+        (row_,) = self.persian_rows()
+        self.assertEqual((row_[content.KEY], row_[content.STATUS], row_["Impressions (90d)"]),
+                         ("my keyword", "Briefed", "300"))
+        self.assertIn("half space", result.imports[0][1].text())
+
+    def test_the_exact_address_wins_and_the_other_spelling_stays_a_row_of_its_own(self):
+        pages, pairs = self.with_pages(self.ZWNJ_WORD, self.PLAIN_WORD)
+        reader = self.reader(rows=[["my keyword", "Briefed", "Write", self.ROOT_A + self.PLAIN_WORD] + [""] * 8])
         with pages, pairs:
             result = self.run_import(reader)
         self.assertEqual([e.kind for e in result.imports[0][1].entries], ["url"])
-        rows = [r for r in self.table("Articles")[1] if word in content.fold_url(str(r.get(content.URL)))]
-        self.assertEqual(len(rows), 1)
-        self.assertEqual((rows[0][content.KEY], rows[0][content.STATUS], rows[0]["Impressions (90d)"]),
-                         ("my keyword", "Briefed", "300"))
+        rows = self.persian_rows()
+        self.assertEqual(len(rows), 2)                                         # two addresses, two rows
+        by_status = sorted(r[content.STATUS] for r in rows)
+        self.assertEqual(by_status, ["Briefed", "Published"])
+        for r in rows:
+            self.assertIn("Duplicate URL", r["Alerts"])                        # and the alert says so
 
-    def test_a_persian_page_the_owner_wrote_in_another_spelling_gets_no_second_row(self):
-        word, spelled, pages, pairs = self.persian_page()
+    def test_two_spellings_are_never_merged_by_a_refresh(self):
         self.site = base.make_site()
         self.run_it()
-        self.add_row("Articles", **{content.KEY: "mine", content.URL: spelled, content.STATUS: "Briefed"})
+        self.add_row("Articles", **{content.KEY: "mine", content.URL: self.ROOT_A + self.TATWEEL_WORD,
+                                    content.STATUS: "Briefed"})
+        pages, pairs = self.with_pages(self.ZWNJ_WORD)
         with pages, pairs:
             self.run_it(force=True)
-        rows = [r for r in self.table("Articles")[1] if word in content.fold_url(str(r.get(content.URL)))]
-        self.assertEqual(len(rows), 1)
-        self.assertEqual((rows[0][content.KEY], rows[0]["Impressions (90d)"]), ("mine", "300"))
+            self.run_it(force=True)
+        rows = self.persian_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sorted(r[content.STATUS] for r in rows), ["Briefed", "Published"])
+        mine = next(r for r in rows if r[content.KEY] == "mine")
+        self.assertEqual(mine["Impressions (90d)"], "0")                       # its own address has no data
+        self.assertTrue(all("Duplicate URL" in r["Alerts"] for r in rows))
 
     def test_the_file_still_names_no_tool(self):
         pages, pairs = with_c()
