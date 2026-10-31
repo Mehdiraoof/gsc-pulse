@@ -247,7 +247,7 @@ class RowTests(Base):
 
     def test_the_urgent_rows_go_into_the_owner_note(self):
         subject, body = content_run.owner_email(
-            content_run.ContentResult(month="2026-09", new_pages=2, new_topics=1, gone=1,
+            content_run.ContentResult(month="2026-09", new_pages=2, new_topics=1,
                                       urgent=[("garden shoes", "Update to reach the top 3", "Articles")]),
             "Example", "https://docs.example.test/x")
         self.assertEqual(subject, "Content dashboard refreshed · Example · 2026-09")
