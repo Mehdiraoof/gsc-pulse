@@ -179,7 +179,7 @@ class MatchingTests(base.Base):
         a = next(r for r in self.table("Articles")[1] if r.get(content.KEY) == "garden shoes")
         self.assertEqual(a[content.URL], A)
         self.assertEqual((a[content.KEY], a[content.STATUS], a[content.TODO]), ("garden shoes", "Briefed", "Update"))
-        self.assertEqual((a["Meta Title"], a["One-Sentence Description"], a[content.PUBLISHED_DATE]),
+        self.assertEqual((a["Meta Title"], a["One-Sentence Description"], a["Briefed Date"]),
                          ("Great shoes", "A description", "2024-10-27"))
         self.assertEqual(a["Notes/Checklist"],
                          "Pillar: Shoes · Cluster: Garden\nSecondary keywords before: a, b\nnote a")
