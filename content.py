@@ -110,9 +110,27 @@ def decode_url(url: str) -> str:
     return unquote(re.sub(r"#.*$", "", str(url).strip()), errors="replace")
 
 
+def _split_url(url: str):
+    """(host without www., path) of a readable address; the path has no query, no fragment, no
+    repeated or trailing slash. A relative address has an empty host."""
+    text = decode_url(re.sub(r"[?#].*$", "", str(url).strip()))
+    m = re.match(r"^(?:[a-z][a-z0-9+.-]*:)?//([^/]*)(.*)$", text, re.IGNORECASE)
+    host, path = (m.group(1), m.group(2)) if m else ("", text)
+    host = re.sub(r"^www\.", "", host.lower())
+    return host, "/" + "/".join(p for p in path.split("/") if p)
+
+
 def url_key(url: str) -> str:
-    """What two rows must share to be the same page: decoded, no fragment."""
-    return decode_url(url)
+    """What two rows must share to be the same page: decoded, without #fragment and ?query, a
+    trailing slash or a doubled slash ignored, http/https and www. ignored."""
+    host, path = _split_url(url)
+    return f"https://{host}{path}" if host else path
+
+
+def display_url(url: str) -> str:
+    """A page address as the sheet shows it: readable, without #fragment and ?query (the slash at
+    the end is kept)."""
+    return decode_url(re.sub(r"[?#].*$", "", str(url).strip()))
 
 
 def dup_key(url: str) -> str:
@@ -240,10 +258,12 @@ def build_pages(pages: dict, pairs: list) -> dict:
     """{decoded url: PageStats}. pages: {url: (clicks, impressions, position)} (reports.by_page);
     pairs: [(query, url, clicks, impressions, position)]. Variants that decode to the same
     address are added up."""
-    out = {}
+    out, biggest = {}, {}
     for url, (c, n, p) in pages.items():
         key = url_key(url)
         s = out.setdefault(key, PageStats(url))
+        if n > biggest.get(key, -1):                 # the variant with the most impressions names the page
+            biggest[key], s.url = n, url
         total = s.impressions + n
         s.position = (s.position * s.impressions + p * n) / total if total else 0.0
         s.clicks += c
@@ -344,7 +364,8 @@ def parse_date(cell):
         n = float(cell)
         return date(1899, 12, 30) + timedelta(days=int(n)) if 20000 <= n <= 80000 else None
     t = str(cell).strip().translate(_FA)
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d.%m.%Y", "%b %d, %Y", "%B %d, %Y"):
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d.%m.%Y", "%b %d, %Y", "%B %d, %Y",
+                "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
         try:
             d = datetime.strptime(t, fmt).date()
             if d.year >= 1990:
@@ -382,6 +403,8 @@ def impact_windows(published: date) -> tuple:
 
 ALERT_SEASON = "Seasonal: update 6 weeks before the peak"
 NO_DATA_ALERT = "No search data this month"
+NOT_FOUND_ALERT = "Marked Published, page not found in Search Console"
+NO_PAGE_ALERT = "No fitting page"
 
 
 def season_alert(peak_month: int, today: date) -> str:

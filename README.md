@@ -594,6 +594,40 @@ of a row are skipped, so an idea you delete or mark Ignore or Later does not com
 used at one call per second, at most 1,500 calls a run, answers are cached for 30 days, and on HTTP
 429/403 the run stops softly (the rest of the run is not affected).
 
+**Addresses are compared normalized**: `#fragments` and `?queries` are ignored, a trailing or doubled
+slash does not matter, and `http`/`https` and `www.` are the same. So `/page/#2`, `/page/` and `/page`
+are one page.
+
+### Importing an old sheet (v2.6)
+
+To bring in rows from an older, hand-made sheet, add `import_from` to the `content` block:
+
+```json
+"import_from": [
+  {"sheet_id": "<old sheet id>", "source_tab": "Blog Content Strategy", "target_tab": "Articles"}
+]
+```
+
+It runs **once** (the next refresh after the entry is added), then is recorded as done in the hidden
+`_state` tab. The old sheet is only read, as the service account (share it with the service account,
+or let anyone with the link view it); the ids live in the secret, never in the repo.
+
+* Columns are matched by header name. Synonyms: Suggested Title is Meta Title; Meta Description is
+  One-Sentence Description; Suggested Outlinks is Related URLs; Note, Notes and Note/Suggested Changes
+  are Notes/Checklist. Columns the dashboard no longer has (Pillar, Cluster, Topic, Page type, ...) are
+  written into Notes/Checklist as `Pillar: x · Cluster: y`. `N/A`, `TBD` and empty cells are empty;
+  dates such as `October 27, 2024` become `2024-10-27`.
+* Each old row is matched to a page, in this order: the normalized URL, then the old Slug against the
+  page's address, then the old Primary Keyword against the page's top searches, then against a
+  new-topic row of the file. The `Import Log` tab says how every row matched.
+* A matched row takes the old values for everything that is yours (Primary Keyword, Status, To Do and
+  the planning columns); the performance columns are filled by the dashboard. The old Secondary Keywords
+  of a page row go to its Notes/Checklist, because that column is rewritten every month.
+* An old row that matches nothing is still added, never dropped, with its Status as it is (any word,
+  the dropdowns are not strict): with its URL when it had one, as a topic without a URL when it had
+  none. A topic marked `Published` gets the alert `Marked Published, page not found in Search Console`.
+  A row with neither keyword nor URL is skipped (logged as such).
+
 ---
 
 ## Using your own Google access

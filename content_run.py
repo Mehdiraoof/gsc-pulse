@@ -23,6 +23,7 @@ from googleapiclient.errors import HttpError
 import aio_import
 import autocomplete
 import content
+import content_import
 import content_sheet as cs
 import opportunities
 import periods
@@ -31,6 +32,7 @@ import reports
 import tabs
 
 MAX_IMPACT_CALLS = 60          # per-page before/after lookups in one refresh
+PATCH_CHUNK = 400              # cells written one by one per call
 TOP_URGENT = 5
 
 
@@ -51,6 +53,8 @@ class ContentResult:
     ideas_added: int = 0                            # ideas marked Add that became rows
     autocomplete: str = ""
     file_id: str = ""
+    imports: list = field(default_factory=list)     # [(ImportSpec, ImportReport)] done in this run
+    import_problems: list = field(default_factory=list)   # safe messages of imports that could not run
 
     def text(self) -> str:
         parts = []
@@ -59,6 +63,9 @@ class ContentResult:
         if self.refreshed:
             parts.append(f"refreshed for {self.month}: {self.new_pages} new pages, "
                          f"{self.new_topics} new topics")
+        for _, report in self.imports:
+            parts.append(f"imported {report.text()}")
+        parts += [f"import not done: {p}" for p in self.import_problems]
         if self.ideas or self.autocomplete:
             parts.append(f"ideas +{self.ideas}" + (f" ({self.autocomplete})" if self.autocomplete else ""))
         return ", ".join(parts) or "up to date"
@@ -196,6 +203,7 @@ class Context:
     brand: list
     aio: dict                        # readable url -> AIO impressions of the newest imported month
     seasonal_regex: str
+    read_source: object = None       # spec -> (header, rows) of an old sheet to import, or None
 
 
 def _num(v, digits=None):
@@ -294,7 +302,9 @@ def topic_values(ctx: Context, row: dict, group: list = None) -> dict:
         "Primary KW Impr.": _num(top[1]) if top else "",
         "Primary KW Pos.": _num(top[2], 1) if top and top[2] else "",
         "Ranking Queries": len(hits) or "", "Competing Pages": "", content.IMPACT: "",
-        "Suggested Action": "New page", "Why": why, "Alerts": "No fitting page",
+        "Suggested Action": "New page", "Why": why,
+        "Alerts": (content.NOT_FOUND_ALERT if str(row.get(content.STATUS, "")).strip() == "Published"
+                   else content.NO_PAGE_ALERT),
         "_advice": None, "_keyword": kw}
 
 
@@ -351,10 +361,30 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             if cfg.tab_of(s.url) is not t:
                 continue
             existing_keys.add(key)
-            recs.append({"row": {content.URL: key, content.STATUS: "Published"}, "new": True,
-                         "topic": False, "blank": False, "stats": s})
+            recs.append({"row": {content.URL: content.display_url(s.url), content.STATUS: "Published"},
+                         "new": True, "topic": False, "blank": False, "stats": s})
             result.new_pages += 1
         work[t.name] = recs
+
+    # ---- old sheets to import, once each (content_import.py has the rules) -------------
+    done_imports = []
+    for spec in cfg.imports:
+        key = content_import.spec_key(spec)
+        if state.get("import", key) or spec.target_tab not in work:
+            continue
+        try:
+            if ctx.read_source is None:
+                raise content_import.ImportFailed("there is no way to read the old sheet in this run")
+            header, raw = ctx.read_source(spec)
+        except content_import.ImportFailed as e:
+            result.import_problems.append(str(e))
+            log(f"  content: import skipped ({e})")
+            continue
+        report = content_import.apply(content_import.parse_rows(header, raw), work[spec.target_tab],
+                                      ctx, spec.target_tab)
+        done_imports.append((spec, key, report))
+        result.imports.append((spec, report))
+        log(f"  content: import {report.text()}")
 
     # ---- page rows -----------------------------------------------------------------
     all_urls = [str(rec["row"].get(content.URL, "")) for recs in work.values() for rec in recs]
@@ -368,6 +398,14 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 continue
             if rec["topic"]:                             # a new topic that has no page yet
                 rec["vals"] = topic_values(ctx, row)
+                if rec["new"]:                           # a topic that came from an old sheet
+                    kw = str(row.get(content.KEY, ""))
+                    rec["vals"]["_create"] = {
+                        content.KEY: kw, content.URL: "", content.STATUS: "Inboxed", content.TODO: "Write",
+                        "Intent": content.intent_for(t.landing),
+                        "Keyword Type": content.keyword_type_for(cfg.seasonal_regex, "", kw),
+                        "Content Type": content.content_type_for(t.landing, rec["vals"]["Impressions (90d)"] or 0),
+                        content.SLUG: "", **rec.get("import", {})}
                 continue
             key = content.url_key(row.get(content.URL))
             stats = rec.get("stats") or ctx.data.stats.get(key)
@@ -400,14 +438,15 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 gone=str(row.get(content.STATUS, "")).strip() == "Gone")
             rec["vals"] = vals
             if rec["new"]:
+                address = str(row.get(content.URL, ""))
                 vals["_create"] = {
                     content.KEY: vals["_keyword"],
-                    content.URL: key, content.STATUS: "Published",
+                    content.URL: address, content.STATUS: "Published",
                     content.TODO: vals["_advice"].todo,
                     "Intent": content.intent_for(t.landing),
                     "Keyword Type": "Seasonal" if vals["_seasonal"] else "General",
                     "Content Type": content.content_type_for(t.landing, vals["_impressions"]),
-                    content.SLUG: content.slug_of(key)}
+                    content.SLUG: content.slug_of(address), **rec.get("import", {})}
     # a row whose own keyword cell is empty gets the computed one, whether the row is new or not
     for t in cfg.tabs:
         for rec in work.get(t.name, []):
@@ -495,18 +534,24 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                     columns[name].append(current)
         # new rows have no old values: the lists above hold their computed values already
         cs.write_columns(sheets, file_id, t.name, header, 2, columns)
-        create = {name: [] for name in content.ON_CREATE}
         if extra > 0:
+            names = list(content.ON_CREATE)               # an imported row brings more columns
             for rec in recs[n_old:]:
-                for name in create:
-                    create[name].append(rec["vals"]["_create"].get(name, ""))
+                names += [n for n in rec["vals"]["_create"] if n not in names]
+            create = {name: [rec["vals"]["_create"].get(name, "") for rec in recs[n_old:]] for name in names}
             cs.write_columns(sheets, file_id, t.name, header, 2 + n_old, create)
         updates = []
+        for i, rec in enumerate(recs[:n_old]):            # what an old sheet says about an existing row
+            for name, value in (rec.get("import") or {}).items():
+                c = cs.col_of(header, name)
+                if c is not None:
+                    updates.append((f"'{t.name}'!{cs.letters(c)}{2 + i}", [[value]]))
         for i, rec in enumerate(recs):
             if rec.get("fill_keyword") and cs.col_of(header, content.KEY) is not None:
                 updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, content.KEY))}{2 + i}",
                                 [[rec["fill_keyword"]]]))
-        tabs.patch_cells(sheets, file_id, updates)
+        for i in range(0, len(updates), PATCH_CHUNK):
+            tabs.patch_cells(sheets, file_id, updates[i:i + PATCH_CHUNK])
         cs.sort_by_score(sheets, file_id, sid, header, len(recs))
         result.rows[t.name] = len(recs)
         for rec in recs:
@@ -517,6 +562,12 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
     urgent.sort(key=lambda u: (-u[0], u[1]))
     result.urgent = [(k, a, t) for _, k, a, t in urgent[:TOP_URGENT]]
     result.refreshed = True
+
+    # ---- the import is done: a log for the owner, and never again ---------------------
+    for spec, key, report in done_imports:
+        cs.ensure_import_log(sheets, file_id)
+        tabs.append(sheets, file_id, cs.IMPORT_LOG, content_import.log_rows(spec, report), log)
+        state.set("import", key, ctx.today.isoformat(), ctx.today)
 
 
 # --------------------------------------------------------------------------- #
@@ -565,9 +616,10 @@ def update_ideas(sheets, file_id: str, site, data: Data, state: State, today: da
 
 def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today: date, notify=None,
                 log=print, force: bool = False, http_get=autocomplete.default_http_get,
-                sleep=time.sleep) -> ContentResult:
+                sleep=time.sleep, read_source=None) -> ContentResult:
     """The content dashboard of one site: created if missing, refreshed once per complete month
-    (or when `force`), ideas once a week."""
+    (or when `force`, or when an old sheet is waiting to be imported), ideas once a week.
+    `read_source(spec) -> (header, rows)` reads an old sheet named in `content.import_from`."""
     cfg = site.content
     result = ContentResult()
     label = site.deck.site_label or site.name
@@ -591,16 +643,19 @@ def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today:
     result.month = month
     brand = opportunities.brand_terms_for(site)
     data = Data(fetch, final, brand)
-    if force or created or state.get("meta", "last_refresh") != month:
+    waiting = read_source is not None and any(
+        not state.get("import", content_import.spec_key(s)) for s in cfg.imports)
+    if force or created or waiting or state.get("meta", "last_refresh") != month:
         _, aio_pages = aio_import.load_raw(sheets, reports_id)
         newest = max(aio_pages) if aio_pages else ""
         aio = {}
         for url, n in (aio_pages.get(newest) or {}).items():
             aio[content.url_key(url)] = aio.get(content.url_key(url), 0) + n
         ctx = Context(site=site, data=data, today=today, cm=cm, brand=brand, aio=aio,
-                      seasonal_regex=cfg.seasonal_regex)
+                      seasonal_regex=cfg.seasonal_regex, read_source=read_source)
         refresh(sheets, file_id, site, ctx, state, result, log)
         state.set("meta", "last_refresh", month, today)
+        state.save(sheets, file_id)                   # an import is recorded as done as soon as it is
     update_ideas(sheets, file_id, site, data, state, today, result, http_get, sleep, log)
     state.save(sheets, file_id)
     return result
@@ -610,6 +665,10 @@ def owner_email(result: ContentResult, label: str, link: str) -> tuple:
     """(subject, body) of the owner-only note after a refresh: what changed and what to do first."""
     lines = [f"The content dashboard for {label} was refreshed for {result.month}.", "",
              f"New pages added: {result.new_pages}", f"New topics proposed: {result.new_topics}"]
+    for spec, report in result.imports:
+        lines += ["", f"Old sheet imported into {spec.target_tab}: {report.text()}.",
+                  "Where each old row went is listed in the Import Log tab."]
+    lines += [f"Not imported: {p}" for p in result.import_problems]
     if result.urgent:
         lines += ["", "Top urgent rows:"]
         lines += [f"- {k or '(no keyword yet)'}: {a} [{t}]" for k, a, t in result.urgent]

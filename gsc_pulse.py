@@ -43,6 +43,7 @@ except ImportError:
     sys.exit(1)
 
 import auth
+import content_import
 import content_run
 import deck_runner
 import mailer
@@ -436,6 +437,34 @@ def sync_views(sheets_service, run: SiteRun, rebuild_views: bool = False):
     print()
 
 
+def source_reader(run: SiteRun):
+    """spec -> (header, rows) of an old sheet named in content.import_from. The sheet is read as the
+    service account (it can open sheets shared with it, or with anyone who has the link); the
+    owner's own client is the second try. Nothing is ever written to an old sheet."""
+    clients = []
+
+    def read(spec):
+        if not clients:
+            raw = os.environ.get("GSC_SERVICE_ACCOUNT_JSON")
+            if raw:
+                try:
+                    creds = service_account.Credentials.from_service_account_info(
+                        json.loads(raw), scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+                    clients.append(build("sheets", "v4", credentials=creds))
+                except (ValueError, KeyError):
+                    print("  content: the service account key could not be used to read an old sheet")
+            clients.append(run.sheets)
+        first = None
+        for svc in clients:
+            try:
+                return content_import.read_source(svc, spec)
+            except content_import.ImportFailed as e:
+                first = first or e
+        raise first
+
+    return read
+
+
 def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False):
     """Phase 1c2: the content dashboard of one site (own-access sites only: PulseO has to be able
     to create the file in the owner's Drive)."""
@@ -471,13 +500,14 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False):
     notify = (lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None
     try:
         result = content_run.run_content(run.drive, run.sheets, site, site.reports_sheet_id, fetch,
-                                         final, today, notify, print, force=force)
+                                         final, today, notify, print, force=force,
+                                         read_source=source_reader(run) if site.content.imports else None)
     except Exception:
         run.content_text = "failed"
         raise
     run.content_text = result.text()
     print(f"content: {result.text()}")
-    if result.refreshed and not result.created and smtp:
+    if result.refreshed and (not result.created or result.imports) and smtp:
         subject, body = content_run.owner_email(result, site.deck.site_label or site.name,
                                                 provision.link(result.file_id))
         notify_owner(smtp, subject, body)

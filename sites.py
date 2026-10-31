@@ -215,9 +215,12 @@ def _parse_deck(value, where: str) -> DeckConfig:
 # The content dashboard (v2.5)
 # --------------------------------------------------------------------------- #
 
-CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "seasonal_regex", "min_gap_impressions_90d")
+CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "seasonal_regex", "min_gap_impressions_90d",
+                  "import_from")
+IMPORT_FIELDS = ("sheet_id", "source_tab", "target_tab")
+MAX_IMPORTS = 8
 CONTENT_TAB_FIELDS = ("name", "url_regex", "exclude_regex", "description", "gaps", "landing")
-RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas")
+RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas", "import log")
 MAX_CONTENT_TABS = 8
 
 
@@ -233,11 +236,20 @@ class ContentTab:
     def matches(self, url: str) -> bool:
         """Does this page belong to the tab? Tried on the URL as given and on its readable form."""
         from urllib.parse import unquote
-        for candidate in {url, unquote(url, errors="replace")}:
+        bare = re.sub(r"[?#].*$", "", unquote(url, errors="replace"))     # no query, no fragment
+        for candidate in {url, unquote(url, errors="replace"), bare}:
             if re.search(self.url_regex, candidate) and not (
                     self.exclude_regex and re.search(self.exclude_regex, candidate)):
                 return True
         return False
+
+
+@dataclass
+class ImportSpec:
+    """One old sheet whose rows are copied, once, into a tab of the content file."""
+    sheet_id: str
+    source_tab: str
+    target_tab: str
 
 
 @dataclass
@@ -247,10 +259,12 @@ class ContentConfig:
     tabs: list = field(default_factory=list)             # [ContentTab]
     seasonal_regex: str = ""
     min_gap_impressions_90d: int = 100
+    imports: list = field(default_factory=list)          # [ImportSpec]
 
     def sensitive_values(self) -> list:
         rules = [t.url_regex for t in self.tabs] + [t.exclude_regex for t in self.tabs]
-        return [v for v in [self.sheet_id, self.seasonal_regex] + rules if v]
+        ids = [i.sheet_id for i in self.imports]
+        return [v for v in [self.sheet_id, self.seasonal_regex] + ids + rules if v]
 
     def tab_of(self, url: str):
         """The first tab a page belongs to, or None (pages that match no tab are ignored)."""
@@ -326,6 +340,22 @@ def _parse_content(value, where: str) -> "ContentConfig":
             description=description.strip(),
             gaps=item.get("gaps", i == 1),              # content gaps go to the first tab unless said otherwise
             landing=item.get("landing", "landing" in name.lower())))
+    imports = value.get("import_from") or []
+    if not isinstance(imports, list) or len(imports) > MAX_IMPORTS:
+        raise SitesConfigError(f"{at}: 'import_from' must be a list of up to {MAX_IMPORTS} "
+                               f"{{sheet_id, source_tab, target_tab}} objects")
+    names = {t.name for t in cfg.tabs}
+    for i, item in enumerate(imports, start=1):
+        iat = f"{at}, import {i}"
+        if not isinstance(item, dict) or set(item) != set(IMPORT_FIELDS) \
+                or any(not isinstance(item[k], str) or not item[k].strip() or len(item[k]) > 200
+                       for k in IMPORT_FIELDS):
+            raise SitesConfigError(f"{iat}: must be an object with 'sheet_id', 'source_tab' and "
+                                   f"'target_tab' (all text)")
+        if item["target_tab"].strip() not in names:
+            raise SitesConfigError(f"{iat}: 'target_tab' is not one of the configured tabs")
+        cfg.imports.append(ImportSpec(item["sheet_id"].strip(), item["source_tab"].strip(),
+                                      item["target_tab"].strip()))
     return cfg
 
 

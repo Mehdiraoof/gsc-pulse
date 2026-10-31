@@ -15,6 +15,7 @@ import history
 import tabs
 
 GUIDE, SEEDS, IDEAS, STATE = "Guide", "Keyword Seeds", "Keyword Ideas", "_state"
+IMPORT_LOG = "Import Log"
 SEEDS_HEADER = ["Seed", "Language", "Country", "Active", "Last run"]
 IDEAS_HEADER = ["Keyword", "Seed", "Pattern", "Language", "Impr (90d)", "Best Page", "Position",
                 "First Found", "Decision"]
@@ -342,6 +343,21 @@ def ensure_extra_tabs(sheets, file_id: str):
         reqs += small_tab_requests(reply["addSheet"]["properties"]["sheetId"], header, dropdowns, flt)
     history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": reqs}))
     tabs.patch_cells(sheets, file_id, [(f"'{n}'!A1:{letters(len(h) - 1)}1", [h]) for n, h, _, _ in wanted])
+
+
+def ensure_import_log(sheets, file_id: str):
+    """The `Import Log` tab: where each row of an old sheet went. Made when the first import runs."""
+    import content_import
+    titles, _ = history.grid_info(sheets, file_id)
+    if IMPORT_LOG in titles:
+        return
+    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
+        {"addSheet": {"properties": {"title": IMPORT_LOG}}}]}))
+    sid = made["replies"][0]["addSheet"]["properties"]["sheetId"]
+    header = content_import.LOG_HEADER
+    history._write(sheets.spreadsheets().batchUpdate(
+        spreadsheetId=file_id, body={"requests": small_tab_requests(sid, header, None, True)}))
+    tabs.patch_cells(sheets, file_id, [(f"'{IMPORT_LOG}'!A1:{letters(len(header) - 1)}1", [header])])
 
 
 def sheet_info(sheets, file_id: str) -> dict:
