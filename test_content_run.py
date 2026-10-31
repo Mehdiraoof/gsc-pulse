@@ -4,6 +4,7 @@ Search Console, Sheets and Drive are in-memory fakes; all sites, pages and searc
 import json
 import unittest
 from datetime import date
+from unittest import mock
 
 import autocomplete
 import content
@@ -110,6 +111,16 @@ class Base(unittest.TestCase):
                 r[col] = value
                 return
         raise AssertionError("row not found")
+
+    def edit_topic(self, keyword, name, value, tab="Articles"):
+        t = self.raw(tab)
+        header = t.data[0]
+        for r in t.data[1:]:
+            if r and r[0] == keyword:
+                r.extend([""] * (len(header) - len(r)))
+                r[header.index(name)] = value
+                return
+        raise AssertionError("topic not found")
 
     def add_row(self, tab, **cells):
         t = self.raw(tab)
@@ -321,25 +332,57 @@ class RulesInTheFileTests(Base):
         super().setUp()
         self.run_it()
 
-    def test_a_published_page_without_impressions_for_two_months_is_gone(self):
+    def test_a_page_without_search_data_keeps_its_row_status_and_keyword(self):
         self.add_row("Articles", **{content.KEY: "old topic", content.URL: f"{ROOT}/article/gone",
-                                    content.STATUS: "Published", content.TODO: "Keep"})
+                                    content.STATUS: "Published", content.TODO: "Keep", "Entities": "x"})
         self.add_row("Articles", **{content.KEY: "idea", content.URL: f"{ROOT}/article/draft",
                                     content.STATUS: "Inboxed"})
-        result = self.run_it(force=True)
-        gone = self.find("Articles", f"{ROOT}/article/gone")
-        self.assertEqual(gone[content.STATUS], "Gone")
-        self.assertEqual(gone["Suggested Action"], "Check the redirect or removal")
-        self.assertIn("Gone", gone["Alerts"])
-        self.assertEqual(self.find("Articles", f"{ROOT}/article/draft")[content.STATUS], "Inboxed")
-        self.assertEqual(result.gone, 1)
-        self.assertEqual(gone[content.TODO], "Keep")                        # only the status is written
-
-    def test_a_gone_status_is_only_ever_set_for_published_rows(self):
-        self.add_row("Articles", **{content.KEY: "later topic", content.URL: f"{ROOT}/article/later",
-                                    content.STATUS: "Later"})
+        rows_before = len(self.table("Articles")[1])
         self.run_it(force=True)
-        self.assertEqual(self.find("Articles", f"{ROOT}/article/later")[content.STATUS], "Later")
+        old = self.find("Articles", f"{ROOT}/article/gone")
+        self.assertEqual((old[content.STATUS], old[content.KEY], old[content.TODO], old["Entities"]),
+                         ("Published", "old topic", "Keep", "x"))           # nothing of the owner's changes
+        self.assertEqual((old["Clicks (90d)"], old["Impressions (90d)"]), ("0", "0"))
+        self.assertEqual(old["Suggested Action"], "Check indexing and redirects")
+        self.assertIn("No search data this month", old["Alerts"])
+        self.assertNotIn("Gone", old["Alerts"])
+        draft = self.find("Articles", f"{ROOT}/article/draft")
+        self.assertEqual(draft[content.STATUS], "Inboxed")
+        self.assertEqual(draft["Suggested Action"], "Waiting for data")        # it never had impressions
+        self.assertEqual(len(self.table("Articles")[1]), rows_before)          # rows are never removed
+
+    def test_pages_that_lose_all_their_data_stay_in_the_file(self):
+        rows_before = len(self.table("Articles")[1])
+        with mock.patch(f"{__name__}.PAGES", {u: v for u, v in PAGES.items() if u != B}), \
+                mock.patch(f"{__name__}.PAIRS", [p for p in PAIRS if p[1] != B]):
+            self.run_it(force=True)
+        b = self.find("Articles", B)
+        self.assertEqual(b[content.KEY], "tiny question")                       # the keyword stays
+        self.assertEqual(b[content.STATUS], "Published")
+        self.assertEqual(b["Impressions (90d)"], "0")
+        self.assertIn("No search data this month", b["Alerts"])
+        self.assertEqual(len(self.table("Articles")[1]), rows_before)
+
+    def test_a_topic_row_stays_when_its_impressions_drop_below_the_threshold(self):
+        with mock.patch(f"{__name__}.PAIRS", [p for p in PAIRS if p[0] not in ("best bread recipes", "bread recipe easy")]):
+            self.run_it(force=True)
+        topics = [r for r in self.table("Articles")[1] if r.get(content.KEY) == "best bread recipes"]
+        self.assertEqual(len(topics), 1)
+        self.assertEqual((topics[0][content.STATUS], topics[0][content.TODO]), ("Inboxed", "Write"))
+        self.assertEqual(topics[0]["Impressions (90d)"], "0")
+
+    def test_the_owners_own_gone_status_is_kept_and_shown(self):
+        self.edit("Articles", B, content.STATUS, "Gone")
+        self.run_it(force=True)
+        b = self.find("Articles", B)
+        self.assertEqual(b[content.STATUS], "Gone")
+        self.assertIn("Gone", b["Alerts"])
+
+    def test_a_topic_set_to_later_is_not_proposed_a_second_time(self):
+        self.edit_topic("best bread recipes", content.STATUS, "Later")
+        self.run_it(force=True)
+        rows = [r for r in self.table("Articles")[1] if r.get(content.KEY) == "best bread recipes"]
+        self.assertEqual([r[content.STATUS] for r in rows], ["Later"])
 
     def test_duplicate_urls_are_flagged(self):
         self.add_row("Articles", **{content.KEY: "twin", content.URL: f"{ROOT}/Article/A/", content.STATUS: "Later"})
@@ -398,6 +441,21 @@ class IdeasTests(Base):
         idea = next(r for r in self.table("Keyword Ideas")[1] if r["Keyword"] == "garden shoes extra")
         self.assertEqual(idea["Impr (90d)"], "")                      # not a search the site is shown for
         self.assertEqual((idea["Seed"], idea["Language"], idea["First Found"]), ("shoes", "en", "2026-10-27"))
+
+    def test_a_deleted_idea_and_an_ignored_one_are_never_added_again(self):
+        self.add_seed()
+        self.run_it(http=self.http)
+        t = self.raw("Keyword Ideas")
+        header = t.data[0]
+        deleted = next(i for i, r in enumerate(t.data) if i and r[0] == "shoes one")
+        ignored = next(i for i, r in enumerate(t.data) if i and r[0] == "garden shoes extra")
+        t.data[deleted] = []
+        t.data[ignored].extend([""] * (len(header) - len(t.data[ignored])))
+        t.data[ignored][header.index("Decision")] = "Ignore"
+        self.run_it(http=self.http, today=date(2026, 11, 4))
+        keywords = [r["Keyword"] for r in self.table("Keyword Ideas")[1]]
+        self.assertNotIn("shoes one", keywords)
+        self.assertEqual(keywords.count("garden shoes extra"), 1)
 
     def test_an_inactive_seed_does_nothing(self):
         self.add_seed(active="No")

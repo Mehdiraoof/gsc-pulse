@@ -197,6 +197,10 @@ class DatesAndAlertsTests(unittest.TestCase):
         self.assertEqual(text, "Cannibalization, Seasonal: update 6 weeks before the peak, Prune candidate, "
                                "Old copy still indexed, Duplicate URL, Decay: clicks down 3 months in a row, "
                                "Low visibility (pos > 20), Gone")
+        self.assertEqual(content.alerts_for(
+            advice_code="keep", competing=[], seasonal=False, peak_month=0, today=date(2026, 10, 27),
+            url="https://example.test/a", duplicate=False, decay=False, position=0, impressions=0,
+            gone=False, no_data=True), "No search data this month")
         quiet = content.alerts_for(advice_code="keep", competing=[], seasonal=False, peak_month=0,
                                    today=date(2026, 10, 27), url="https://example.test/a", duplicate=False,
                                    decay=False, position=5, impressions=500, gone=False)
@@ -244,6 +248,17 @@ class GapTests(unittest.TestCase):
         best = {q: (self.HOME, 5000, 3.0) for q in queries}
         found = self.gaps(queries, best, limit=3)
         self.assertEqual([g.keyword for g in found], ["topic29", "topic28", "topic27"])
+
+    def test_there_is_no_cap_every_group_is_shown(self):
+        queries = {f"topic{i}": (0, 100 + i, 9.0) for i in range(60)}
+        best = {q: (self.HOME, 5000, 3.0) for q in queries}
+        self.assertEqual(len(self.gaps(queries, best)), 60)
+
+    def test_adult_short_lyric_and_map_searches_are_not_filtered_out(self):
+        queries = {"xx": (0, 300, 9.0), "map of the old city": (0, 250, 9.0), "lyrics of a song": (0, 220, 9.0),
+                   "adult content here": (0, 210, 9.0)}
+        best = {q: (self.HOME, 5000, 3.0) for q in queries}
+        self.assertEqual(len(self.gaps(queries, best)), 4)
 
     def test_persian_variants_group_together(self):
         queries = {"كتاب خوب": (1, 300, 9.0), "کتاب خوب بخوانید": (1, 150, 9.0)}
@@ -390,14 +405,14 @@ class AutocompleteTests(unittest.TestCase):
         self.assertEqual(outcome.calls, autocomplete.MAX_FAILURES_IN_A_ROW)
         self.assertTrue(outcome.stopped)
 
-    def test_ideas_are_deduplicated_and_filtered(self):
+    def test_ideas_are_only_deduplicated_never_filtered_by_topic(self):
         seed = autocomplete.SeedRun(2, "shoes", "en", "")
         found = {content.norm(k): (k, seed, "seed") for k in
                  ["Garden Shoes", "garden  shoes ", "example shoes", "shoes sale", "old idea", "known one", "www shoes"]}
         rows = autocomplete.new_ideas(
             found, brand_terms=["example"], existing={"old idea"}, known={"known one"}, today=self.TODAY,
             lookup=lambda k: (120, "/guide", 7.5) if k == "garden shoes" else None)
-        self.assertEqual([r[0] for r in rows], ["garden  shoes ", "shoes sale"])      # one row per normalized key
+        self.assertEqual([r[0] for r in rows], ["garden  shoes ", "example shoes", "shoes sale", "www shoes"])
         self.assertEqual(rows[0], ["garden  shoes ", "shoes", "seed", "en", 120, "/guide", 7.5, "2026-10-27", ""])
         self.assertEqual(rows[1][4:7], ["", "", ""])
 

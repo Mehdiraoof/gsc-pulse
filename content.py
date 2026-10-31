@@ -67,8 +67,6 @@ SECONDARY_COUNT = 8
 FANOUT_COUNT = 6
 COMPETING_MIN_IMPRESSIONS = 20
 COMPETING_SHOWN = 3
-MAX_GAPS_PER_TAB = 20
-GONE_MONTHS = 2
 DECAY_MONTHS = 3
 IMPACT_DAYS = 28
 SEASON_LEAD_DAYS = 42
@@ -192,8 +190,8 @@ def advice(impressions: float, position: float, ctr: float) -> Advice:
 
 KEEP = Advice("keep", "Keep", "No action now", "Low impressions or already performing; review next month.")
 WAITING = Advice("waiting", "", "Waiting for data", "No impressions yet.")
-GONE = Advice("gone", "", "Check the redirect or removal",
-              "No impressions for 2 full months: the page looks gone.")
+NO_DATA = Advice("nodata", "", "Check indexing and redirects",
+                 "No search impressions in the last 90 days, though the page had some earlier.")
 
 
 def gain(impressions: float, ctr: float, position: float) -> float:
@@ -383,6 +381,7 @@ def impact_windows(published: date) -> tuple:
 # --------------------------------------------------------------------------- #
 
 ALERT_SEASON = "Seasonal: update 6 weeks before the peak"
+NO_DATA_ALERT = "No search data this month"
 
 
 def season_alert(peak_month: int, today: date) -> str:
@@ -412,7 +411,9 @@ def decaying(clicks: list) -> bool:
 
 def alerts_for(*, advice_code: str, competing: list, seasonal: bool, peak_month: int, today: date,
                url: str, duplicate: bool, decay: bool, position: float, impressions: float,
-               gone: bool) -> str:
+               gone: bool, no_data: bool = False) -> str:
+    """The Alerts cell. `gone` is the owner's own Status; `no_data`: no impressions in the last
+    complete month (the row is kept as it is, only this alert says so)."""
     out = []
     if competing:
         out.append("Cannibalization")
@@ -428,6 +429,8 @@ def alerts_for(*, advice_code: str, competing: list, seasonal: bool, peak_month:
         out.append("Decay: clicks down 3 months in a row")
     if position > 20 and impressions > 0:
         out.append("Low visibility (pos > 20)")
+    if no_data:
+        out.append(NO_DATA_ALERT)
     if gone:
         out.append("Gone")
     return ", ".join(out)
@@ -497,7 +500,7 @@ def group_queries(items: list) -> list:
 
 
 def find_gaps(*, queries: dict, best: dict, tab_matches, brand_terms: list, minimum: float,
-              known: set, already: set, limit: int = MAX_GAPS_PER_TAB) -> list:
+              known: set, already: set, limit: int = None) -> list:
     """
     New-topic candidates for one tab.
       queries  {query: (clicks, impressions, position)} over the last 90 days
@@ -506,6 +509,9 @@ def find_gaps(*, queries: dict, best: dict, tab_matches, brand_terms: list, mini
       tab_matches(url) -> bool: is the page one of this tab's pages?
       known    normalized searches that are already a primary or secondary keyword of some row
       already  normalized searches of gap rows that exist, were dismissed or were added from ideas
+    Nothing is filtered by topic or by how many there are: every group is returned and the owner
+    decides. Only brand searches, address-like searches and searches under `minimum` impressions
+    are not candidates.
     """
     items = []
     for query, (c, n, p) in queries.items():
@@ -539,7 +545,7 @@ def find_gaps(*, queries: dict, best: dict, tab_matches, brand_terms: list, mini
         g.score = score(g.impressions, gain(g.impressions, ctr, g.position), g.position,
                         competing=False, seasonal=False, new_topic=True)
     out.sort(key=lambda g: (-g.score, -g.impressions, g.keyword))
-    return out[:limit]
+    return out if limit is None else out[:limit]
 
 
 def gap_why(gap: Gap) -> str:

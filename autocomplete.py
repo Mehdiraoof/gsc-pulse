@@ -209,12 +209,13 @@ def collect(seeds: list, *, cache: Cache, today: date, http_get=default_http_get
 
 def new_ideas(found: dict, *, brand_terms: list, existing: set, known: set, today: date,
               lookup=lambda k: None) -> list:
-    """Keyword Ideas rows for what is really new: not a brand search or address, not already an
-    idea, not already a primary or secondary keyword. `lookup(norm keyword)` gives
-    (impressions, best page, position) from Search Console, or None."""
+    """Keyword Ideas rows for what is new: not already an idea (written before, kept or deleted)
+    and not already a primary or secondary keyword. Nothing is filtered by topic, length or
+    wording: the owner decides. `lookup(norm keyword)` gives (impressions, best page, position)
+    from Search Console, or None."""
     rows = []
     for k, (keyword, seed, pattern) in found.items():
-        if k in existing or k in known or content.skip_query(keyword, brand_terms):
+        if k in existing or k in known:
             continue
         hit = lookup(k)
         impr, page, pos = hit if hit else ("", "", "")

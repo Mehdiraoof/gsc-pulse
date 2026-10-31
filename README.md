@@ -573,18 +573,23 @@ primary keyword's numbers, ranking queries, secondary keywords, competing pages,
 suggested action, why, alerts). Everything else is yours and is **never overwritten** after the row
 exists: primary keyword, status, to do, entities, notes and the planning columns. `Query Fan-outs` and
 `Recommendations` are filled only while empty. Columns are found by their **header name**, so you can
-move or add columns. The only status PulseO ever sets is `Gone` (a published page that had traffic
-and has had no impressions for two full months).
+move or add columns. PulseO **never changes a Status** and **never removes a row**: only you do. A
+page or topic with no search data this month keeps its row, its keyword and all your cells; it shows
+zeros or empty numbers and the alert `No search data this month`.
 
 **Each month** (after the monthly report, or with the workflow input **rebuild_content_site**): new
 pages get a row, owned cells are updated, new topics are proposed (searches the site is shown for but
-that no content page answers, grouped by their main words; at most 20 per tab; a row you delete is
-not proposed again) and each tab is sorted by Score. You get a short owner-only email with the
-numbers and the top urgent rows (it is not sent to the deck recipients).
+that no content page answers, grouped by their main words) and each tab is sorted by Score. Topics
+are **not filtered by theme or limited in number**, you decide; only brand and address-like searches
+and searches under `min_gap_impressions_90d` are not proposed. A topic row stays even if its
+impressions later drop. A row you delete is not proposed again. You get a short owner-only email
+with the numbers and the top urgent rows (it is not sent to the deck recipients).
 
 **Keyword ideas.** Fill `Keyword Seeds` (seed, language fa/en, optional country, Active = Yes).
 Once a week PulseO asks Google's suggestion endpoint around each active seed (the seed, the seed
-plus each letter, question words before it) and writes new ideas to `Keyword Ideas`. Mark an idea
+plus each letter, question words before it) and writes new ideas to `Keyword Ideas`, all of them
+(nothing is filtered by theme; only ideas already in the sheet, written before, or already a keyword
+of a row are skipped, so an idea you delete or mark Ignore or Later does not come back). Mark an idea
 **Add** and the next monthly refresh turns it into a new-topic row. The endpoint is unofficial: it is
 used at one call per second, at most 1,500 calls a run, answers are cached for 30 days, and on HTTP
 429/403 the run stops softly (the rest of the run is not affected).

@@ -45,7 +45,6 @@ class ContentResult:
     month: str = ""
     new_pages: int = 0
     new_topics: int = 0
-    gone: int = 0
     rows: dict = field(default_factory=dict)        # tab -> rows after the refresh
     urgent: list = field(default_factory=list)      # [(keyword, action, tab)]
     ideas: int = 0                                  # new rows in Keyword Ideas
@@ -59,7 +58,7 @@ class ContentResult:
             parts.append("dashboard created")
         if self.refreshed:
             parts.append(f"refreshed for {self.month}: {self.new_pages} new pages, "
-                         f"{self.new_topics} new topics, {self.gone} gone")
+                         f"{self.new_topics} new topics")
         if self.ideas or self.autocomplete:
             parts.append(f"ideas +{self.ideas}" + (f" ({self.autocomplete})" if self.autocomplete else ""))
         return ", ".join(parts) or "up to date"
@@ -207,9 +206,10 @@ def _split(cell) -> list:
     return [x.strip() for x in str(cell or "").split(",") if x.strip()]
 
 
-def page_values(ctx: Context, row: dict, stats, gone: bool) -> dict:
+def page_values(ctx: Context, row: dict, stats, had_before: bool) -> dict:
     """The cells PulseO owns for a row that has a page. `stats` is None when Search Console shows
-    nothing for the page. Also returns "_advice" (the rule that fired) and "_keyword"."""
+    nothing for the page: the row stays, with zeros and empty cells (never removed, status and the
+    owner's cells untouched). Also returns "_advice" (the rule that fired) and "_keyword"."""
     d, cm = ctx.data, ctx.cm
     url = str(row.get(content.URL, "")).strip()
     key = content.url_key(url)
@@ -233,7 +233,7 @@ def page_values(ctx: Context, row: dict, stats, gone: bool) -> dict:
 
     competing = []
     if stats is None or not stats.impressions:
-        adv = content.GONE if gone else content.WAITING
+        adv = content.NO_DATA if had_before else content.WAITING
         out.update({"Clicks (90d)": 0, "Impressions (90d)": 0, "CTR": "", "Avg. Position": "",
                     "Primary KW Impr.": "", "Primary KW Pos.": "", "Ranking Queries": "",
                     "Secondary Keywords": "", "Competing Pages": "", "Score": 0})
@@ -242,7 +242,7 @@ def page_values(ctx: Context, row: dict, stats, gone: bool) -> dict:
     else:
         competing = content.competing_pages(d.pairs_by_query, kw, stats.url) if kw else []
         kw_impr, kw_pos = content.keyword_metrics(stats, kw) if kw else ("", "")
-        adv = content.GONE if gone else content.advice(stats.impressions, stats.position, stats.ctr)
+        adv = content.advice(stats.impressions, stats.position, stats.ctr)
         brand_n = sum(n for q, _, n, _ in stats.queries if content.skip_query(q, ctx.brand))
         brand_c = sum(c for q, c, _, _ in stats.queries if content.skip_query(q, ctx.brand))
         adj_n, adj_c = max(stats.impressions - brand_n, 0), max(stats.clicks - brand_c, 0)
@@ -371,22 +371,13 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 continue
             key = content.url_key(row.get(content.URL))
             stats = rec.get("stats") or ctx.data.stats.get(key)
-            status = str(row.get(content.STATUS, "")).strip()
-            cm, prev = ctx.cm, periods.add_months(ctx.cm, -1)
-            no_traffic = (not stats or not stats.impressions)
-            gone = status == "Gone"
-            # Gone: published, no impressions for two full months, but it had some before (a page
-            # that was just published and never got any is waiting for data, not gone)
+            cm = ctx.cm
+            # A row is never removed and its status is never changed. A page with no search data
+            # only shows zeros and an alert; one that had impressions earlier is worth a look.
             had_before = any(ctx.data.month(periods.add_months(cm, -i)).get(key, (0, 0, 0))[1]
-                             for i in (2, 3, 4))
-            if (status == "Published" and no_traffic and had_before
-                    and ctx.data.month(cm) and ctx.data.month(prev)
-                    and not ctx.data.month(cm).get(key, (0, 0, 0))[1]
-                    and not ctx.data.month(prev).get(key, (0, 0, 0))[1]):
-                gone = True
-                rec["set_gone"] = True
-                result.gone += 1
-            vals = page_values(ctx, row, stats, gone)
+                             for i in (1, 2, 3, 4))
+            no_data = bool(ctx.data.month(cm)) and not ctx.data.month(cm).get(key, (0, 0, 0))[1]
+            vals = page_values(ctx, row, stats, had_before)
             published = content.parse_date(row.get(content.PUBLISHED_DATE))
             impact = row.get(content.IMPACT, "")
             if published and stats:
@@ -405,7 +396,8 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 peak_month=vals["_peak"], today=ctx.today, url=str(row.get(content.URL, "")),
                 duplicate=content.dup_key(str(row.get(content.URL, ""))) in dups,
                 decay=content.decaying(vals["_series"]), position=vals["_position"],
-                impressions=vals["_impressions"], gone=gone)
+                impressions=vals["_impressions"], no_data=no_data,
+                gone=str(row.get(content.STATUS, "")).strip() == "Gone")
             rec["vals"] = vals
             if rec["new"]:
                 vals["_create"] = {
@@ -511,8 +503,6 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             cs.write_columns(sheets, file_id, t.name, header, 2 + n_old, create)
         updates = []
         for i, rec in enumerate(recs):
-            if rec.get("set_gone"):
-                updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, content.STATUS))}{2 + i}", [["Gone"]]))
             if rec.get("fill_keyword") and cs.col_of(header, content.KEY) is not None:
                 updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, content.KEY))}{2 + i}",
                                 [[rec["fill_keyword"]]]))
@@ -543,7 +533,8 @@ def update_ideas(sheets, file_id: str, site, data: Data, state: State, today: da
     if not due:
         return
     ideas_header, ideas = cs.table_of(cs.read_all(sheets, file_id, cs.IDEAS))
-    existing = {content.norm(i.get("Keyword", "")) for i in ideas}
+    # ideas on the sheet, and ideas that were written before and then deleted: not added again
+    existing = {content.norm(i.get("Keyword", "")) for i in ideas} | state.keys({"idea_seen"})
     known = set()
     for t in site.content.tabs:
         if t.name in info:
@@ -554,6 +545,8 @@ def update_ideas(sheets, file_id: str, site, data: Data, state: State, today: da
                                   today=today, lookup=data.lookup)
     if rows:
         tabs.append(sheets, file_id, cs.IDEAS, rows)
+        for r in rows:
+            state.set("idea_seen", content.norm(r[0]), today.isoformat(), today)
     c = cs.col_of(seed_header, "Last run")
     if c is not None:
         tabs.patch_cells(sheets, file_id, [(f"'{cs.SEEDS}'!{cs.letters(c)}{s.row}", [[today.isoformat()]])
@@ -617,8 +610,6 @@ def owner_email(result: ContentResult, label: str, link: str) -> tuple:
     """(subject, body) of the owner-only note after a refresh: what changed and what to do first."""
     lines = [f"The content dashboard for {label} was refreshed for {result.month}.", "",
              f"New pages added: {result.new_pages}", f"New topics proposed: {result.new_topics}"]
-    if result.gone:
-        lines.append(f"Pages marked Gone: {result.gone}")
     if result.urgent:
         lines += ["", "Top urgent rows:"]
         lines += [f"- {k or '(no keyword yet)'}: {a} [{t}]" for k, a, t in result.urgent]
