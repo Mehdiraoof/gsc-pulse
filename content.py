@@ -19,6 +19,7 @@ while empty. Columns are always found by their header name, never by letter.
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from urllib.parse import unquote, urlsplit
@@ -110,10 +111,19 @@ def decode_url(url: str) -> str:
     return unquote(re.sub(r"#.*$", "", str(url).strip()), errors="replace")
 
 
+_URL_FOLD = re.compile("[‌‍ـ‎‏]")   # ZWNJ, ZWJ, tatweel, LRM, RLM
+
+
+def fold_url(text: str) -> str:
+    """Letters of an address in one form: NFC, no half space (ZWNJ), joiner, tatweel or direction
+    mark. Only for comparing; the sheet keeps the address as it is."""
+    return _URL_FOLD.sub("", unicodedata.normalize("NFC", text))
+
+
 def _split_url(url: str):
     """(host without www., path) of a readable address; the path has no query, no fragment, no
     repeated or trailing slash. A relative address has an empty host."""
-    text = decode_url(re.sub(r"[?#].*$", "", str(url).strip()))
+    text = fold_url(decode_url(re.sub(r"[?#].*$", "", str(url).strip())))
     m = re.match(r"^(?:[a-z][a-z0-9+.-]*:)?//([^/]*)(.*)$", text, re.IGNORECASE)
     host, path = (m.group(1), m.group(2)) if m else ("", text)
     host = re.sub(r"^www\.", "", host.lower())
@@ -135,7 +145,7 @@ def display_url(url: str) -> str:
 
 def dup_key(url: str) -> str:
     """Equal for URLs that differ only by case, a trailing ZWNJ or a trailing slash."""
-    u = decode_url(url).replace(ZWNJ, "").lower()
+    u = fold_url(decode_url(url)).lower()
     return u.rstrip("/")
 
 

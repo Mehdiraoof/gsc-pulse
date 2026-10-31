@@ -81,6 +81,25 @@ class CleaningTests(unittest.TestCase):
         self.assertEqual(content.url_key("https://example.test"), content.url_key("https://example.test/"))
         self.assertEqual(content.display_url("https://example.test/a/?x=1#y"), "https://example.test/a/")
 
+    def test_persian_addresses_are_one_page_whatever_the_spelling(self):
+        word = "میخواهم"                  # میخواهم
+        zwnj = "می‌خواهم"          # می‌خواهم (half space)
+        tatweel = "میـخواهم"
+        root = "https://example.test/article/"
+        spellings = [
+            root + zwnj, root + word, root + tatweel,
+            root + "%D9%85%DB%8C%E2%80%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85",             # encoded, with half space
+            root + "%D9%85%DB%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85/?x=1#top",              # encoded, slash, query
+            "http://www.example.test/article/" + word + "‌",                      # trailing half space
+        ]
+        self.assertEqual(len({content.url_key(u) for u in spellings}), 1, [content.url_key(u) for u in spellings])
+        self.assertEqual(len({content.dup_key(u) for u in spellings[:4]}), 1)
+        composed, decomposed = root + "آب", root + "آب"   # آب, written two ways
+        self.assertNotEqual(composed, decomposed)
+        self.assertEqual(content.url_key(composed), content.url_key(decomposed))
+        self.assertNotEqual(content.url_key(root + zwnj), content.url_key(root + word + "ن"))
+        self.assertEqual(ci.slug_key("article/" + zwnj), ci.slug_key("/article/" + tatweel + "/"))
+
     def test_the_page_variant_with_most_impressions_names_the_page(self):
         stats = content.build_pages({f"{ROOT}/p/": (1, 10, 5.0), f"{ROOT}/p": (9, 90, 5.0)}, [])
         (s,) = stats.values()
@@ -224,6 +243,37 @@ class MatchingTests(base.Base):
         self.assertEqual(by_row[4], "Keyword")
         self.assertTrue(by_row[5].startswith("No match"))
         self.assertTrue(by_row[10].startswith("Skipped"))
+
+    def persian_page(self):
+        word = "میخواهم"
+        gsc = "https://example.test/article/%D9%85%DB%8C%E2%80%8C%D8%AE%D9%88%D8%A7%D9%87%D9%85"
+        pages = dict(base.PAGES)
+        pages[gsc] = (4, 300, 8.0)
+        pairs = list(base.PAIRS) + [("persian search", gsc, 4, 300, 8.0)]
+        return (word, "https://example.test/article/میـخواهم",
+                mock.patch(f"{base.__name__}.PAGES", pages), mock.patch(f"{base.__name__}.PAIRS", pairs))
+
+    def test_a_persian_page_in_another_spelling_is_matched_by_the_import(self):
+        word, spelled, pages, pairs = self.persian_page()
+        reader = self.reader(rows=[["my keyword", "Briefed", "Write", spelled] + [""] * 8])
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["url"])
+        rows = [r for r in self.table("Articles")[1] if word in content.fold_url(str(r.get(content.URL)))]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0][content.KEY], rows[0][content.STATUS], rows[0]["Impressions (90d)"]),
+                         ("my keyword", "Briefed", "300"))
+
+    def test_a_persian_page_the_owner_wrote_in_another_spelling_gets_no_second_row(self):
+        word, spelled, pages, pairs = self.persian_page()
+        self.site = base.make_site()
+        self.run_it()
+        self.add_row("Articles", **{content.KEY: "mine", content.URL: spelled, content.STATUS: "Briefed"})
+        with pages, pairs:
+            self.run_it(force=True)
+        rows = [r for r in self.table("Articles")[1] if word in content.fold_url(str(r.get(content.URL)))]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0][content.KEY], rows[0]["Impressions (90d)"]), ("mine", "300"))
 
     def test_the_file_still_names_no_tool(self):
         pages, pairs = with_c()

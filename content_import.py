@@ -190,7 +190,7 @@ def parse_rows(header: list, rows: list) -> list:
 
 def slug_key(text: str) -> str:
     """A slug or a path as a comparable string: readable, no slashes at the ends, lower case."""
-    t = content.decode_url(text).replace(content.ZWNJ, "")
+    t = content.fold_url(content.decode_url(text))
     t = re.sub(r"[?#].*$", "", re.sub(r"^[a-z][a-z0-9+.-]*://[^/]*", "", t, flags=re.IGNORECASE))
     return t.strip("/").lower()
 
