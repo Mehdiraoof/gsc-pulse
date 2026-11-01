@@ -565,7 +565,7 @@ class RunnerTests(unittest.TestCase):
         rep.alarms = [{"severity": "high", "area": "Segment clicks", "impact": 5,
                        "message": "Clicks fell 30.0% vs August (100 to 70)."}]
         subject, body = deck_runner.email_text(rep, fx.Cfg(), "en", "September 2026")
-        self.assertEqual(subject, "Example SEO Report \u00b7 September 2026")
+        self.assertEqual(subject, "For client · Example SEO Report · September 2026")
         lines = [l for l in body.splitlines() if l.strip()]
         self.assertEqual(lines[0], "Hi,")
         self.assertEqual(lines[-1], "Mehdi")

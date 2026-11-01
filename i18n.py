@@ -148,7 +148,10 @@ EN = {
     # email
     "report_name": "SEO Report",
     "prepared": "Prepared by Mehdi Raoof",
-    "mail_subject": "{label} {report_name} · {period}",
+    "mail_subject_monthly": "For client · {label} {report_name} · {period}",
+    "mail_subject_weekly": "Weekly (for me) · {label} · {period}",
+    "file_monthly": "{label} {report_name} · {period}",
+    "file_weekly": "{label} · {period}",
     "mail_greeting": "Hi,",
     "mail_intro": "Here is the SEO report for {label}, {period}. It is attached as a PowerPoint file "
                   "and also opens in Google Slides.",
@@ -284,7 +287,10 @@ FA = {
     "about_history": "تاریخچه بیش از ۱۶ ماه گوگل در شیت تاریخچه سایت نگهداری می‌شود.",
     "report_name": "گزارش سئو",
     "prepared": "تهیه‌شده توسط مهدی رئوف",
-    "mail_subject": "{report_name} {label} · {period}",
+    "mail_subject_monthly": "برای مشتری · {report_name} {label} · {period}",
+    "mail_subject_weekly": "هفتگی (برای خودم) · {label} · {period}",
+    "file_monthly": "{report_name} {label} · {period}",
+    "file_weekly": "{label} · {period}",
     "mail_greeting": "سلام،",
     "mail_intro": "گزارش سئوی {label} برای {period} آماده است. به‌صورت فایل پاورپوینت پیوست شده و در "
                   "Google Slides هم باز می‌شود.",

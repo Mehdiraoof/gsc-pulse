@@ -760,6 +760,15 @@ class NoInternalNamesTests(unittest.TestCase):
                 self.check(f"email/{lang}", subject)
                 self.check(f"email/{lang}", body)
                 self.assertNotIn("PulseO", subject + body)
+                tag = {("en", "monthly"): "For client · ", ("en", "weekly"): "Weekly (for me) · ",
+                       ("fa", "monthly"): "برای مشتری · ",
+                       ("fa", "weekly"): "هفتگی (برای خودم) · "}[(lang, rep.kind)]
+                self.assertTrue(subject.startswith(tag), subject)
+                title = deck_runner.file_title(rep, cfg(lang), lang, decks.period_title(rep, lang))
+                self.assertNotIn("PulseO", title)
+                self.assertFalse(title.startswith(tag.split(" ·")[0]), title)               # the tag is for the subject only
+                if rep.kind == "weekly":
+                    self.assertRegex(subject, r"· [^·]+ · .+ · .+")       # tag, site, week, dates
 
     def test_the_ai_summary_input_and_the_notes_use_names_too(self):
         text = dd.aggregated_text(fx.monthly_report(), "Example")

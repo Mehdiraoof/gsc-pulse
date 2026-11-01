@@ -303,10 +303,11 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertEqual(len(self.sent), 2)
         monthly, weekly = self.sent
         self.assertEqual(monthly["To"], USER)                                  # from the secret
-        self.assertEqual(monthly["Subject"], "Example SEO Report \u00b7 September 2026")
-        self.assertTrue(weekly["Subject"].startswith("Example SEO Report \u00b7 Week 41"))
+        self.assertEqual(monthly["Subject"], "For client · Example SEO Report · September 2026")
+        self.assertTrue(weekly["Subject"].startswith("Weekly (for me) · Example · Week 41"))
         names = [list(m.iter_attachments())[0].get_filename() for m in self.sent]
-        self.assertEqual(names, ["Example SEO Report \u00b7 September 2026.pptx", weekly["Subject"] + ".pptx"])
+        self.assertEqual(names, ["Example SEO Report · September 2026.pptx",
+                                 weekly["Subject"][len("Weekly (for me) · "):] + ".pptx"])        # no audience tag in a file name
         counts = [len(Presentation(io.BytesIO(list(m.iter_attachments())[0].get_content())).slides)
                   for m in self.sent]
         self.assertGreaterEqual(counts[0], 5)                  # the client deck: slides without data are left out
@@ -381,8 +382,9 @@ class DeckRunnerTests(ReportsTestCase):
         self.run_decks(site=site, rebuild={"monthly"}, test=True)
         (m,) = self.sent
         self.assertEqual((m["To"], m["Bcc"]), (USER, None))
-        self.assertTrue(m["Subject"].startswith("[Test] Example SEO Report"))
-        self.assertEqual(list(m.iter_attachments())[0].get_filename(), m["Subject"][len("[Test] "):] + ".pptx")
+        self.assertTrue(m["Subject"].startswith("[Test] For client · Example SEO Report"))
+        self.assertEqual(list(m.iter_attachments())[0].get_filename(),
+                         m["Subject"][len("[Test] For client · "):] + ".pptx")              # no [Test], no audience tag
         self.assertEqual(self.state(), sent_before)                              # nothing was marked
 
     def test_which_site_and_which_decks_a_rebuild_covers(self):

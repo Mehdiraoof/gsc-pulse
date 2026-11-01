@@ -89,8 +89,15 @@ def email_text(report: dd.Report, cfg, lang: str, period: str) -> tuple:
                       T["mail_intro"].format(label=label, period=period), "",
                       *([" ".join(sentences), ""] if sentences else []),
                       T["mail_sign"], ""])
-    subject = T["mail_subject"].format(label=label, report_name=T["report_name"], period=period)
+    subject = T[f"mail_subject_{report.kind}"].format(label=label, report_name=T["report_name"], period=period)
     return subject, body
+
+
+def file_title(report: dd.Report, cfg, lang: str, period: str) -> str:
+    """What the attached file is called (the .pptx name): the report, without the 'for client' or 'for me'
+    that only the email subject carries. No name of the tool."""
+    T = i18n.table(lang)
+    return T[f"file_{report.kind}"].format(label=cfg.site_label, report_name=T["report_name"], period=period)
 
 
 # --------------------------------------------------------------------------- #
@@ -143,7 +150,7 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
                        else decks.build_deck(report, cfg, template_dir, ai, logo))
             period = decks.period_title(report, cfg.language)
             subject, body = email_text(report, cfg, cfg.language, period)
-            filename = mailer.deck_filename(subject)
+            filename = mailer.deck_filename(file_title(report, cfg, cfg.language, period))
             if test:
                 subject = "[Test] " + subject
             message = mailer.build_message(smtp.user, to, subject, body, filename, payload, bcc=bcc)
