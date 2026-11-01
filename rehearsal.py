@@ -121,9 +121,13 @@ def prepare(drive, sheets, site, log=print) -> dict:
             "updateSheetProperties": {"properties": {"sheetId": titles[first], "title": INPUTS_TAB},
                                       "fields": "title"}}]}))
     settings = ccr.config_from_site(site)
-    old = [r for r in tabs.read_rows(sheets, ids["inputs"], INPUTS_TAB, "B") if r and str(r[0]).strip() == "sop"]
-    rows = [["key", "value"], ["label", settings.label], ["language", settings.language], ["domain", settings.domain],
-            ["extra_rules", settings.extra_rules], ["tabs", ", ".join(settings.tabs)]] + old
+    previous = tabs.read_rows(sheets, ids["inputs"], INPUTS_TAB, "B")
+    old = [r for r in previous if r and str(r[0]).strip() == "sop"]
+    kept = {str(r[0]).strip(): str(r[1]).strip() for r in previous if len(r) > 1 and str(r[0]).strip() and str(r[1]).strip()}
+    # what the owner wrote into Inputs (the language, say) wins over the configuration
+    rows = [["key", "value"], ["label", kept.get("label") or settings.label],
+            ["language", kept.get("language") or settings.language], ["domain", settings.domain],
+            ["extra_rules", kept.get("extra_rules") or settings.extra_rules], ["tabs", ", ".join(settings.tabs)]] + old
     history._write(sheets.spreadsheets().values().clear(spreadsheetId=ids["inputs"], range=f"'{INPUTS_TAB}'!A1:B5000", body={}))
     tabs.patch_cells(sheets, ids["inputs"], [(f"'{INPUTS_TAB}'!A1:B{len(rows)}", rows)])
     trashed = clear_generated(drive, ids)
@@ -184,7 +188,9 @@ def run(drive, sheets, ai, today: date, mode: str = "both", http_get=site_check.
     ids, settings, sop_text = read_inputs(drive, sheets)
     if not sop_text:
         raise RehearsalError("the SOP text is not in Inputs yet (rows with the key sop)")
-    language = settings.get("language") or "fa"
+    language = settings.get("language") or ""
+    if language not in cd.BRIEF_HEADINGS:
+        raise RehearsalError("the language in Inputs must be fa or en (the site's content language is not set)")
     sop_html = cd.wrap(language, cd.md_to_html(sop_text))
     sop_id = gdocs.ensure_doc(drive, SOP_NAME, sop_html, ids["folder"], replace=True)
     tab_names = [t.strip() for t in settings.get("tabs", "").split(",") if t.strip()]

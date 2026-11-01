@@ -273,7 +273,8 @@ def make_client(settings: dict, env, post=default_post, sleep=time.sleep):
     if not key:
         raise AiError(f"no key for the AI provider {provider} (secret not set)")
     cls = Gemini if provider == "gemini" else Anthropic
-    return cls(key, settings.get("model", ""), settings.get("fallback_model"), post=post, sleep=sleep)
+    model = settings.get("model", "") or (env.get("AI_MODEL") or "").strip()                 # a run may name a model (workflow input)
+    return cls(key, model, settings.get("fallback_model"), post=post, sleep=sleep)
 
 
 class Metered:

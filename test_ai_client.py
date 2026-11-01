@@ -207,6 +207,12 @@ class MakeClientTests(unittest.TestCase):
         self.assertEqual((client.model, client.fallback), ("m1", ""))
         self.assertIsInstance(ai.make_client({"provider": "anthropic"}, {"ANTHROPIC_API_KEY": "k"}), ai.Anthropic)
 
+    def test_a_run_may_name_the_model(self):
+        client = ai.make_client({}, {"GEMINI_API_KEY": "k", "AI_MODEL": " gemini-x "})
+        self.assertEqual((client.model, client.fallback), ("gemini-x", "gemini-3.5-flash-lite"))
+        client = ai.make_client({"model": "from-settings"}, {"GEMINI_API_KEY": "k", "AI_MODEL": "gemini-x"})
+        self.assertEqual(client.model, "from-settings")                              # the configuration wins
+
     def test_no_key_or_an_unknown_provider(self):
         with self.assertRaises(ai.AiError) as caught:
             ai.make_client({}, {})

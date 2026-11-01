@@ -73,6 +73,21 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(len(self.copy(again)), len(self.copy(ids)))
         self.assertEqual(rh.read_inputs(self.drive, self.sheets)[2].count("جدول"), 1)
 
+    def test_what_the_owner_wrote_into_inputs_wins(self):
+        ids = rh.prepare(self.drive, self.sheets, self.site, lambda s: None)
+        row = [r[0] for r in tabs.read_rows(self.sheets, ids["inputs"], rh.INPUTS_TAB, "B")].index("language") + 2
+        tabs.patch_cells(self.sheets, ids["inputs"], [(f"'{rh.INPUTS_TAB}'!B{row}", [["en"]])])
+        rh.prepare(self.drive, self.sheets, self.site, lambda s: None)
+        self.assertEqual(rh.read_inputs(self.drive, self.sheets)[1]["language"], "en")
+
+    def test_a_missing_language_is_refused(self):
+        ids = rh.prepare(self.drive, self.sheets, self.site, lambda s: None)
+        self.write_sop(ids)
+        row = [r[0] for r in tabs.read_rows(self.sheets, ids["inputs"], rh.INPUTS_TAB, "B")].index("language") + 2
+        tabs.patch_cells(self.sheets, ids["inputs"], [(f"'{rh.INPUTS_TAB}'!B{row}", [[""]])])
+        with self.assertRaises(rh.RehearsalError):
+            rh.run(self.drive, self.sheets, FakeAI(), TODAY, http_get=self.page, log=lambda s: None)
+
     def test_a_full_rehearsal(self):
         ids = rh.prepare(self.drive, self.sheets, self.site, lambda s: None)
         self.write_sop(ids)
