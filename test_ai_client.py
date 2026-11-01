@@ -84,6 +84,21 @@ class GeminiTests(unittest.TestCase):
         self.assertIn("gemini-3.8-flash", text)
         self.assertNotIn(KEY, text)
 
+    def test_search_without_quota_is_given_up_and_the_text_still_comes(self):
+        g, net, _ = gemini(error(429, "no quota"), error(429, "no quota"), answer("without search"), answer("again"))
+        self.assertEqual(g.generate("", "x", search=True), "without search")
+        self.assertFalse(g.search_ok)
+        self.assertIn("tools", net.calls[0][2])
+        self.assertNotIn("tools", net.calls[2][2])                 # the same prompt, asked again without the search tool
+        self.assertEqual(g.generate("", "y", search=True), "again")
+        self.assertNotIn("tools", net.calls[3][2])                 # later requests do not try the search tool again
+        self.assertEqual(g.calls, 4)
+
+    def test_a_real_limit_is_still_a_limit_when_search_is_given_up(self):
+        g, _, _ = gemini(*[error(429, "PerDay")] * 4)
+        with self.assertRaises(ai.QuotaExhausted):
+            g.generate("", "x", search=True)
+
     def test_a_short_wait_is_waited_out_once(self):
         wait = [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "7s"}]
         g, net, sleeps = gemini(error(429, "per minute", wait), answer("ok"))

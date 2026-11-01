@@ -244,7 +244,7 @@ PAGES OF THE SAME SITE THAT YOU MAY LINK TO (keyword: address)
 {pages_list(candidates)}
 
 HOW TO RESEARCH
-{research}{local}Look at what the top results cover, find the facts that must be right, and list the sources you recommend in part 5.
+{research}{local}Look at what the top results cover, find the facts that must be right, and list the sources you recommend in part 5. If you cannot search the web right now, rely only on what you know for certain: name a source only when you are sure it exists, and write [needs checking] after any fact or source you could not verify.
 
 LANGUAGE
 Write the brief in {LANGUAGE_NAMES[cfg.language]}. Keep the English labels of part 3 ("Title tag:", "Meta description:", "H1:", "Slug:"), "Word count:" and "Tables planned:" exactly as written.
@@ -699,6 +699,8 @@ def run(drive, sheets, file_id: str, cfg: CreateConfig, ai, mode: str, today: da
         if metered.used:
             state.set("ai", day, str(used_before + metered.used), today)
             state.save(sheets, file_id)
+    if getattr(metered.client, "search_ok", True) is False:
+        log("  note: the AI service gave no web search to this key, so research came from the model alone")
     log(f"  content creation: {result.text()}")
     return result
 

@@ -111,6 +111,7 @@ class Gemini:
         self.fallback = DEFAULT_MODELS["gemini"][1] if fallback is None else fallback
         self.post, self.sleep, self.get = post, sleep, get
         self.calls = 0                                   # requests sent, retries included
+        self.search_ok = True                            # false once the search tool answered "no quota"
 
     def model_names(self) -> list:
         """The names of the models this key may use to write text (public names, safe to print); [] when unknown."""
@@ -139,6 +140,16 @@ class Gemini:
         return f"status {status} {(data.get('error', {}) or {}).get('status', '')} {said}".strip()
 
     def generate(self, system: str, prompt: str, search: bool = False, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
+        """The text for a prompt. With `search` Google Search is used; the search tool has a quota of its own
+        (none on a free key), so when it is out the request is made again without it, and later ones skip it."""
+        if search and self.search_ok:
+            try:
+                return self._generate(system, prompt, True, max_tokens)
+            except QuotaExhausted:
+                self.search_ok = False
+        return self._generate(system, prompt, False, max_tokens)
+
+    def _generate(self, system: str, prompt: str, search: bool, max_tokens: int) -> str:
         models = [self.model] + ([self.fallback] if self.fallback and self.fallback != self.model else [])
         unavailable, limits = None, []
         for model in models:
