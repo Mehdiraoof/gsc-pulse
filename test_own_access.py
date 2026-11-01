@@ -75,6 +75,8 @@ class FakeDrive:
 
     def update(self, fileId, media_body=None, body=None, fields=None):
         def run():
+            if body and body.get("trashed"):
+                self.files_[fileId]["trashed"] = True
             if media_body is not None:
                 self.files_[fileId]["content"] = media_body.getbytes(0, media_body.size())
             return {"id": fileId}

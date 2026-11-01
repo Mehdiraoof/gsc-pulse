@@ -291,31 +291,33 @@ def check_counts(doc: Doc) -> list:
 # Briefs
 # --------------------------------------------------------------------------- #
 
-# (name, patterns that make a heading count for it). English or Persian headings both count.
+# The ten sections of a brief, in order: (name, patterns that make a heading count for it). English or
+# Persian headings both count. Section 9 is only for a page that already exists.
 BRIEF_SECTIONS = [
-    ("task and article type", [r"task", r"article type", r"وظیفه", r"نوع مقاله"]),
-    ("keywords and reader", [r"keyword", r"reader", r"کلمات? کلیدی", r"مخاطب"]),
-    ("title tag", [r"title tag", r"تگ عنوان", r"عنوان سئو", r"تایتل"]),
-    ("meta description", [r"meta description", r"متا", r"توضیحات متا"]),
-    ("h1 and slug", [r"h1", r"slug", r"اسلاگ"]),
-    ("outline", [r"outline", r"ساختار", r"سرفصل", r"طرح کلی"]),
-    ("entities and facts", [r"entit", r"facts", r"موجودیت", r"واقعیت"]),
-    ("faq", [r"faq", r"frequently", r"پرسش", r"سوال"]),
-    ("internal links", [r"internal link", r"لینک.{0,6}داخلی"]),
-    ("length and format", [r"length", r"format", r"طول", r"قالب", r"فرمت"]),
+    ("task", [r"\btask\b", r"وظیفه"]),
+    ("keywords, intent and reader", [r"keyword", r"کلمات? کلیدی|کلمه.? کلیدی"]),
+    ("title tag, meta description, H1 and slug", [r"title tag|meta description", r"تگ عنوان|متا"]),
+    ("outline", [r"outline", r"ساختار|سرفصل"]),
+    ("entities, facts and sources", [r"entit|facts|sources", r"موجودیت|واقعیت|منابع"]),
+    ("faq", [r"faq|frequently", r"پرسش|سوال"]),
+    ("internal links", [r"internal link", r"لینک.{0,6}داخلی|پیوند.{0,6}داخلی"]),
+    ("word count, format and tone", [r"word count|tone", r"تعداد کلمات|لحن"]),
+    ("keep, remove, rewrite", [r"keep|remove|rewrite", r"حفظ|حذف|بازنویسی"]),
     ("writer checklist", [r"checklist", r"چک.?لیست"]),
 ]
-UPDATE_SECTION = ("update notes", [r"update", r"changes", r"به.?روز", r"تغییرات"])
+UPDATE_ONLY = {"keep, remove, rewrite"}
 
 
 def check_brief(html: str, *, update: bool = False) -> list:
-    """Checklist items 1 and 6 for a brief: every section is there (the update notes only for a page
-    that already exists), one H1 at most, and nothing banned."""
+    """Checklist items 1 and 6 for a brief: the ten sections are there (the ninth only for a page that
+    already exists), one H1 at most, and nothing banned."""
     doc = Doc(html)
     out = []
     heads = [b.text for b in doc.headings()]
     missing = []
-    for name, patterns in BRIEF_SECTIONS + ([UPDATE_SECTION] if update else []):
+    for name, patterns in BRIEF_SECTIONS:
+        if name in UPDATE_ONLY and not update:
+            continue
         if not any(re.search(p, h, re.IGNORECASE) for h in heads for p in patterns):
             missing.append(name)
     if missing:
@@ -323,7 +325,6 @@ def check_brief(html: str, *, update: bool = False) -> list:
     if len(doc.headings(1)) > 1:
         out.append(Failure(1, "two-h1", "doc"))
     return out + check_banned(doc)
-
 
 # --------------------------------------------------------------------------- #
 # Drafts
@@ -333,6 +334,9 @@ FAQ_HEADING = re.compile(r"faq|frequently asked|پرسش.{0,8}متداول|سو�
 SUMMARY_HEADING = re.compile(r"summary|conclusion|جمع.?بندی|نتیجه.?گیری|خلاصه", re.IGNORECASE)
 QUALITY_HEADING = re.compile(r"quality check|بررسی کیفیت|کنترل کیفیت", re.IGNORECASE)
 MIN_LINKS, MAX_LINKS = 3, 5
+HUMAN_TOUCH = {"fa": re.compile(r"\[\s*(?:تجربه[\s\u200c]+شخصی|نظر[\s\u200c]+متخصص)\s*:[^\]]*\]"),
+               "en": re.compile(r"\[\s*(?:Personal experience|Expert quote)\s*:[^\]]*\]", re.IGNORECASE)}
+MIN_TOUCHES, MAX_TOUCHES = 2, 4
 
 
 def _host(url: str) -> str:
@@ -371,6 +375,9 @@ def check_draft(html: str, *, language: str, domain: str, has_comparison: bool) 
         out.append(Failure(5, "link-repeated", "doc", f"{len(keys) - len(set(keys))} repeated"))
     if not IMAGE_SLOT.search(doc.full_text):
         out.append(Failure(5, "no-image-slot", "doc"))
+    touches = len(HUMAN_TOUCH.get(language, HUMAN_TOUCH["en"]).findall(doc.full_text))
+    if not MIN_TOUCHES <= touches <= MAX_TOUCHES:
+        out.append(Failure(5, "human-touch-count", "doc", f"{touches} found"))
     if not any(QUALITY_HEADING.search(b.text) for b in doc.headings()):
         out.append(Failure(5, "no-quality-check", "doc"))
     if not any(True for _ in doc.blocks if _.in_box):

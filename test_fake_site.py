@@ -215,7 +215,8 @@ class SampleTests(Base):
         self.assertEqual(len(names), len(set(names)))
         wanted = {"h1-count", "faq-not-h2", "summary-not-h2", "no-table", "link-count", "link-repeated",
                   "no-image-slot", "no-quality-check", "no-header-box", "tool-name", "dash", "count-mismatch",
-                  "arabic-letter", "latin-digit", "arabic-digit", "not-rtl", "missing-section", "two-h1"}
+                  "arabic-letter", "latin-digit", "arabic-digit", "not-rtl", "missing-section", "two-h1",
+                  "human-touch-count"}
         covered = set().union(*(s.expected for s in fs.samples()))
         self.assertEqual(wanted - covered, set())
 

@@ -22,11 +22,7 @@ Nothing here touches a real site's files. The module only talks to Drive and She
 it is given, so the tests run it against in-memory fakes.
 """
 
-import io
-import re
 from dataclasses import dataclass, field
-
-from googleapiclient.http import MediaIoBaseUpload
 
 import content
 import content_check as cc
@@ -35,60 +31,19 @@ import history
 import provision
 import sites
 import tabs
+from content_docs import BRIEF_HEADINGS, inline_style
+from gdocs import (DOC, FONT_TRIES, create_doc, doc_link, docs_in, ensure_doc, export_html,  # noqa: F401
+                   replace_doc)
 
 TEST_ROOT = "PulseO Test"
 INDEX_NAME = "PulseO Test · Index"
 INDEX_TAB = "Sites"
 INDEX_HEADER = ["name", "label", "language", "dashboard_id", "sop_id", "briefs_id", "drafts_id", "folder_id"]
 SAMPLES = "Samples"
-DOC = "application/vnd.google-apps.document"
 ZWNJ, TATWEEL = "‌", "ـ"
 ARABIC_KAF, ARABIC_YEH = "ك", "ي"
 
-# --------------------------------------------------------------------------- #
-# Documents in Drive
-# --------------------------------------------------------------------------- #
-
-
-def doc_link(doc_id: str) -> str:
-    return f"https://docs.google.com/document/d/{doc_id}/edit"
-
-
-def create_doc(drive, name: str, html: str, parent: str) -> str:
-    """A Google Doc made from HTML (Drive converts it); `drive.file` is enough to do this."""
-    media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
-    return drive.files().create(body={"name": name, "mimeType": DOC, "parents": [parent]},
-                                media_body=media, fields="id").execute(num_retries=provision.RETRIES)["id"]
-
-
-def replace_doc(drive, doc_id: str, html: str):
-    """Writes the HTML into a doc again (Drive converts it again)."""
-    media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
-    drive.files().update(fileId=doc_id, media_body=media, fields="id").execute(num_retries=provision.RETRIES)
-
-
-def ensure_doc(drive, name: str, html: str, parent: str, replace: bool = False) -> str:
-    """The doc of that name in the folder (made if missing). With `replace` an existing one gets the
-    given content again (only ever used on the documents of the fake world)."""
-    found = provision.find(drive, name, DOC, parent)
-    if not found:
-        return create_doc(drive, name, html, parent)
-    if replace:
-        replace_doc(drive, found, html)
-    return found
-
-
-def export_html(drive, doc_id: str) -> str:
-    data = drive.files().export(fileId=doc_id, mimeType="text/html").execute(num_retries=provision.RETRIES)
-    return data.decode("utf-8", errors="replace") if isinstance(data, (bytes, bytearray)) else str(data)
-
-
-def docs_in(drive, folder_id: str) -> dict:
-    """{doc id: name} of the documents in a folder."""
-    resp = drive.files().list(q=f"'{folder_id}' in parents and trashed = false", spaces="drive",
-                              fields="files(id,name,mimeType)", pageSize=200).execute(num_retries=provision.RETRIES)
-    return {f["id"]: f["name"] for f in resp.get("files", []) if f.get("mimeType", DOC) == DOC}
-
+# Documents in Drive: the same helpers the real content creation uses (gdocs.py)
 
 # --------------------------------------------------------------------------- #
 # The three fake sites
@@ -245,6 +200,9 @@ FA = {
     "link_slugs": ["رنگ-مو", "روغن-آرگان", "ماسک-مو", "درمان-ریزش-مو", "مراقبت-از-پوست-در-زمستان",
                    "کرم-مرطوب-کننده"],
     "extra": "این یک جمله ساده است.",
+    "touches": ["[تجربه شخصی: من این روش را در اتاق خودم امتحان کردم]", "[نظر متخصص: یک طراح داخلی می‌گوید نور گرم مهم است]",
+                "[تجربه شخصی: پرده سبک اتاق را بزرگ‌تر نشان داد]", "[نظر متخصص: رنگ روشن آرامش می‌آورد]",
+                "[تجربه شخصی: آینه بزرگ کمک کرد]", "[نظر متخصص: چیدمان ساده بهتر است]"],
     "latin": "در سال 2026 قیمت‌ها تغییر کرد.",
     "arabic_digit": "در سال ٢٠٢٦ قیمت‌ها تغییر کرد.",
     "arabic_letters": "\u0643\u062a\u0627\u0628 \u062e\u0648\u0628 \u0648 \u0639\u0644\u064a",     # Arabic kaf and yeh
@@ -271,23 +229,14 @@ EN = {
     "link_slugs": ["coffee-stain", "compost-basics", "herb-garden", "stain-removal-tips", "kitchen-storage",
                    "laptop-battery"],
     "extra": "This is a plain sentence.",
+    "touches": ["[Personal experience: I tried this in my own kitchen]", "[Expert quote: A designer says warm light matters]",
+                "[Personal experience: light curtains made the room look bigger]", "[Expert quote: light paint calms a room]",
+                "[Personal experience: a big mirror helped]", "[Expert quote: a simple layout works best]"],
     "latin": "",
     "arabic_digit": "",
     "arabic_letters": "",
 }
 T = {"fa": FA, "en": EN}
-
-
-BLOCK_TAG = re.compile(r"<(p|h[1-6]|li|td|th)>")
-
-
-def inline_style(html: str, lang: str, rtl: bool = True) -> str:
-    """Puts the font (and, for a right-to-left document, the direction) on every paragraph, heading,
-    list item and cell: Google keeps what is written on the element but does not always keep what is
-    written once for the whole page."""
-    font = "font-family:Vazirmatn" if lang == "fa" else "font-family:Arial"
-    attrs = f' style="{font}"' + (' dir="rtl"' if (lang == "fa" and rtl) else "")
-    return BLOCK_TAG.sub(lambda m: f"<{m.group(1)}{attrs}>", html)
 
 
 def _page_start(lang: str, rtl: bool = True) -> str:
@@ -300,7 +249,7 @@ def draft_html(lang: str, domain: str, *, h1s: int = 1, faq_level: int = 2, summ
                table: bool = True, links: int = 4, repeat_link: bool = False, images: bool = True,
                quality: bool = True, header_box: bool = True, rtl: bool = True, items: int = 10,
                words: str = "", arabic_letters: bool = False, latin_digits: bool = False,
-               arabic_digits: bool = False) -> str:
+               arabic_digits: bool = False, touches: int = 3) -> str:
     """A draft that follows every rule, or breaks the one the flags ask for."""
     t = T[lang]
     out = [_page_start(lang, rtl)]
@@ -309,6 +258,7 @@ def draft_html(lang: str, domain: str, *, h1s: int = 1, faq_level: int = 2, summ
         out.append(f'<table id="header-box">{rows}</table>')
     out.append("".join(f"<h1>{t['h1']}</h1>" for _ in range(h1s)) or "")
     out.append(f"<p>{t['intro']}</p>")
+    out.extend(f"<p>{x}</p>" for x in t["touches"][:touches])
     out.append(f"<h2>{t['h2_ideas']}</h2><ol>" + "".join(f"<li>{x}</li>" for x in t["items"][:items]) + "</ol>")
     if table:
         head = "".join(f"<th>{h}</th>" for h in t["table_head"])
@@ -338,20 +288,10 @@ def draft_html(lang: str, domain: str, *, h1s: int = 1, faq_level: int = 2, summ
     return inline_style("".join(out), lang, rtl)
 
 
-BRIEF_HEADINGS = {
-    "en": ["Task and article type", "Keywords and reader", "Title tag", "Meta description", "H1 and slug", "Outline",
-           "Entities and facts", "FAQ from real searches", "Internal links", "Length and format",
-           "Update notes", "Writer checklist"],
-    "fa": ["وظیفه و نوع مقاله", "کلمات کلیدی و مخاطب", "تگ عنوان", "متا دیسکریپشن", "اچ یک و اسلاگ", "ساختار مقاله",
-           "موجودیت‌ها و واقعیت‌ها", "پرسش‌های متداول از جستجوهای واقعی", "لینک‌های داخلی", "طول و قالب",
-           "یادداشت‌های به‌روزرسانی", "چک‌لیست نویسنده"],
-}
-
-
 def brief_html(lang: str, keyword: str, *, drop: str = "", h1s: int = 1, update: bool = False,
                words: str = "") -> str:
     """A brief with every section, or without the section named in `drop` (a part of its heading)."""
-    heads = [h for h in BRIEF_HEADINGS[lang] if (update or h not in (BRIEF_HEADINGS[lang][10],))]
+    heads = [h for i, h in enumerate(BRIEF_HEADINGS[lang], start=1) if update or i != 9]
     if drop:
         heads = [h for h in heads if drop.lower() not in h.lower()]
     out = [_page_start(lang), "".join(f"<h1>{keyword}</h1>" for _ in range(h1s))]
@@ -415,6 +355,8 @@ def samples() -> list:
         d("em dash", ["dash"], words="—")
         d("en dash", ["dash"], words="–")
         d("title says ten, seven listed", ["count-mismatch"], items=7)
+        d("no human touch", ["human-touch-count"], touches=0)
+        d("six human touches", ["human-touch-count"], touches=6)
         if lang == "fa":
             d("Arabic letters", ["arabic-letter"], arabic_letters=True)
             d("Latin digits", ["latin-digit"], latin_digits=True)
@@ -425,7 +367,7 @@ def samples() -> list:
                           domain, set(), update=True))
         out.append(Sample(f"{lang} brief · no FAQ section", brief_html(lang, "kw", drop="faq" if lang == "en" else "پرسش"),
                           "brief", lang, domain, {"missing-section"}))
-        out.append(Sample(f"{lang} brief · no update notes", brief_html(lang, "kw"), "brief", lang, domain,
+        out.append(Sample(f"{lang} brief · no section for an update", brief_html(lang, "kw"), "brief", lang, domain,
                           {"missing-section"}, update=True))
         out.append(Sample(f"{lang} brief · two H1", brief_html(lang, "kw", h1s=2), "brief", lang, domain, {"two-h1"}))
         out.append(Sample(f"{lang} brief · tool name", brief_html(lang, "kw", words="PulseO"), "brief", lang, domain,
@@ -497,11 +439,12 @@ def write_dashboard(sheets, file_id: str, articles: list, landing: list):
         tabs.patch_cells(sheets, file_id, [(f"'{tab}'!A2:{last}{len(rows) + 1}", _rows_matrix(rows))])
 
 
-def build(drive, sheets, log=print, reset: bool = False) -> World:
+def build(drive, sheets, log=print, reset: bool = False, reset_docs: bool = None) -> World:
     """Makes (or finds) the whole fake world in Drive. Running it again changes nothing, unless
     `reset`: then the two tabs of every fake dashboard are put back to their starting rows. Only
     files and folders made here, inside the "PulseO Test" folder, are ever touched. No id is printed."""
     world = World()
+    replace = reset if reset_docs is None else reset_docs          # the documents are written again only on request
     world.root_id = provision.ensure_folder(drive, TEST_ROOT)
     world.index_id = provision.find(drive, INDEX_NAME, provision.SHEET, world.root_id) or \
         provision.create(drive, INDEX_NAME, provision.SHEET, world.root_id)
@@ -511,9 +454,9 @@ def build(drive, sheets, log=print, reset: bool = False) -> World:
         w.briefs_id = provision.ensure_folder(drive, "Briefs", w.folder_id)
         w.drafts_id = provision.ensure_folder(drive, "Drafts", w.folder_id)
         if site.sop:
-            w.sop_id = ensure_doc(drive, f"{site.label} · SOP", sop_html(site), w.folder_id, reset)
+            w.sop_id = ensure_doc(drive, f"{site.label} · SOP", sop_html(site), w.folder_id, replace)
         for kw in brief_keywords(site):
-            w.brief_ids[kw] = ensure_doc(drive, f"Brief · {kw}", brief_html(site.language, kw), w.briefs_id, reset)
+            w.brief_ids[kw] = ensure_doc(drive, f"Brief · {kw}", brief_html(site.language, kw), w.briefs_id, replace)
         name = f"[{site.label}] Content Dashboard"
         w.dashboard_id = provision.find(drive, name, provision.SHEET, w.folder_id)
         fresh = w.dashboard_id is None
@@ -527,11 +470,26 @@ def build(drive, sheets, log=print, reset: bool = False) -> World:
         log(f"  fake site: {site.name} {'made' if fresh else 'found'}")
     world.samples_id = provision.ensure_folder(drive, SAMPLES, world.root_id)
     for s in samples():
-        world.sample_ids[s.name] = ensure_doc(drive, s.name, s.html, world.samples_id, reset)
+        world.sample_ids[s.name] = ensure_doc(drive, s.name, s.html, world.samples_id, replace)
     rows = [[w.site.name, w.site.label, w.site.language, w.dashboard_id, w.sop_id, w.briefs_id, w.drafts_id,
              w.folder_id] for w in world.sites.values()]
     _write_index(sheets, world.index_id, rows)
     return world
+
+
+def clear_generated(drive, world: World) -> int:
+    """Moves to the trash the briefs and drafts that earlier runs made in the fake world (every doc of the
+    Briefs and Drafts folders that was not there from the start), so a run starts clean. Returns how many.
+    Only documents in the fake world's own folders are touched."""
+    n = 0
+    for w in world.sites.values():
+        keep = set(w.brief_ids.values())
+        for folder in (w.briefs_id, w.drafts_id):
+            for doc_id in docs_in(drive, folder):
+                if doc_id not in keep:
+                    drive.files().update(fileId=doc_id, body={"trashed": True}).execute(num_retries=provision.RETRIES)
+                    n += 1
+    return n
 
 
 def _write_index(sheets, file_id: str, rows: list):
@@ -544,9 +502,6 @@ def _write_index(sheets, file_id: str, rows: list):
                                       "fields": "title,gridProperties.frozenRowCount"}}]}))
     last = cs.letters(len(INDEX_HEADER) - 1)
     tabs.patch_cells(sheets, file_id, [(f"'{INDEX_TAB}'!A1:{last}{len(rows) + 1}", [INDEX_HEADER] + rows)])
-
-
-FONT_TRIES = 5
 
 
 def check_samples_in_drive(drive, world: World, tries: int = FONT_TRIES) -> list:

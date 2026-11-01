@@ -44,7 +44,10 @@ except ImportError:
     print("Missing dependencies. Run: pip install -r requirements.txt")
     sys.exit(1)
 
+import ai_client
 import auth
+import content_accept
+import content_create
 import content_import
 import content_run
 import fake_site
@@ -707,6 +710,54 @@ def build_test_site(reset: bool = False):
     print("  ✅  The test site is ready in your Drive (folder PulseO Test)")
 
 
+def create_content_test(mode: str, limit: int = 0):
+    """Content creation on the fake test site and nowhere else: makes the fake world, runs the briefs and/or
+    the drafts on its three sites with the real AI, then tests the "done" checklist (content_accept.py).
+    Without `limit` it also runs everything a second time (a repeat must change nothing); with `limit`
+    each site may use only that many AI requests, to see a run stop cleanly. The run ends red when a check
+    fails. The documents belong to the invented test sites; the log holds counts and rule names only."""
+    try:
+        clients = auth.build_me_clients(os.environ, build)
+        ai = ai_client.make_client({}, os.environ)
+    except (auth.AuthError, ai_client.AiError) as e:
+        raise GscPulseError(f"content creation test: {e}") from None
+    smtp = mailer.settings_from_env(os.environ)
+    today = date.today()
+    world = fake_site.build(clients.drive, clients.sheets, print, reset=True, reset_docs=False)
+    print(f"  test site ready; {fake_site.clear_generated(clients.drive, world)} earlier briefs and drafts moved to the trash")
+
+    def one_run():
+        results, emails = {}, []
+        for name, w in world.sites.items():
+            cfg = content_create.CreateConfig(
+                label=w.site.label, language=w.site.language, domain=w.site.domain,
+                tabs=[t.name for t in fake_site.TABS], sop_doc_id=w.sop_id, briefs_folder_id=w.briefs_id,
+                drafts_folder_id=w.drafts_id, extra_rules=w.site.extra_rules, max_requests=limit or 30)
+            results[name] = content_create.run(clients.drive, clients.sheets, w.dashboard_id, cfg, ai, mode, today)
+            mail = content_create.email_text(cfg.label, results[name])
+            if mail:
+                emails.append((name, *mail))
+                notify_owner(smtp, *mail)
+        return results, emails
+
+    before, docs_before = content_accept.snapshot(clients.sheets, world), content_accept.doc_sets(clients.drive, world)
+    results, emails = one_run()
+    after = content_accept.snapshot(clients.sheets, world)
+    report = content_accept.verify(clients.drive, world, before, after, results, emails, today, mode)
+    if limit:
+        report.add(content_accept.verify_limited(emails, results, after, before).failures)
+    else:
+        again, emails2 = one_run()
+        report.add(content_accept.verify_repeat(clients.drive, world, docs_before, after,
+                                                content_accept.snapshot(clients.sheets, world), again, emails2).failures)
+    for name, r in results.items():
+        print(f"  {name}: {r.text()}, {r.font_rewrites} documents written again for their font")
+    print(f"  checklist: {report.text()}")
+    if not report.ok:
+        raise GscPulseError(f"content creation test: {len(report.failures)} checks failed")
+    print("  ✅  The checklist passed on the fake test site")
+
+
 def notify_owner_or_raise(smtp, subject: str, body: str):
     """Like notify_owner, but a failure raises (provision logs it and tries again next run)."""
     mailer.send(smtp, mailer.build_plain(smtp.user, [smtp.user], subject, body))
@@ -805,8 +856,9 @@ def main():
     smtp = mailer.settings_from_env(os.environ)
     if smtp:
         _SENSITIVE.extend(smtp.sensitive_values())
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        _SENSITIVE.append(os.environ["ANTHROPIC_API_KEY"].strip())
+    for key_name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+        if os.environ.get(key_name):
+            _SENSITIVE.append(os.environ[key_name].strip())
     for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
         for kind in ("weekly", "monthly"):
             _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients_for(kind), os.environ))
@@ -814,6 +866,10 @@ def main():
     # ---- The fake test site: its own command, nothing else runs (no real site is touched) --------
     if os.environ.get("BUILD_TEST_SITE", "").strip().lower() in ("1", "true", "yes"):
         build_test_site(reset=os.environ.get("RESET_TEST_SITE", "").strip().lower() in ("1", "true", "yes"))
+        return
+    create_mode = os.environ.get("CREATE_CONTENT_TEST", "").strip().lower()
+    if create_mode in ("briefs", "drafts", "both"):
+        create_content_test(create_mode, int(os.environ.get("CREATE_CONTENT_LIMIT", "").strip() or 0))
         return
 
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]

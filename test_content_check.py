@@ -22,7 +22,7 @@ def links(n: int, base: str = DOMAIN) -> str:
 
 
 GOOD_BODY = ("<h1>A guide</h1><p>Direct answer.</p><h2>Options</h2><table><tr><td>x</td></tr></table>"
-             + links(4) + "<p>[Image: a | b | c.jpg]</p>"
+             + links(4) + "<p>[Image: a | b | c.jpg]</p><p>[Personal experience: a]</p><p>[Expert quote: b]</p>"
              "<h2>FAQ</h2><h3>Q?</h3><p>A.</p><h2>Summary</h2><p>Done.</p><h2>Quality check</h2><ul><li>ok</li></ul>")
 
 
@@ -189,8 +189,22 @@ class DraftTests(unittest.TestCase):
 
     def test_the_persian_slot_and_headings(self):
         body = (GOOD_BODY.replace("[Image: a | b | c.jpg]", "[عکس: الف | ب | c.jpg]").replace("FAQ", "پرسش‌های متداول")
+                .replace("[Personal experience: a]", "[تجربه شخصی: ا]").replace("[Expert quote: b]", "[نظر متخصص: ب]")
                 .replace("Summary", "جمع‌بندی").replace("Quality check", "بررسی کیفیت"))
         self.assertEqual(check(draft(body, rtl=True, font="Vazirmatn"), language="fa"), [])
+
+    def test_two_to_four_human_touch_markers(self):
+        one = GOOD_BODY.replace("<p>[Expert quote: b]</p>", "")
+        self.assertEqual(codes(check(draft(one))), {"human-touch-count"})
+        none = one.replace("<p>[Personal experience: a]</p>", "")
+        self.assertEqual(codes(check(draft(none))), {"human-touch-count"})
+        four = GOOD_BODY.replace("<p>[Expert quote: b]</p>", "<p>[Expert quote: b] [Personal experience: c] [Expert quote: d]</p>")
+        self.assertEqual(check(draft(four)), [])
+        five = GOOD_BODY.replace("<p>[Expert quote: b]</p>", "<p>[Expert quote: b] [Personal experience: c] [Expert quote: d] [Expert quote: e]</p>")
+        self.assertEqual(codes(check(draft(five))), {"human-touch-count"})
+        persian_in_english = GOOD_BODY.replace("[Personal experience: a]", "[تجربه شخصی: ا]").replace("[Expert quote: b]", "[نظر متخصص: ب]")
+        self.assertEqual(codes(check(draft(persian_in_english))), {"human-touch-count"})   # the markers are those of the language
+        self.assertEqual(codes(check(draft(GOOD_BODY.replace("a]", "a]").replace("[Personal experience:", "[Personal experience :")))), set())
 
     def test_banned_words_count_in_a_draft_too(self):
         self.assertEqual(codes(check(draft(GOOD_BODY.replace("Done.", "Done by AI.")))), {"tool-name"})
@@ -203,29 +217,43 @@ class DraftTests(unittest.TestCase):
 
 class BriefTests(unittest.TestCase):
 
-    SECTIONS = ["Task and article type", "Keywords and reader", "Title tag", "Meta description", "H1 and slug",
-                "Outline", "Entities and facts", "FAQ from real searches", "Internal links", "Length and format",
+    SECTIONS = ["Task", "Keywords, intent and reader", "Title tag, meta description, H1 and slug", "Outline",
+                "Entities, facts and sources", "FAQ", "Internal links", "Word count, format and tone",
                 "Writer checklist"]
+    NINTH = "Keep, remove, rewrite"
 
     def brief(self, sections=None, extra=""):
         return page("<h1>kw</h1>" + "".join(f"<h2>{s}</h2><p>x</p>" for s in (sections or self.SECTIONS)) + extra)
 
-    def test_a_complete_brief(self):
+    def test_a_complete_brief_has_nine_sections_and_ten_for_an_update(self):
         self.assertEqual(cc.check_brief(self.brief()), [])
+        self.assertEqual(len(cc.BRIEF_SECTIONS), 10)
 
     def test_a_missing_section_is_counted_not_quoted(self):
         failures = cc.check_brief(self.brief(self.SECTIONS[:-2]))
         self.assertEqual(codes(failures), {"missing-section"})
         self.assertEqual(failures[0].detail, "2 missing")
 
-    def test_update_notes_only_for_an_update(self):
+    def test_the_ninth_section_only_for_an_update(self):
         self.assertEqual(codes(cc.check_brief(self.brief(), update=True)), {"missing-section"})
-        self.assertEqual(cc.check_brief(self.brief(extra="<h2>Update notes</h2>"), update=True), [])
+        self.assertEqual(cc.check_brief(self.brief(extra=f"<h2>{self.NINTH}</h2>"), update=True), [])
+        self.assertEqual(cc.check_brief(self.brief(extra=f"<h2>{self.NINTH}</h2>")), [])        # harmless on a new page
+
+    def test_every_section_is_found_by_its_own_heading_in_both_languages(self):
+        import content_docs as cd
+        for lang in ("en", "fa"):
+            heads = cd.BRIEF_HEADINGS[lang]
+            self.assertEqual(len(heads), 10)
+            doc = page("<h1>kw</h1>" + "".join(f"<h2>{h}</h2><p>x</p>" for h in heads))
+            self.assertEqual(cc.check_brief(doc, update=True), [], lang)
+            for i in range(10):                                           # leave one out: exactly that one is missing
+                rest = [h for j, h in enumerate(heads) if j != i]
+                found = cc.check_brief(page("<h1>kw</h1>" + "".join(f"<h2>{h}</h2><p>x</p>" for h in rest)), update=True)
+                self.assertEqual([f.detail for f in found], ["1 missing"], (lang, i))
 
     def test_two_h1_and_banned_words(self):
         self.assertEqual(codes(cc.check_brief(self.brief(extra="<h1>again</h1>"))), {"two-h1"})
         self.assertEqual(codes(cc.check_brief(self.brief(extra="<p>PulseO</p>"))), {"tool-name"})
-
 
 HEADER = ["Primary Keyword", "Published URL", "Status", "To Do", "Attachments", "Notes/Checklist", "Meta Title", "Score"]
 

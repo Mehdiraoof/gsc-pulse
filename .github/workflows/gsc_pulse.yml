@@ -27,6 +27,14 @@ on:
         description: "With rebuild_deck_site: monthly, weekly or both (default both)"
         required: false
         default: ""
+      create_content_test:
+        description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested)"
+        required: false
+        default: ""
+      create_content_limit:
+        description: "With create_content_test: only this many AI requests per site, to see a run stop cleanly"
+        required: false
+        default: ""
       build_test_site:
         description: "Make (or find) the fake test site in your Drive (folder PulseO Test) and try the content checker on its sample documents. No real site is touched"
         required: false
@@ -101,6 +109,9 @@ jobs:
           REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
           REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
           TEST_DECK: ${{ inputs.test_deck }}
+          CREATE_CONTENT_TEST: ${{ inputs.create_content_test }}
+          CREATE_CONTENT_LIMIT: ${{ inputs.create_content_limit }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BUILD_TEST_SITE: ${{ inputs.build_test_site }}
           RESET_TEST_SITE: ${{ inputs.reset_test_site }}
           CLEANUP_GONE_SITE: ${{ inputs.cleanup_gone_site }}

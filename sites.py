@@ -216,7 +216,11 @@ def _parse_deck(value, where: str) -> DeckConfig:
 # --------------------------------------------------------------------------- #
 
 CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "seasonal_regex", "min_gap_impressions_90d",
-                  "import_from", "gap_exclude_terms", "repair_imports")
+                  "import_from", "gap_exclude_terms", "repair_imports",
+                  "sop_doc_id", "briefs_folder_id", "drafts_folder_id", "language", "extra_rules",
+                  "max_briefs_per_run", "max_drafts_per_run", "ai", "ai_drafts")
+AI_FIELDS = ("provider", "model", "fallback_model", "max_requests_per_run", "daily_requests")
+AI_PROVIDERS = ("gemini", "anthropic")
 MAX_EXCLUDE_TERMS = 200
 IMPORT_FIELDS = ("sheet_id", "source_tab", "target_tab")
 MAX_IMPORTS = 8
@@ -264,11 +268,26 @@ class ContentConfig:
     imports: list = field(default_factory=list)          # [ImportSpec]
     gap_exclude_terms: list = field(default_factory=list)  # whole words that never become ideas
     repair_imports: bool = False                         # once: merge clearly matched imported rows
+    # content creation (briefs and drafts), see content_create.py
+    sop_doc_id: str = ""                                 # the site's SOP (a Google Doc); none: briefs only
+    briefs_folder_id: str = ""
+    drafts_folder_id: str = ""
+    language: str = ""                                   # "fa" or "en"; empty: the language of the deck
+    extra_rules: str = ""                                # free text added to every prompt
+    max_briefs_per_run: int = 10
+    max_drafts_per_run: int = 5
+    ai: dict = field(default_factory=dict)               # provider, model, fallback_model, max_requests_per_run, daily_requests
+    ai_drafts: bool = True                               # false: a Draft row is left untouched (the site stops at the brief)
+
+    @property
+    def creation_enabled(self) -> bool:
+        return bool(self.briefs_folder_id)
 
     def sensitive_values(self) -> list:
         rules = [t.url_regex for t in self.tabs] + [t.exclude_regex for t in self.tabs]
         ids = [i.sheet_id for i in self.imports]
-        return [v for v in [self.sheet_id, self.seasonal_regex] + ids + rules if v]
+        return [v for v in [self.sheet_id, self.seasonal_regex, self.sop_doc_id, self.briefs_folder_id,
+                            self.drafts_folder_id] + ids + rules if v]
 
     def tab_of(self, url: str):
         """The first tab a page belongs to, or None (pages that match no tab are ignored)."""
@@ -370,6 +389,41 @@ def _parse_content(value, where: str) -> "ContentConfig":
     if not isinstance(repair, bool):
         raise SitesConfigError(f"{at}: 'repair_imports' must be true or false")
     cfg.repair_imports = repair
+    for key in ("sop_doc_id", "briefs_folder_id", "drafts_folder_id"):
+        v = value.get(key, "")
+        if v is not None and (not isinstance(v, str) or len(v) > 200):
+            raise SitesConfigError(f"{at}: '{key}' must be text")
+        setattr(cfg, key, (v or "").strip())
+    language = value.get("language", "")
+    if language not in ("", "fa", "en"):
+        raise SitesConfigError(f"{at}: 'language' must be fa or en")
+    cfg.language = language
+    rules = value.get("extra_rules", "")
+    if not isinstance(rules, str) or len(rules) > 3000:
+        raise SitesConfigError(f"{at}: 'extra_rules' must be text of at most 3000 characters")
+    cfg.extra_rules = rules.strip()
+    for key, default in (("max_briefs_per_run", 10), ("max_drafts_per_run", 5)):
+        n = value.get(key, default)
+        if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 50:
+            raise SitesConfigError(f"{at}: '{key}' must be a whole number from 0 to 50")
+        setattr(cfg, key, n)
+    ai_drafts = value.get("ai_drafts", True)
+    if not isinstance(ai_drafts, bool):
+        raise SitesConfigError(f"{at}: 'ai_drafts' must be true or false")
+    cfg.ai_drafts = ai_drafts
+    ai = value.get("ai", {}) or {}
+    if not isinstance(ai, dict) or set(ai) - set(AI_FIELDS):
+        raise SitesConfigError(f"{at}: 'ai' must be an object with: {', '.join(AI_FIELDS)}")
+    if ai.get("provider", "gemini") not in AI_PROVIDERS:
+        raise SitesConfigError(f"{at}: 'ai.provider' must be gemini or anthropic")
+    for key in ("model", "fallback_model"):
+        if not isinstance(ai.get(key, ""), str) or len(ai.get(key, "")) > 100:
+            raise SitesConfigError(f"{at}: 'ai.{key}' must be a model name")
+    for key in ("max_requests_per_run", "daily_requests"):
+        n = ai.get(key, 0)
+        if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 1000:
+            raise SitesConfigError(f"{at}: 'ai.{key}' must be a whole number from 0 to 1000")
+    cfg.ai = dict(ai)
     return cfg
 
 

@@ -369,6 +369,33 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(sites.SitesConfigError):
             self.parse({"enabled": True, "tabs": [{"name": "Removed Pages", "url_regex": "x"}]})
 
+    def test_content_creation_settings(self):
+        base_block = {"enabled": True, "tabs": [{"name": "A", "url_regex": "x"}]}
+        plain = self.parse(base_block).content
+        self.assertEqual((plain.creation_enabled, plain.ai_drafts, plain.max_briefs_per_run, plain.max_drafts_per_run,
+                          plain.language, plain.ai), (False, True, 10, 5, "", {}))
+        c = self.parse({**base_block, "sop_doc_id": " SOP-ID ", "briefs_folder_id": "BR-ID", "drafts_folder_id": "DR-ID",
+                        "language": "fa", "extra_rules": " Be kind. ", "max_briefs_per_run": 4, "max_drafts_per_run": 0,
+                        "ai": {"provider": "gemini", "model": "m1", "fallback_model": "m2",
+                               "max_requests_per_run": 12, "daily_requests": 18}, "ai_drafts": False}).content
+        self.assertTrue(c.creation_enabled)
+        self.assertEqual((c.sop_doc_id, c.briefs_folder_id, c.drafts_folder_id), ("SOP-ID", "BR-ID", "DR-ID"))
+        self.assertEqual((c.language, c.extra_rules, c.max_briefs_per_run, c.max_drafts_per_run, c.ai_drafts),
+                         ("fa", "Be kind.", 4, 0, False))
+        self.assertEqual(c.ai["daily_requests"], 18)
+        for ident in ("SOP-ID", "BR-ID", "DR-ID"):                 # the ids never reach a public log
+            self.assertIn(ident, c.sensitive_values())
+
+    def test_content_creation_problems(self):
+        base_block = {"enabled": True, "tabs": [{"name": "A", "url_regex": "x"}]}
+        for bad in ({"language": "de"}, {"sop_doc_id": 5}, {"briefs_folder_id": "x" * 201}, {"extra_rules": "x" * 3001},
+                    {"max_briefs_per_run": -1}, {"max_drafts_per_run": 51}, {"max_briefs_per_run": True},
+                    {"ai_drafts": "no"}, {"ai": "gemini"}, {"ai": {"provider": "other"}}, {"ai": {"key": "secret-value"}},
+                    {"ai": {"model": 3}}, {"ai": {"daily_requests": -1}}, {"ai": {"max_requests_per_run": 1001}}):
+            with self.assertRaises(sites.SitesConfigError) as cm:
+                self.parse({**base_block, **bad})
+            self.assertNotIn("secret-value", str(cm.exception))
+
 
 class AutocompleteTests(unittest.TestCase):
 
