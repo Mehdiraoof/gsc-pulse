@@ -20,6 +20,7 @@ count. A report can therefore be printed in a public log even when the documents
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlsplit
 
 import content
 import tabs
@@ -84,8 +85,19 @@ class Block:
     level: int = 0      # 1 to 6 for a heading
 
 
+def real_href(href: str) -> str:
+    """Google wraps every link of an exported document in its own redirect address
+    (https://www.google.com/url?q=<the address>&...): the address behind it."""
+    if href.startswith(("https://www.google.com/url?", "http://www.google.com/url?")):
+        q = parse_qs(urlsplit(href).query).get("q")
+        if q:
+            return q[0]
+    return href
+
+
 class Doc(HTMLParser):
-    """The parts of an HTML document the checks need."""
+    """The parts of an HTML document the checks need. The header box for the editor is the table
+    that comes before the first heading (Google drops the id a document is made with)."""
 
     def __init__(self, html: str):
         super().__init__(convert_charrefs=True)
@@ -97,6 +109,8 @@ class Doc(HTMLParser):
         self._lists = []          # counters of the open lists
         self._skip = 0            # inside <style>, <script>, <title>
         self._style = False
+        self._seen_heading = False
+        self._box_done = False
         self.feed(html or "")
         self.close()
 
@@ -123,6 +137,10 @@ class Doc(HTMLParser):
             return
         parent_dir = self._stack[-1][1] if self._stack else ""
         in_box = (self._stack[-1][2] if self._stack else False) or attrs.get("id") == "header-box"
+        if tag in _HEADINGS:
+            self._seen_heading = True
+        if tag == "table" and not self._seen_heading and not self._box_done:
+            in_box = self._box_done = True
         self._stack.append([tag, self._own_dir(attrs) or parent_dir, in_box])
         if tag == "table" and not in_box:
             self.tables += 1
@@ -131,7 +149,7 @@ class Doc(HTMLParser):
         if tag == "li" and self._lists:
             self._lists[-1] += 1
         if tag == "a" and attrs.get("href"):
-            self.links.append((attrs["href"], in_box))
+            self.links.append((real_href(attrs["href"]), in_box))
         if tag in _TEXT_BLOCKS:
             self._block = [tag, [], self._stack[-1][1], in_box]
 

@@ -49,6 +49,18 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(doc.links, [("/x", False)])
         self.assertTrue(any(b.in_box for b in doc.blocks))
 
+    def test_the_header_box_is_the_table_before_the_first_heading_even_without_an_id(self):
+        doc = cc.Doc("<table><tr><td>a</td></tr></table><h1>T</h1><table><tr><td>b</td></tr></table>")
+        self.assertEqual(doc.tables, 1)
+        self.assertEqual([b.in_box for b in doc.blocks if b.tag == "td"], [True, False])
+        no_box = cc.Doc("<h1>T</h1><table><tr><td>b</td></tr></table>")
+        self.assertEqual((no_box.tables, [b.in_box for b in no_box.blocks if b.tag == "td"]), (1, [False]))
+
+    def test_links_that_google_wrapped_are_unwrapped(self):
+        href = ("https://www.google.com/url?q=https://site.test/article/x&amp;sa=D&amp;source=editors"
+                "&amp;ust=1&amp;usg=abc")
+        doc = cc.Doc(f'<p><a href="{href}">x</a> <a href="https://site.test/y">y</a></p>')
+        self.assertEqual(doc.links, [("https://site.test/article/x", False), ("https://site.test/y", False)])
     def test_direction_is_inherited_and_a_style_counts(self):
         doc = cc.Doc('<html dir="rtl"><body><p>a</p><div dir="ltr"><p>b</p></div>'
                      '<p style="direction: rtl">c</p></body></html>')
