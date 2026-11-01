@@ -286,11 +286,11 @@ class DeckRunnerTests(ReportsTestCase):
         self.smtp = mailer.SmtpSettings("smtp.test", 587, USER, "pw")
         self.sent = []
 
-    def run_decks(self, send=None, env=None, site=None, rebuild=False, post=None):
+    def run_decks(self, send=None, env=None, site=None, rebuild=False, post=None, test=False):
         self.logs.clear()
         return deck_runner.run_decks(
             self.sheets, RID, site or self.site, self.smtp, self.env if env is None else env,
-            rebuild=rebuild, log=self.logs.append, send=send or (lambda s, m: self.sent.append(m)),
+            rebuild=rebuild, log=self.logs.append, send=send or (lambda s, m: self.sent.append(m)), test=test,
             fetch_logo=lambda url: None, **({"post": post} if post else {}))
 
     def state(self):
@@ -372,6 +372,18 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertEqual(len(self.sent), 1)
         self.assertNotIn("Week", self.sent[0]["Subject"])
         self.assertTrue(any("weekly already sent" in l for l in self.logs))
+
+    def test_a_test_copy_goes_to_the_owner_only_is_marked_and_changes_no_state(self):
+        site = site_with(deck=deck(monthly_recipients=[self.CLIENT], weekly_recipients=[self.CLIENT]))
+        self.run_decks()                                                          # both decks went out normally
+        sent_before = self.state()
+        self.sent.clear()
+        self.run_decks(site=site, rebuild={"monthly"}, test=True)
+        (m,) = self.sent
+        self.assertEqual((m["To"], m["Bcc"]), (USER, None))
+        self.assertTrue(m["Subject"].startswith("[Test] Example SEO Report"))
+        self.assertEqual(list(m.iter_attachments())[0].get_filename(), m["Subject"][len("[Test] "):] + ".pptx")
+        self.assertEqual(self.state(), sent_before)                              # nothing was marked
 
     def test_which_site_and_which_decks_a_rebuild_covers(self):
         site_2 = gsc_pulse.SiteRun(site_with(name="site-2", deck=deck()))

@@ -99,7 +99,8 @@ def email_text(report: dd.Report, cfg, lang: str, period: str) -> tuple:
 
 def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, log=print,
               scrub=lambda s: s, template_dir: str = TEMPLATE_DIR, send=mailer.send,
-              post=summary._post, fetch_logo=decks.fetch_logo, mark_only: bool = False) -> DeckResult:
+              post=summary._post, fetch_logo=decks.fetch_logo, mark_only: bool = False,
+              test: bool = False) -> DeckResult:
     cfg = site.deck
     wanted = {"monthly", "weekly"} if rebuild is True else set(rebuild or ())     # decks to build whatever the state says
     result = DeckResult()
@@ -112,6 +113,8 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
         # the owner (SMTP_USER) always gets the deck; other people are in To, the owner in Bcc
         to, bcc = mailer.split_recipients(
             mailer.resolve_recipients(cfg.recipients_for(kind), env), smtp.user)
+        if test:                                         # a test copy: the owner only, whatever the lists say
+            to, bcc = [smtp.user], []
         load = dd.load_monthly if kind == "monthly" else dd.load_weekly
         report = load(sheets, reports_id, site)
         if report is None:
@@ -141,13 +144,16 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             period = decks.period_title(report, cfg.language)
             subject, body = email_text(report, cfg, cfg.language, period)
             filename = mailer.deck_filename(subject)
+            if test:
+                subject = "[Test] " + subject
             message = mailer.build_message(smtp.user, to, subject, body, filename, payload, bcc=bcc)
             send(smtp, message)
         except Exception as e:                           # noqa: BLE001  one deck never blocks the other
             result.failed.append(kind)
             log(f"decks: {kind} failed ({scrub(f'{type(e).__name__}: {e}')})")
             continue
-        write_state(sheets, reports_id, state, STATE_KEY[kind], report.period)
+        if not test:                                     # a test copy never changes what counts as sent
+            write_state(sheets, reports_id, state, STATE_KEY[kind], report.period)
         result.sent.append(kind)
         count = len(to) + len(bcc)
         slides = len(Presentation(io.BytesIO(payload)).slides)

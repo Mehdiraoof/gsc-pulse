@@ -533,7 +533,7 @@ def deck_rebuild_for(run: SiteRun, everything: bool, site_name: str, kind: str):
     return False
 
 
-def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False):
+def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False, test=False):
     """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed."""
     site = run.site
     if not site.deck.enabled:
@@ -547,7 +547,7 @@ def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_onl
         print("decks: off (no SMTP settings)\n")
         return
     result = deck_runner.run_decks(sheets_service, site.reports_sheet_id, site, smtp, os.environ,
-                                   rebuild_decks, print, scrub, mark_only=mark_only)
+                                   rebuild_decks, print, scrub, mark_only=mark_only, test=test)
     run.decks_text = result.text()
     if result.failed:
         raise GscPulseError(f"deck delivery failed: {', '.join(result.failed)}")
@@ -767,6 +767,7 @@ def main():
     rebuild_deck_site = os.environ.get("REBUILD_DECK_SITE", "").strip().lower()      # one site only
     rebuild_deck_kind = os.environ.get("REBUILD_DECK_KIND", "").strip().lower()       # monthly | weekly | both
     mark_decks_site = os.environ.get("MARK_DECKS_SITE", "").strip().lower()           # one site: mark decks sent, email nothing
+    test_deck = os.environ.get("TEST_DECK", "").strip().lower() in ("1", "true", "yes")   # with rebuild_deck_site: a test copy to the owner only
     rebuild_content_site = os.environ.get("REBUILD_CONTENT_SITE", "").strip().lower() # one site: refresh its content dashboard now
     rebuild_views = os.environ.get("REBUILD_VIEWS", "").strip().lower() in ("1", "true", "yes")
     smtp = mailer.settings_from_env(os.environ)
@@ -866,7 +867,8 @@ def main():
         try:
             sync_decks(r.sheets, r, smtp, deck_rebuild_for(r, rebuild_decks, rebuild_deck_site,
                                                           rebuild_deck_kind),
-                       mark_only=bool(mark_decks_site) and r.name.lower() == mark_decks_site)
+                       mark_only=bool(mark_decks_site) and r.name.lower() == mark_decks_site,
+                       test=test_deck and bool(rebuild_deck_site) and r.name.lower() == rebuild_deck_site)
         except Exception as e:
             r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
             fail_site(r, e)
