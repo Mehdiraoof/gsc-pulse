@@ -547,7 +547,9 @@ class DeckRunnerTests(ReportsTestCase):
         self.run_decks(site=site)
         self.assertIn("گزارش سئو", self.sent[0]["Subject"])
         self.assertNotIn("PulseO", self.sent[0]["Subject"])
-        self.assertEqual(list(self.sent[0].iter_attachments())[0].get_filename(), self.sent[0]["Subject"] + ".pptx")
+        self.assertTrue(self.sent[0]["Subject"].startswith("برای مشتری · "))
+        self.assertEqual(list(self.sent[0].iter_attachments())[0].get_filename(),
+                         self.sent[0]["Subject"].split(" · ", 1)[1] + ".pptx")
 
 
 class WeeklyMoversTests(ReportsTestCase):
@@ -693,7 +695,8 @@ class NamingAndPrivacyTests(unittest.TestCase):
         self.assertNotIn("GSC Pulse", self.read("README.md"))
         self.assertTrue(self.read(".github/workflows/gsc_pulse.yml").startswith("name: PulseO weekly sync"))
         for lang in ("en", "fa"):                                  # ... but the emails and decks never say so
-            self.assertNotIn("PulseO", deck_runner.i18n.table(lang)["mail_subject"])
+            for key in ("mail_subject_monthly", "mail_subject_weekly", "file_monthly", "file_weekly"):
+                self.assertNotIn("PulseO", deck_runner.i18n.table(lang)[key])
             self.assertNotIn("PulseO", deck_runner.i18n.table(lang)["mail_sign"])
 
     def test_no_workflow_uploads_anything(self):

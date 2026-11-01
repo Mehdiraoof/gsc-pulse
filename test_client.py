@@ -578,7 +578,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_the_persian_email_is_a_note_too(self):
         subject, body = deck_runner.email_text(report(), fx.Cfg(), "fa", "\u0633\u067e\u062a\u0627\u0645\u0628\u0631 2026")
-        self.assertTrue(subject.startswith("\u06af\u0632\u0627\u0631\u0634 \u0633\u0626\u0648 Example"))
+        self.assertTrue(subject.startswith("\u0628\u0631\u0627\u06cc \u0645\u0634\u062a\u0631\u06cc \u00b7 \u06af\u0632\u0627\u0631\u0634 \u0633\u0626\u0648 Example"))
         self.assertEqual(body.splitlines()[0], "\u0633\u0644\u0627\u0645\u060c")
         self.assertEqual([l for l in body.splitlines() if l.strip()][-1], "\u0645\u0647\u062f\u06cc")
         self.assertNotIn("PulseO", subject + body)
