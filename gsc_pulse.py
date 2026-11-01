@@ -763,13 +763,14 @@ def create_content_test(mode: str, limit: int = 0):
                 notify_owner(smtp, *mail)
         return results, emails
 
-    before, docs_before = content_accept.snapshot(clients.sheets, world), content_accept.doc_sets(clients.drive, world)
+    before = content_accept.snapshot(clients.sheets, world)
     results, emails = one_run()
     after = content_accept.snapshot(clients.sheets, world)
     report = content_accept.verify(clients.drive, world, before, after, results, emails, today, mode)
     if limit:
         report.add(content_accept.verify_limited(emails, results, after, before).failures)
     else:
+        docs_before = content_accept.doc_sets(clients.drive, world)          # a repeat must add none
         again, emails2 = one_run()
         report.add(content_accept.verify_repeat(clients.drive, world, docs_before, after,
                                                 content_accept.snapshot(clients.sheets, world), again, emails2).failures)
