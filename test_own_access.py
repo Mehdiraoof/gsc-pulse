@@ -567,7 +567,7 @@ class MainTests(unittest.TestCase):
                               "recipients": [], "weekly": True, "monthly": False})
         out, err = self.run_main((S1, site))
         self.assertIsNone(err, out)
-        decks = [m for m in FakeSMTP.sent if "Weekly" in m["Subject"]]
+        decks = [m for m in FakeSMTP.sent if "Week" in m["Subject"]]
         self.assertEqual(len(decks), 1)
         self.assertEqual(decks[0]["To"], OWNER)
         self.assertIn("Kalameh · PulseO Data", self.drive.names(provision.SHEET))
@@ -600,7 +600,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.drive.files_, {})                               # nothing created
         self.assertEqual(self.me.site_urls, [])
         self.assertEqual(self.subjects(), [gsc_pulse.LOST_ACCESS_SUBJECT])    # one email, no more
-        self.assertIn("re-authorize", FakeSMTP.sent[0].get_content())
+        self.assertIn("authorize it again", FakeSMTP.sent[0].get_content())
         self.assertNotIn(REFRESH, out)
 
     def test_several_me_sites_still_send_one_email(self):

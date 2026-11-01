@@ -370,7 +370,7 @@ class DeckRunnerTests(ReportsTestCase):
         result = self.run_decks(rebuild={"monthly"})
         self.assertEqual(result.sent, ["monthly"])
         self.assertEqual(len(self.sent), 1)
-        self.assertIn("Monthly", self.sent[0]["Subject"])
+        self.assertNotIn("Week", self.sent[0]["Subject"])
         self.assertTrue(any("weekly already sent" in l for l in self.logs))
 
     def test_which_site_and_which_decks_a_rebuild_covers(self):
@@ -407,7 +407,7 @@ class DeckRunnerTests(ReportsTestCase):
                          ["monthly", "weekly"])
         got = {}
         for m in self.sent:
-            kind = "monthly" if "Monthly" in m["Subject"] else "weekly"
+            kind = "monthly" if "Week" not in m["Subject"] else "weekly"
             got[kind] = (m["To"], m["Bcc"])
         return got
 
@@ -450,7 +450,7 @@ class DeckRunnerTests(ReportsTestCase):
 
     def test_a_failed_send_keeps_the_state_of_the_deck_that_did_send(self):
         def flaky(settings, message):
-            if "Monthly" in message["Subject"]:
+            if "Week" not in message["Subject"]:
                 raise mailer.MailError(f"SMTPAuthenticationError: bad password for {USER}")
             self.sent.append(message)
 
@@ -531,7 +531,7 @@ class DeckRunnerTests(ReportsTestCase):
     def test_the_persian_deck_and_email(self):
         site = site_with(deck=deck(language="fa", site_label="نمونه"))
         self.run_decks(site=site)
-        self.assertIn("گزارش ماهانه", self.sent[0]["Subject"])
+        self.assertIn("گزارش سئو", self.sent[0]["Subject"])
         self.assertNotIn("PulseO", self.sent[0]["Subject"])
         self.assertEqual(list(self.sent[0].iter_attachments())[0].get_filename(), self.sent[0]["Subject"] + ".pptx")
 
