@@ -710,6 +710,29 @@ def build_test_site(reset: bool = False):
     print("  ✅  The test site is ready in your Drive (folder PulseO Test)")
 
 
+def probe_ai():
+    """A diagnostic: one tiny request to each text model the Gemini key lists (and one with search for the first
+    working one), so the log shows which models this key may really use. Counts of requests only; no text."""
+    try:
+        client = ai_client.make_client({}, os.environ)
+    except ai_client.AiError as e:
+        raise GscPulseError(f"AI probe: {e}") from None
+    names = [n for n in client.model_names() if "flash" in n and not any(
+        x in n for x in ("image", "tts", "transcribe", "computer", "customtools", "live", "audio"))]
+    print(f"  AI probe: {len(names)} flash models listed")
+    working = ""
+    for name in names[:14]:
+        try:
+            result = client.probe(name)
+        except ai_client.AiError as e:
+            result = str(e)
+        print(f"    {name}: {result}")
+        if result == "ok" and not working:
+            working = name
+    if working:
+        print(f"    {working} with search: {client.probe(working, search=True)}")
+
+
 def create_content_test(mode: str, limit: int = 0):
     """Content creation on the fake test site and nowhere else: makes the fake world, runs the briefs and/or
     the drafts on its three sites with the real AI, then tests the "done" checklist (content_accept.py).
@@ -868,6 +891,9 @@ def main():
         build_test_site(reset=os.environ.get("RESET_TEST_SITE", "").strip().lower() in ("1", "true", "yes"))
         return
     create_mode = os.environ.get("CREATE_CONTENT_TEST", "").strip().lower()
+    if create_mode == "probe":
+        probe_ai()
+        return
     if create_mode in ("briefs", "drafts", "both"):
         create_content_test(create_mode, int(os.environ.get("CREATE_CONTENT_LIMIT", "").strip() or 0))
         return

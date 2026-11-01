@@ -28,7 +28,7 @@ on:
         required: false
         default: ""
       create_content_test:
-        description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested)"
+        description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested); probe: which AI models the key may use"
         required: false
         default: ""
       create_content_limit:

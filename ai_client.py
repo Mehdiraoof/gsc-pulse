@@ -123,6 +123,21 @@ class Gemini:
         return sorted(str(m.get("name", "")).replace("models/", "") for m in _json(raw).get("models", [])
                       if "generateContent" in (m.get("supportedGenerationMethods") or []))
 
+    def probe(self, model: str, search: bool = False) -> str:
+        """One tiny request to a model, for a diagnostic: "ok", or the status with Google's short message."""
+        body = {"contents": [{"role": "user", "parts": [{"text": "Reply with the single word OK."}]}],
+                "generationConfig": {"maxOutputTokens": 64}}
+        if search:
+            body["tools"] = [{"google_search": {}}]
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.key}
+        self.calls += 1
+        status, raw = self.post(GEMINI_URL.format(model=model), headers, json.dumps(body).encode("utf-8"))
+        if status == 200:
+            return "ok"
+        data = _json(raw)
+        said = re.sub(r"[^A-Za-z0-9_.:,;/()' -]", " ", str((data.get("error", {}) or {}).get("message", "")))[:160]
+        return f"status {status} {(data.get('error', {}) or {}).get('status', '')} {said}".strip()
+
     def generate(self, system: str, prompt: str, search: bool = False, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
         models = [self.model] + ([self.fallback] if self.fallback and self.fallback != self.model else [])
         unavailable, limits = None, []
