@@ -97,7 +97,8 @@ def _quota_note(model: str, data: dict) -> str:
     for detail in (data.get("error", {}) or {}).get("details", []) or []:
         for v in detail.get("violations", []) or []:
             bits.append(re.sub(r"[^A-Za-z0-9_.:/ -]", "", f"{v.get('quotaId', '')} limit {v.get('quotaValue', '?')}"))
-    return f"{model}: " + ("; ".join(dict.fromkeys(bits)) or "no detail")
+    said = re.sub(r"[^A-Za-z0-9_.:,;/()' -]", " ", str((data.get("error", {}) or {}).get("message", "")))[:240]
+    return f"{model}: " + ("; ".join(dict.fromkeys(bits)) or "no detail") + (f" - {said}" if said else "")
 
 
 class Gemini:
