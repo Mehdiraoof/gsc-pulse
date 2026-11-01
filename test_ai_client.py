@@ -42,7 +42,7 @@ class GeminiTests(unittest.TestCase):
         g, net, _ = gemini(answer("The text."))
         self.assertEqual(g.generate("be brief", "Write.", search=True), "The text.")
         url, headers, body = net.calls[0]
-        self.assertIn("gemini-2.5-flash:generateContent", url)
+        self.assertIn("gemini-3.8-flash:generateContent", url)
         self.assertEqual(headers["x-goog-api-key"], KEY)
         self.assertNotIn(KEY, url)
         self.assertEqual(body["systemInstruction"]["parts"][0]["text"], "be brief")
@@ -65,7 +65,7 @@ class GeminiTests(unittest.TestCase):
     def test_the_daily_limit_of_the_first_model_goes_to_the_fallback(self):
         g, net, _ = gemini(error(429, "quota PerDay"), answer("from lite"))
         self.assertEqual(g.generate("", "x"), "from lite")
-        self.assertIn("gemini-2.5-flash-lite:generateContent", net.calls[1][0])
+        self.assertIn("gemini-3.5-flash-lite:generateContent", net.calls[1][0])
 
     def test_both_models_limited_is_quota_exhausted_not_a_failure(self):
         g, _, _ = gemini(error(429, "PerDay"), error(429, "PerDay"))
@@ -114,7 +114,7 @@ class GeminiTests(unittest.TestCase):
         def get(url, headers):
             seen.append(headers)
             return listing
-        g = ai.Gemini(KEY, post=FakeNet(error(404, "x", code="NOT_FOUND")), sleep=lambda s: None, get=get)
+        g = ai.Gemini(KEY, post=FakeNet(error(404, "x", code="NOT_FOUND"), error(404, "x", code="NOT_FOUND")), sleep=lambda s: None, get=get)
         with self.assertRaises(ai.AiError) as caught:
             g.generate("", "x")
         text = str(caught.exception)
@@ -122,10 +122,16 @@ class GeminiTests(unittest.TestCase):
         self.assertIn("gemini-9-flash", text)
         self.assertNotIn("embedding", text)
         self.assertNotIn(KEY, text)
-        broken = ai.Gemini(KEY, post=FakeNet(error(404, "x", code="NOT_FOUND")), get=lambda url, headers: (500, b""))
+        broken = ai.Gemini(KEY, post=FakeNet(error(404, "x", code="NOT_FOUND"), error(404, "x", code="NOT_FOUND")), get=lambda url, headers: (500, b""))
         with self.assertRaises(ai.AiError) as caught:
             broken.generate("", "x")
         self.assertIn("unknown", str(caught.exception))
+
+    def test_a_model_the_key_cannot_use_goes_to_the_next_one(self):
+        listing = (200, b'{"models": []}')
+        g = ai.Gemini(KEY, post=FakeNet(error(404, "gone", code="NOT_FOUND"), answer("from lite")),
+                      sleep=lambda s: None, get=lambda url, headers: listing)
+        self.assertEqual(g.generate("", "x"), "from lite")
 
     def test_a_blocked_empty_or_cut_off_answer(self):
         for body in ({"promptFeedback": {"blockReason": "SAFETY"}}, {"candidates": []},
@@ -167,8 +173,8 @@ class MakeClientTests(unittest.TestCase):
         client = ai.make_client({}, {"GEMINI_API_KEY": " k "})
         self.assertIsInstance(client, ai.Gemini)
         self.assertEqual(client.key, "k")
-        self.assertEqual(client.model, "gemini-2.5-flash")
-        self.assertEqual(client.fallback, "gemini-2.5-flash-lite")
+        self.assertEqual(client.model, "gemini-3.8-flash")
+        self.assertEqual(client.fallback, "gemini-3.5-flash-lite")
         client = ai.make_client({"provider": "gemini", "model": "m1", "fallback_model": ""}, {"GEMINI_API_KEY": "k"})
         self.assertEqual((client.model, client.fallback), ("m1", ""))
         self.assertIsInstance(ai.make_client({"provider": "anthropic"}, {"ANTHROPIC_API_KEY": "k"}), ai.Anthropic)

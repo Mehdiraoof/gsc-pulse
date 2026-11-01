@@ -25,7 +25,7 @@ import urllib.request
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODELS = {"gemini": ("gemini-2.5-flash", "gemini-2.5-flash-lite"),
+DEFAULT_MODELS = {"gemini": ("gemini-3.8-flash", "gemini-3.5-flash-lite"),
                   "anthropic": ("claude-sonnet-5-5", "")}
 MAX_OUTPUT_TOKENS = 24000
 TIMEOUT_S = 300
@@ -34,6 +34,10 @@ OVERLOAD_RETRIES = 2
 
 class AiError(Exception):
     """The AI could not answer. The message is safe to print."""
+
+
+class ModelUnavailable(AiError):
+    """The key cannot use that model (status 404). The next model is tried."""
 
 
 class QuotaExhausted(AiError):
@@ -111,11 +115,16 @@ class Gemini:
 
     def generate(self, system: str, prompt: str, search: bool = False, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
         models = [self.model] + ([self.fallback] if self.fallback and self.fallback != self.model else [])
+        unavailable = None
         for model in models:
             try:
                 return self._ask(model, system, prompt, search, max_tokens)
+            except ModelUnavailable as e:
+                unavailable = e                          # this key cannot use that model: the next one
             except QuotaExhausted:
                 continue                                 # this model's limit: the next one, if there is one
+        if unavailable:
+            raise AiError(str(unavailable))
         raise QuotaExhausted("the AI's request limit is reached")
 
     def _ask(self, model, system, prompt, search, max_tokens) -> str:
@@ -150,10 +159,13 @@ class Gemini:
             if status != 200:
                 reason = (data.get("error", {}) or {}).get("status", "")
                 hint = ""
-                if status == 404:                        # most likely a model name that no longer exists
+                if status == 404:                        # a model this key cannot use (retired, or not for this key)
                     names = [n for n in self.model_names() if "gemini" in n and "embedding" not in n]
-                    hint = f"; model {model} not found, models that can write: {', '.join(names[:25]) or 'unknown'}"
-                raise AiError(f"the AI refused the request (status {status} {reason}){hint}".strip())
+                    said = re.sub(r"\s+", " ", str((data.get("error", {}) or {}).get("message", "")))[:200]
+                    hint = (f"; model {model} not available ({said}); models that can write: "
+                            f"{', '.join(names[:25]) or 'unknown'}")
+                    raise ModelUnavailable(f"the AI refused the request (status {status} {reason}){hint}".strip())
+                raise AiError(f"the AI refused the request (status {status} {reason})".strip())
             return self._text(data)
 
     @staticmethod
