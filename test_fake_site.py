@@ -198,6 +198,15 @@ class RebuildTests(Base):
         before = cc.Snapshot.of(t.data)
         self.assertEqual(cc.diff_dashboard(before, cc.Snapshot.of(t.data), set()), [])
 
+    def test_a_reset_writes_the_documents_again_and_a_plain_build_does_not(self):
+        sample = fs.samples()[0]
+        doc_id = self.world.sample_ids[sample.name]
+        self.drive.files_[doc_id]["content"] = b"old"
+        fs.build(self.drive, self.sheets, lambda s: None)
+        self.assertEqual(self.drive.files_[doc_id]["content"], b"old")
+        again = fs.build(self.drive, self.sheets, lambda s: None, reset=True)
+        self.assertEqual(self.drive.files_[doc_id]["content"], sample.html.encode("utf-8"))
+        self.assertEqual(again.sample_ids[sample.name], doc_id)                       # the same doc, not a second one
 
 class SampleTests(Base):
 

@@ -61,8 +61,16 @@ def create_doc(drive, name: str, html: str, parent: str) -> str:
                                 media_body=media, fields="id").execute(num_retries=provision.RETRIES)["id"]
 
 
-def ensure_doc(drive, name: str, html: str, parent: str) -> str:
-    return provision.find(drive, name, DOC, parent) or create_doc(drive, name, html, parent)
+def ensure_doc(drive, name: str, html: str, parent: str, replace: bool = False) -> str:
+    """The doc of that name in the folder (made if missing). With `replace` an existing one gets the
+    given content again (only ever used on the documents of the fake world)."""
+    found = provision.find(drive, name, DOC, parent)
+    if not found:
+        return create_doc(drive, name, html, parent)
+    if replace:
+        media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
+        drive.files().update(fileId=found, media_body=media, fields="id").execute(num_retries=provision.RETRIES)
+    return found
 
 
 def export_html(drive, doc_id: str) -> str:
@@ -497,9 +505,9 @@ def build(drive, sheets, log=print, reset: bool = False) -> World:
         w.briefs_id = provision.ensure_folder(drive, "Briefs", w.folder_id)
         w.drafts_id = provision.ensure_folder(drive, "Drafts", w.folder_id)
         if site.sop:
-            w.sop_id = ensure_doc(drive, f"{site.label} · SOP", sop_html(site), w.folder_id)
+            w.sop_id = ensure_doc(drive, f"{site.label} · SOP", sop_html(site), w.folder_id, reset)
         for kw in brief_keywords(site):
-            w.brief_ids[kw] = ensure_doc(drive, f"Brief · {kw}", brief_html(site.language, kw), w.briefs_id)
+            w.brief_ids[kw] = ensure_doc(drive, f"Brief · {kw}", brief_html(site.language, kw), w.briefs_id, reset)
         name = f"[{site.label}] Content Dashboard"
         w.dashboard_id = provision.find(drive, name, provision.SHEET, w.folder_id)
         fresh = w.dashboard_id is None
@@ -513,7 +521,7 @@ def build(drive, sheets, log=print, reset: bool = False) -> World:
         log(f"  fake site: {site.name} {'made' if fresh else 'found'}")
     world.samples_id = provision.ensure_folder(drive, SAMPLES, world.root_id)
     for s in samples():
-        world.sample_ids[s.name] = ensure_doc(drive, s.name, s.html, world.samples_id)
+        world.sample_ids[s.name] = ensure_doc(drive, s.name, s.html, world.samples_id, reset)
     rows = [[w.site.name, w.site.label, w.site.language, w.dashboard_id, w.sop_id, w.briefs_id, w.drafts_id,
              w.folder_id] for w in world.sites.values()]
     _write_index(sheets, world.index_id, rows)

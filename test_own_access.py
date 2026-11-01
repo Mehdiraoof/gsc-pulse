@@ -73,6 +73,13 @@ class FakeDrive:
             return {"id": fid}
         return Req(run)
 
+    def update(self, fileId, media_body=None, body=None, fields=None):
+        def run():
+            if media_body is not None:
+                self.files_[fileId]["content"] = media_body.getbytes(0, media_body.size())
+            return {"id": fileId}
+        return Req(run)
+
     def export(self, fileId, mimeType=None):
         return Req(lambda: self.files_[fileId].get("content", b""))
 
