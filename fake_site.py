@@ -280,7 +280,7 @@ def inline_style(html: str, lang: str, rtl: bool = True) -> str:
     """Puts the font (and, for a right-to-left document, the direction) on every paragraph, heading,
     list item and cell: Google keeps what is written on the element but does not always keep what is
     written once for the whole page."""
-    font = "font-family:'Vazirmatn',Tahoma,sans-serif" if lang == "fa" else "font-family:Arial,sans-serif"
+    font = "font-family:Vazirmatn" if lang == "fa" else "font-family:Arial"
     attrs = f' style="{font}"' + (' dir="rtl"' if (lang == "fa" and rtl) else "")
     return BLOCK_TAG.sub(lambda m: f"<{m.group(1)}{attrs}>", html)
 

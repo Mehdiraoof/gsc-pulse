@@ -15,6 +15,7 @@ Usage:
     python gsc_pulse.py --site https://example.com/ --sheet YOUR_SHEET_ID
 """
 
+import html
 import os
 import re
 import sys
@@ -697,7 +698,7 @@ def build_test_site(reset: bool = False):
         print(f"    {name}: expected {sorted(expected)}, found {sorted(found)}")
     for name, _, _ in [w for w in wrong if w[0] in world.sample_ids][:2]:     # how Google wrote it (the sample text is invented)
         raw = fake_site.export_html(clients.drive, world.sample_ids[name])
-        fonts = sorted(set(re.findall(r"font-family:\s*([^;}]+)", raw)))[:8]
+        fonts = sorted(set(re.findall(r"font-family:\s*([^;}]+)", html.unescape(raw))))[:8]
         rtl_marks, h1s = raw.count('dir="rtl"'), raw.count('<h1')
         print(f"    export of {name}: {len(raw)} characters, fonts {fonts}, {rtl_marks} right-to-left marks, {h1s} H1")
     if wrong:
