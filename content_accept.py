@@ -127,7 +127,7 @@ def verify(drive, world, before: dict, after: dict, results: dict, emails: list,
                 report.add([cc.Failure(2, "wrong-language", name)])
 
         # item 3: a Draft row without a brief is skipped with the note
-        if has_sop and mode in ("drafts", "both"):
+        if has_sop and mode in ("drafts", "both") and not result.stopped:
             for r in without:
                 after_rows = rows_after.get(content.row_key(r), [])
                 noted = any(ccr.NOTE_NO_BRIEF in str(a.get("Notes/Checklist", "")) for a in after_rows)

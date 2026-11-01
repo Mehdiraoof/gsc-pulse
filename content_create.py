@@ -533,7 +533,8 @@ def brief_step(drive, sheets, file_id, cfg, items, ai, today, http_get, sop, res
             result.stopped = str(e)
             result.waiting += len(todo[:cfg.max_briefs]) - n
             return
-        except ai_client.AiError:
+        except ai_client.AiError as e:
+            log(f"  AI: {e}")
             errors += 1
             result.problems.append("a brief could not be written (no answer from the writing service)")
             if errors >= MAX_AI_ERRORS_IN_A_ROW:
@@ -605,7 +606,8 @@ def draft_step(drive, sheets, file_id, cfg, items, ai, today, http_get, sop, res
             result.stopped = str(e)
             result.waiting += len(ready[:cfg.max_drafts]) - n
             return
-        except ai_client.AiError:
+        except ai_client.AiError as e:
+            log(f"  AI: {e}")
             errors += 1
             result.problems.append("a draft could not be written (no answer from the writing service)")
             if errors >= MAX_AI_ERRORS_IN_A_ROW:
