@@ -57,7 +57,7 @@ class ParsingTests(unittest.TestCase):
 
     def test_styles_and_scripts_are_not_text(self):
         doc = cc.Doc("<style>a{}</style><script>var AI;</script><title>PulseO</title><p>text</p>")
-        self.assertEqual(doc.full_text, "text")
+        self.assertEqual(doc.full_text.strip(), "text")
         self.assertIn("a{}", doc.style_text())
 
     def test_a_line_break_is_a_space_and_entities_are_decoded(self):
@@ -231,9 +231,9 @@ class DashboardDiffTests(unittest.TestCase):
     def run_diff(self, after_rows, processed=("t:a",)):
         return cc.diff_dashboard(table(*self.BEFORE), table(*after_rows), set(processed))
 
-    def after(self, **changes):
+    def after(self, changes=None):
         rows = [list(r) for r in self.BEFORE]
-        for (i, col), value in changes.items():
+        for (i, col), value in (changes or {}).items():
             rows[i][HEADER.index(col)] = value
         return rows
 
@@ -241,25 +241,25 @@ class DashboardDiffTests(unittest.TestCase):
         self.assertEqual(self.run_diff(self.BEFORE, processed=()), [])
 
     def test_the_allowed_changes_of_a_processed_row(self):
-        rows = self.after(**{(0, "Status"): "Briefed", (0, "To Do"): "Write", (0, "Attachments"): "link",
+        rows = self.after({(0, "Status"): "Briefed", (0, "To Do"): "Write", (0, "Attachments"): "link",
                              (0, "Notes/Checklist"): "note\nmore", (0, "Meta Title"): "new"})
         self.assertEqual(self.run_diff(rows), [])
 
     def test_another_row_changed(self):
-        rows = self.after(**{(1, "Status"): "Briefed"})
+        rows = self.after({(1, "Status"): "Briefed"})
         self.assertEqual(codes(self.run_diff(rows)), {"other-row-changed"})
 
     def test_a_column_that_is_not_allowed(self):
-        self.assertEqual(codes(self.run_diff(self.after(**{(0, "Score"): 9}))), {"cell-not-allowed"})
+        self.assertEqual(codes(self.run_diff(self.after({(0, "Score"): 9}))), {"cell-not-allowed"})
 
     def test_cells_filled_only_if_empty(self):
-        rows = self.after(**{(2, "Meta Title"): "new"})
+        rows = self.after({(2, "Meta Title"): "new"})
         self.assertEqual(codes(self.run_diff(rows, processed=("u:https://site.test/article/c",))), {"filled-cell-overwritten"})
 
     def test_attachments_and_notes_are_only_added_to(self):
-        rows = self.after(**{(2, "Attachments"): "L0\nL1"})
+        rows = self.after({(2, "Attachments"): "L0\nL1"})
         self.assertEqual(self.run_diff(rows, processed=("u:https://site.test/article/c",)), [])
-        rows = self.after(**{(0, "Notes/Checklist"): "changed"})
+        rows = self.after({(0, "Notes/Checklist"): "changed"})
         self.assertEqual(codes(self.run_diff(rows)), {"not-an-append"})
 
     def test_rows_are_matched_by_key_not_by_position(self):
@@ -271,11 +271,11 @@ class DashboardDiffTests(unittest.TestCase):
         self.assertEqual(codes(self.run_diff(self.after() + [("d", "", "Inboxed", "Brief", "", "", "", 1)])), {"row-added"})
 
     def test_a_changed_keyword_is_a_lost_row_and_a_new_one(self):
-        rows = self.after(**{(0, "Primary Keyword"): "a2"})
+        rows = self.after({(0, "Primary Keyword"): "a2"})
         self.assertEqual(codes(self.run_diff(rows)), {"row-lost", "row-added"})
 
     def test_numbers_and_their_text_are_the_same(self):
-        rows = self.after(**{(1, "Score"): "6"})
+        rows = self.after({(1, "Score"): "6"})
         self.assertEqual(self.run_diff(rows, processed=()), [])
 
     def test_the_header_must_stay(self):
@@ -291,7 +291,7 @@ class DashboardDiffTests(unittest.TestCase):
         self.assertTrue(cc.diff_dashboard(before, swapped, set()))
 
     def test_a_failure_names_the_row_and_column_only(self):
-        failures = self.run_diff(self.after(**{(1, "Status"): "SECRETWORD"}))
+        failures = self.run_diff(self.after({(1, "Status"): "SECRETWORD"}))
         self.assertEqual(failures[0].where, "row 3 column Status")
         self.assertNotIn("SECRETWORD", cc.Report().add(failures).text())
 

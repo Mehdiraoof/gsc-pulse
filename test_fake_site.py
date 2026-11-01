@@ -95,7 +95,7 @@ class WorldTests(Base):
             blob = (f["name"] + " " + f.get("content", b"").decode("utf-8")).lower()
             for word in real:
                 self.assertNotIn(word, blob, f["name"])
-            if "content" in f:
+            if "content" in f and self.world.samples_id not in f["parents"]:      # (a sample may break the rule on purpose)
                 self.assertNotIn("pulseo", blob, f["name"])
         for book_id, book in self.sheets.books.items():
             text = json.dumps([t.data for t in book.values()], ensure_ascii=False).lower()

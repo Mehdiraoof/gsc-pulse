@@ -142,6 +142,8 @@ class Doc(HTMLParser):
             return
         if tag in _VOID:
             return
+        if tag in _TEXT_BLOCKS or tag in ("div", "tr", "table", "ul", "ol"):
+            self.full_text += "\n"
         if tag in _TEXT_BLOCKS and self._block and self._block[0] == tag:
             text = " ".join("".join(self._block[1]).split())
             self.blocks.append(Block(tag, text, self._block[2], self._block[3], _HEADINGS.get(tag, 0)))
