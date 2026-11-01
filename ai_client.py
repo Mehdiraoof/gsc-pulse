@@ -112,6 +112,7 @@ class Gemini:
         self.post, self.sleep, self.get = post, sleep, get
         self.calls = 0                                   # requests sent, retries included
         self.search_ok = True                            # false once the search tool answered "no quota"
+        self.by_model = {}                               # answers received per model
 
     def model_names(self) -> list:
         """The names of the models this key may use to write text (public names, safe to print); [] when unknown."""
@@ -202,7 +203,9 @@ class Gemini:
                             f"{', '.join(names[:25]) or 'unknown'}")
                     raise ModelUnavailable(f"the AI refused the request (status {status} {reason}){hint}".strip())
                 raise AiError(f"the AI refused the request (status {status} {reason})".strip())
-            return self._text(data)
+            text = self._text(data)
+            self.by_model[model] = self.by_model.get(model, 0) + 1
+            return text
 
     @staticmethod
     def _text(data: dict) -> str:

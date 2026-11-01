@@ -51,6 +51,7 @@ import content_create
 import content_import
 import content_run
 import fake_site
+import rehearsal
 import deck_runner
 import mailer
 import page_discovery
@@ -733,6 +734,41 @@ def probe_ai():
             working = name
 
 
+def rehearsal_command(kind: str, site_name: str, site_list: list):
+    """Content creation tried on a copy of a real site's dashboard (rehearsal.py). `prepare` makes the copy (the real
+    file is only read); `run` writes the briefs, marks the briefed rows Draft, writes the drafts and tests them.
+    The log holds counts and rule names only."""
+    name = site_name.strip().lower()
+    site = next((s for s in site_list if s.name.lower() == name), None) or next(
+        (s for s in site_list if name and name in (s.name + " " + (s.deck.site_label or "")).lower()), None)
+    if site is None:
+        raise GscPulseError("rehearsal: no site matches rehearsal_site")
+    try:
+        clients = auth.build_me_clients(os.environ, build)
+    except auth.AuthError as e:
+        raise GscPulseError(f"rehearsal: {e}") from None
+    try:
+        if kind == "prepare":
+            rehearsal.prepare(clients.drive, clients.sheets, site)
+            return
+        ai = ai_client.make_client({}, os.environ)
+        today = date.today()
+        total, report = rehearsal.run(clients.drive, clients.sheets, ai, today)
+    except (rehearsal.RehearsalError, ai_client.AiError) as e:
+        raise GscPulseError(f"rehearsal: {e}") from None
+    print(f"  rehearsal: {total.text()}")
+    print(f"  rehearsal: models that answered: {ai.by_model}, {ai.calls} requests in all, search tool "
+          f"{'on' if ai.search_ok else 'off (no quota for it on this key)'}")
+    mail = content_create.email_text("Rehearsal copy", total)
+    smtp = mailer.settings_from_env(os.environ)
+    if mail:
+        notify_owner(smtp, *mail)
+    print(f"  rehearsal checklist: {report.text()}")
+    if not report.ok:
+        raise GscPulseError(f"rehearsal: {len(report.failures)} checks failed")
+    print("  ✅  The rehearsal documents passed the checker")
+
+
 def create_content_test(mode: str, limit: int = 0):
     """Content creation on the fake test site and nowhere else: makes the fake world, runs the briefs and/or
     the drafts on its three sites with the real AI, then tests the "done" checklist (content_accept.py).
@@ -892,6 +928,10 @@ def main():
         build_test_site(reset=os.environ.get("RESET_TEST_SITE", "").strip().lower() in ("1", "true", "yes"))
         return
     create_mode = os.environ.get("CREATE_CONTENT_TEST", "").strip().lower()
+    if create_mode in ("rehearsal-prepare", "rehearsal"):
+        rehearsal_command("prepare" if create_mode == "rehearsal-prepare" else "run",
+                          os.environ.get("REHEARSAL_SITE", ""), site_list)
+        return
     if create_mode == "probe":
         probe_ai()
         return

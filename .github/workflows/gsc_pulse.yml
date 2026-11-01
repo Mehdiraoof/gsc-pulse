@@ -28,7 +28,11 @@ on:
         required: false
         default: ""
       create_content_test:
-        description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested); probe: which AI models the key may use"
+        description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested); probe: which AI models the key may use; rehearsal-prepare / rehearsal: a rehearsal on a copy of a real dashboard"
+        required: false
+        default: ""
+      rehearsal_site:
+        description: "With create_content_test rehearsal-prepare or rehearsal: the site to rehearse content creation for, on a COPY of its dashboard (the real file is only read)"
         required: false
         default: ""
       create_content_limit:
@@ -111,6 +115,7 @@ jobs:
           TEST_DECK: ${{ inputs.test_deck }}
           CREATE_CONTENT_TEST: ${{ inputs.create_content_test }}
           CREATE_CONTENT_LIMIT: ${{ inputs.create_content_limit }}
+          REHEARSAL_SITE: ${{ inputs.rehearsal_site }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BUILD_TEST_SITE: ${{ inputs.build_test_site }}
           RESET_TEST_SITE: ${{ inputs.reset_test_site }}

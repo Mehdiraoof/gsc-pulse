@@ -49,6 +49,7 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(body["contents"][0]["parts"][0]["text"], "Write.")
         self.assertEqual(body["tools"], [{"google_search": {}}])
         self.assertEqual(g.calls, 1)
+        self.assertEqual(g.by_model, {"gemini-3.8-flash": 1})
 
     def test_no_search_tool_unless_asked(self):
         g, net, _ = gemini(answer())
