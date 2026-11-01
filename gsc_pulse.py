@@ -693,7 +693,8 @@ def build_test_site(reset: bool = False):
     world = fake_site.build(clients.drive, clients.sheets, print, reset=reset)
     wrong = fake_site.check_samples_in_drive(clients.drive, world)
     print(f"  test site: {len(world.sites)} fake sites, {len(world.sample_ids)} sample documents, "
-          f"{len(wrong)} the checker got wrong")
+          f"{len(wrong)} the checker got wrong, {world.font_rewrites} documents written again because "
+          f"Google dropped their font")
     for name, expected, found in wrong:
         print(f"    {name}: expected {sorted(expected)}, found {sorted(found)}")
     for name, _, _ in [w for w in wrong if w[0] in world.sample_ids][:2]:     # how Google wrote it (the sample text is invented)

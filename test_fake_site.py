@@ -225,6 +225,30 @@ class SampleTests(Base):
     def test_the_same_through_drive(self):
         self.assertEqual(len(self.world.sample_ids), len(fs.samples()))
         self.assertEqual(fs.check_samples_in_drive(self.drive, self.world), [])
+    def test_a_document_whose_font_google_dropped_is_written_again(self):
+        from unittest import mock
+        real_export = fs.export_html
+        seen = {}
+
+        def flaky(drive, doc_id):
+            html = real_export(drive, doc_id)
+            seen[doc_id] = seen.get(doc_id, 0) + 1
+            if seen[doc_id] == 1 and "Vazirmatn" in html:                     # the first read of each Persian doc: Arial
+                return html.replace("Vazirmatn", "Arial")
+            return html
+        with mock.patch.object(fs, "export_html", flaky):
+            wrong = fs.check_samples_in_drive(self.drive, self.world)
+        self.assertEqual(wrong, [])
+        persian = [s for s in fs.samples() if s.language == "fa" and s.kind == "draft"]
+        self.assertEqual(self.world.font_rewrites, len(persian))                  # once each, then Google got it right
+
+    def test_a_font_that_never_comes_back_is_reported(self):
+        from unittest import mock
+        real_export = fs.export_html
+        with mock.patch.object(fs, "export_html", lambda d, i: real_export(d, i).replace("Vazirmatn", "Arial")):
+            wrong = fs.check_samples_in_drive(self.drive, self.world, tries=2)
+        self.assertTrue(wrong)
+        self.assertTrue(all("font" in found for _, _, found in wrong))
 
     def test_the_selftest_notices_a_checker_that_is_wrong(self):
         broken = fs.samples()[0]

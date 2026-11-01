@@ -61,6 +61,12 @@ def create_doc(drive, name: str, html: str, parent: str) -> str:
                                 media_body=media, fields="id").execute(num_retries=provision.RETRIES)["id"]
 
 
+def replace_doc(drive, doc_id: str, html: str):
+    """Writes the HTML into a doc again (Drive converts it again)."""
+    media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
+    drive.files().update(fileId=doc_id, media_body=media, fields="id").execute(num_retries=provision.RETRIES)
+
+
 def ensure_doc(drive, name: str, html: str, parent: str, replace: bool = False) -> str:
     """The doc of that name in the folder (made if missing). With `replace` an existing one gets the
     given content again (only ever used on the documents of the fake world)."""
@@ -68,8 +74,7 @@ def ensure_doc(drive, name: str, html: str, parent: str, replace: bool = False) 
     if not found:
         return create_doc(drive, name, html, parent)
     if replace:
-        media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
-        drive.files().update(fileId=found, media_body=media, fields="id").execute(num_retries=provision.RETRIES)
+        replace_doc(drive, found, html)
     return found
 
 
@@ -471,6 +476,7 @@ class World:
     samples_id: str = ""
     sites: dict = field(default_factory=dict)         # name -> SiteWorld
     sample_ids: dict = field(default_factory=dict)    # sample name -> doc id
+    font_rewrites: int = 0                            # times a doc was written again because Google dropped its font
 
     def settings(self, name: str) -> dict:
         """What content creation reads from a site's configuration."""
@@ -540,9 +546,27 @@ def _write_index(sheets, file_id: str, rows: list):
     tabs.patch_cells(sheets, file_id, [(f"'{INDEX_TAB}'!A1:{last}{len(rows) + 1}", [INDEX_HEADER] + rows)])
 
 
-def check_samples_in_drive(drive, world: World) -> list:
+FONT_TRIES = 5
+
+
+def check_samples_in_drive(drive, world: World, tries: int = FONT_TRIES) -> list:
     """The self-test on the real round trip: each sample is read back from Drive (as Google exports
-    it) and checked. Returns what the checker got wrong, as selftest does."""
+    it) and checked. Returns what the checker got wrong, as selftest does.
+
+    Google sometimes turns the font of an imported document into Arial, in a different document
+    each time. That is Google, not the document or the checker, so a document whose only problem
+    is the font is written again (up to `tries` times, counted in world.font_rewrites)."""
     by_name = {s.name: s for s in samples()}
-    items = [(by_name[name], export_html(drive, doc_id)) for name, doc_id in world.sample_ids.items()]
+    items = []
+    for name, doc_id in world.sample_ids.items():
+        sample = by_name[name]
+        html = export_html(drive, doc_id)
+        for _ in range(tries):
+            found = check_sample(sample, html)
+            if not (sample.language == "fa" and "font" in found and "font" not in sample.expected):
+                break
+            replace_doc(drive, doc_id, sample.html)
+            world.font_rewrites += 1
+            html = export_html(drive, doc_id)
+        items.append((sample, html))
     return selftest(items)
