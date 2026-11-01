@@ -548,7 +548,7 @@ class EmailTests(unittest.TestCase):
         only_limit = ccr.email_text("Site", ccr.CreateResult(stopped="limit", waiting=2))
         self.assertEqual(only_limit[0], "Briefs and drafts · Site")
         for banned in ("PulseO", "Claude", "AI "):
-            self.assertNotIn(banned, subject + body.replace("of the AI", ""))
+            self.assertNotIn(banned, subject + body)
 
 
 class PromptHelpersTests(unittest.TestCase):

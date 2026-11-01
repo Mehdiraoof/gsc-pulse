@@ -86,7 +86,7 @@ _LETTERS = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک"})
 _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩",
                                "۰۱۲۳۴۵۶۷۸۹")
 _LATIN_TO_FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
-_DIGIT_RUN = re.compile(r"(?<![A-Za-z])[0-9]+(?![A-Za-z])")
+_DIGIT_RUN = re.compile(r"(?<![A-Za-z0-9])[0-9]+(?![A-Za-z0-9])")      # a whole run of digits, not glued to a Latin letter
 _UNTOUCHED = re.compile(r"\]\([^)\n]*\)|https?://\S+|www\.\S+")           # link targets and addresses
 _SLOT = re.compile(r"\[[^\]\n]*\|[^\]\n]*\|[^\]\n]*\]")                   # [image: ... | alt | file name]
 

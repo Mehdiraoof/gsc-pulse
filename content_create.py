@@ -535,9 +535,9 @@ def brief_step(drive, sheets, file_id, cfg, items, ai, today, http_get, sop, res
             return
         except ai_client.AiError:
             errors += 1
-            result.problems.append("a brief could not be written (the AI did not answer)")
+            result.problems.append("a brief could not be written (no answer from the writing service)")
             if errors >= MAX_AI_ERRORS_IN_A_ROW:
-                result.stopped = "the AI did not answer three times in a row"
+                result.stopped = "no answer from the writing service three times in a row"
                 result.waiting += len(todo[:cfg.max_briefs]) - n - 1
                 return
             continue
@@ -607,9 +607,9 @@ def draft_step(drive, sheets, file_id, cfg, items, ai, today, http_get, sop, res
             return
         except ai_client.AiError:
             errors += 1
-            result.problems.append("a draft could not be written (the AI did not answer)")
+            result.problems.append("a draft could not be written (no answer from the writing service)")
             if errors >= MAX_AI_ERRORS_IN_A_ROW:
-                result.stopped = "the AI did not answer three times in a row"
+                result.stopped = "no answer from the writing service three times in a row"
                 result.waiting += len(ready[:cfg.max_drafts]) - n - 1
                 return
             continue
@@ -713,7 +713,7 @@ def email_text(label: str, result: CreateResult) -> tuple:
     if result.no_brief:
         lines += [f"{len(result.no_brief)} rows set to Draft have no brief yet. Set their To Do to Brief first.", ""]
     if result.stopped:
-        lines += [f"The run stopped early: {result.stopped}. {result.waiting} rows wait for the next run.", ""]
+        lines += [f"The run stopped early (the writing service reached a limit or did not answer). {result.waiting} rows wait for the next run.", ""]
     if result.problems:
         lines += ["Please look at: " + "; ".join(dict.fromkeys(result.problems)) + ".", ""]
     subject = (f"New briefs and drafts · {label}" if result.briefs or result.drafts
