@@ -50,6 +50,7 @@ import mailer
 import page_discovery
 import provision
 import reports
+import site_check
 import views
 import history
 import sites
@@ -498,16 +499,21 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False):
         print("content: no final Search Console data available yet\n")
         return
     notify = (lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None
+    origin = site_check.origin_of(site.site_url)
     try:
-        result = content_run.run_content(run.drive, run.sheets, site, site.reports_sheet_id, fetch,
-                                         final, today, notify, print, force=force,
-                                         read_source=source_reader(run) if site.content.imports else None)
+        result = content_run.run_content(
+            run.drive, run.sheets, site, site.reports_sheet_id, fetch, final, today, notify, print,
+            force=force, read_source=source_reader(run) if site.content.imports else None,
+            history_pages=((lambda: history.read_page_urls(run.sheets, site.history_sheet_id))
+                           if site.history_sheet_id else None),
+            sitemap=lambda: site_check.read_sitemaps(origin, site_check.default_get),
+            probe=site_check.fetch_probe)
     except Exception:
         run.content_text = "failed"
         raise
     run.content_text = result.text()
     print(f"content: {result.text()}")
-    if result.refreshed and (not result.created or result.imports) and smtp:
+    if result.refreshed and (not result.created or result.imports or result.repairs) and smtp:
         subject, body = content_run.owner_email(result, site.deck.site_label or site.name,
                                                 provision.link(result.file_id))
         notify_owner(smtp, subject, body)

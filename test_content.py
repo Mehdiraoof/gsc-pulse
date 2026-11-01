@@ -217,25 +217,33 @@ class GapTests(unittest.TestCase):
         defaults.update(kw)
         return content.find_gaps(queries=queries, best=best, **defaults)
 
-    def test_searches_that_land_outside_the_tab_form_groups(self):
+    def test_searches_that_land_outside_the_tab_become_ideas(self):
         queries = {"best garden shoes": (5, 400, 9.0), "garden shoes review": (3, 300, 11.0),
                    "how to bake bread": (1, 200, 14.0), "example shop": (50, 900, 1.0),
                    "tiny topic": (0, 20, 9.0), "app.example.ir": (3, 500, 4.0)}
         best = {q: (self.HOME, 5000, 3.0) for q in queries}
         found = self.gaps(queries, best)
-        self.assertEqual([g.keyword for g in found], ["best garden shoes", "how to bake bread"])
-        group = found[0]
-        self.assertEqual(group.queries, ["best garden shoes", "garden shoes review"])
-        self.assertEqual(group.impressions, 700)
-        self.assertEqual(group.position, 9.0)
-        self.assertEqual(content.gap_why(group),
-                         "700 impressions across 2 searches land on /, which doesn't cover this topic.")
-        self.assertGreater(group.score, 10)
+        self.assertEqual({g.keyword for g in found},
+                         {"best garden shoes", "garden shoes review", "how to bake bread"})
+        one = next(g for g in found if g.keyword == "best garden shoes")
+        self.assertEqual((one.queries, one.impressions, one.position), (["best garden shoes"], 400, 9.0))
+        self.assertEqual(content.gap_why(one),
+                         "400 impressions from 1 search that lands on /, which doesn't cover this topic.")
+        self.assertGreater(one.score, 10)
 
-    def test_a_search_the_tab_already_answers_is_no_gap_unless_it_is_a_tiny_share_far_down(self):
-        queries = {"covered topic": (30, 400, 3.0), "weak topic": (1, 120, 12.0)}
-        best = {"covered topic": (self.ARTICLE, 500, 3.0), "weak topic": (self.ARTICLE, 5000, 3.0)}
-        self.assertEqual([g.keyword for g in self.gaps(queries, best)], ["weak topic"])
+    def test_a_search_a_content_page_answers_is_an_idea_only_beyond_position_20_and_off_topic(self):
+        queries = {"covered topic": (30, 400, 3.0),        # a content page, ranking well
+                   "same topic far": (1, 150, 25.0),       # beyond 20, but the page is about it
+                   "other mid": (1, 150, 15.0),            # about something else, but not beyond 20
+                   "weak unrelated": (1, 120, 25.0)}       # beyond 20 and about something else
+        best = {q: (self.ARTICLE, 5000, 3.0) for q in queries}
+        found = self.gaps(queries, best, page_words=lambda url: {"same", "topic"})
+        self.assertEqual([g.keyword for g in found], ["weak unrelated"])
+
+    def test_a_page_with_no_words_of_its_own_counts_the_slug(self):
+        queries = {"blue garden hose": (1, 150, 25.0)}
+        best = {"blue garden hose": ("https://example.test/article/blue-garden-hose-guide", 5000, 3.0)}
+        self.assertEqual(self.gaps(queries, best), [])              # the slug says what the page is about
 
     def test_known_dismissed_and_added_searches_are_not_proposed_again(self):
         queries = {"alpha shoes": (1, 300, 9.0), "beta bags": (1, 250, 9.0), "gamma hats": (1, 220, 9.0)}
@@ -260,11 +268,42 @@ class GapTests(unittest.TestCase):
         best = {q: (self.HOME, 5000, 3.0) for q in queries}
         self.assertEqual(len(self.gaps(queries, best)), 4)
 
-    def test_persian_variants_group_together(self):
-        queries = {"كتاب خوب": (1, 300, 9.0), "کتاب خوب بخوانید": (1, 150, 9.0)}
+    def test_spelling_variants_become_one_idea_and_the_others_are_listed(self):
+        arabic_kaf = "\u0643\u062a\u0627\u0628 \u062e\u0648\u0628"          # كتاب خوب
+        persian_kaf = "\u06a9\u062a\u0627\u0628 \u062e\u0648\u0628"          # کتاب خوب
+        spaced = "\u06a9\u062a\u0627\u0628  \u062e\u0648\u0628"              # extra space
+        persian_digit, latin_digit = "\u06a9\u062a\u0627\u0628 \u06f2", "\u06a9\u062a\u0627\u0628 2"
+        half_space, no_space = "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "\u0645\u06cc\u062e\u0648\u0627\u0647\u0645"
+        queries = {arabic_kaf: (1, 300, 9.0), persian_kaf: (1, 150, 9.0), spaced: (1, 120, 9.0),
+                   persian_digit: (1, 200, 9.0), latin_digit: (1, 180, 9.0),
+                   half_space: (1, 400, 9.0), no_space: (1, 110, 9.0)}
         best = {q: (self.HOME, 5000, 3.0) for q in queries}
         found = self.gaps(queries, best)
-        self.assertEqual(len(found), 1)
+        self.assertEqual(len(found), 3)
+        by_top = {g.keyword: g for g in found}
+        self.assertEqual(by_top[arabic_kaf].queries, [arabic_kaf, persian_kaf, spaced])
+        self.assertEqual(by_top[arabic_kaf].impressions, 570)
+        self.assertEqual(by_top[persian_digit].queries, [persian_digit, latin_digit])
+        self.assertEqual(by_top[half_space].queries, [half_space, no_space])
+
+    def test_searches_that_only_share_words_are_different_ideas(self):
+        queries = {"best bread recipes": (1, 500, 9.0), "bread recipe easy": (1, 300, 11.0)}
+        best = {q: (self.HOME, 5000, 3.0) for q in queries}
+        self.assertEqual(len(self.gaps(queries, best)), 2)
+
+    def test_excluded_terms_are_whole_words_and_never_ideas(self):
+        queries = {"sex education": (1, 400, 9.0), "essex hotels": (1, 300, 9.0),
+                   "\u0632\u0646\u062f\u06af\u06cc \u062e\u0648\u0628": (1, 250, 9.0),    # زندگی خوب
+                   "\u0686\u0647 \u06af\u06cc \u0647\u0633\u062a": (1, 220, 9.0)}        # چه گی هست
+        best = {q: (self.HOME, 5000, 3.0) for q in queries}
+        found = self.gaps(queries, best, exclude_terms=["sex", "\u06af\u06cc"])
+        self.assertEqual({g.keyword for g in found}, {"essex hotels", "\u0632\u0646\u062f\u06af\u06cc \u062e\u0648\u0628"})
+
+    def test_is_excluded(self):
+        self.assertTrue(content.is_excluded("free Sex videos", ["sex"]))
+        self.assertFalse(content.is_excluded("essex", ["sex"]))
+        self.assertTrue(content.is_excluded("hot water bottle", ["water bottle"]))
+        self.assertFalse(content.is_excluded("anything", []))
 
 
 class ConfigTests(unittest.TestCase):
@@ -313,6 +352,22 @@ class ConfigTests(unittest.TestCase):
 
     def test_disabled_block_needs_nothing_else(self):
         self.assertFalse(self.parse({"enabled": False}).content.enabled)
+
+    def test_excluded_terms_and_the_repair_switch(self):
+        base_block = {"enabled": True, "tabs": [{"name": "A", "url_regex": "x"}]}
+        c = self.parse({**base_block, "gap_exclude_terms": [" sex ", "گی"], "repair_imports": True}).content
+        self.assertEqual(c.gap_exclude_terms, ["sex", "گی"])
+        self.assertTrue(c.repair_imports)
+        plain = self.parse(base_block).content
+        self.assertEqual((plain.gap_exclude_terms, plain.repair_imports), ([], False))
+        for bad in ({"gap_exclude_terms": "sex"}, {"gap_exclude_terms": [""]}, {"gap_exclude_terms": [3]},
+                    {"gap_exclude_terms": ["x" * 61]}, {"repair_imports": "yes"}):
+            with self.assertRaises(sites.SitesConfigError):
+                self.parse({**base_block, **bad})
+
+    def test_the_removed_pages_tab_name_is_reserved(self):
+        with self.assertRaises(sites.SitesConfigError):
+            self.parse({"enabled": True, "tabs": [{"name": "Removed Pages", "url_regex": "x"}]})
 
 
 class AutocompleteTests(unittest.TestCase):

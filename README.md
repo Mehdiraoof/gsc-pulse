@@ -573,17 +573,53 @@ primary keyword's numbers, ranking queries, secondary keywords, competing pages,
 suggested action, why, alerts). Everything else is yours and is **never overwritten** after the row
 exists: primary keyword, status, to do, entities, notes and the planning columns. `Query Fan-outs` and
 `Recommendations` are filled only while empty. Columns are found by their **header name**, so you can
-move or add columns. PulseO **never changes a Status** and **never removes a row**: only you do. A
-page or topic with no search data this month keeps its row, its keyword and all your cells; it shows
-zeros or empty numbers and the alert `No search data this month`.
+move or add columns. PulseO **never changes a Status**. The **Priority** is PulseO's until you change
+it; a value that is no longer the one PulseO wrote is yours and is left alone from then on. A page or
+topic with no search data this month keeps its row, its keyword and all your cells; it shows zeros or
+empty numbers and the alert `No search data this month`. A row is **never** removed because the
+page is noindexed, canonicalized, old or has no search data; the only reason a page row leaves a tab
+is below (a page that is gone or has moved).
 
-**Each month** (after the monthly report, or with the workflow input **rebuild_content_site**): new
-pages get a row, owned cells are updated, new topics are proposed (searches the site is shown for but
-that no content page answers, grouped by their main words) and each tab is sorted by Score. Topics
-are **not filtered by theme or limited in number**, you decide; only brand and address-like searches
-and searches under `min_gap_impressions_90d` are not proposed. A topic row stays even if its
-impressions later drop. A row you delete is not proposed again. You get a short owner-only email
-with the numbers and the top urgent rows (it is not sent to the deck recipients).
+**Each month** (after the monthly report, or with the workflow input **rebuild_content_site**) a
+refresh only adds and updates: new pages get a row, the grey and orange columns are updated, new
+ideas are added, and each tab is sorted by Score (v2.7 rules, below). A row you delete is not
+proposed again. You get a short owner-only email with the numbers and the top urgent rows (it is not
+sent to the deck recipients).
+
+### Where rows come from (v2.7)
+
+* **Page rows**: every address in Search Console's last 90 days, in the stored History sheet (the
+  `H Pages` tab, up to 16 months) and in the site's sitemap(s) (robots.txt first, then
+  `/sitemap.xml`; sitemap indexes and `.gz` files are followed). An address goes into the first tab
+  whose regex matches it; addresses that match no tab are ignored. A page with no search data gets a
+  row with empty numbers and the alert `No search data this month`. A sitemap that cannot be read is
+  skipped for that run and changes nothing.
+* **Idea rows** (no address): a search is an idea only when it has no good page: the page Google
+  shows is not one of the site's content pages (a song, a program, the home page, a shop ...), or it
+  ranks beyond position 20 and the page is about something else (fewer than half of the search's words
+  appear in the page's slug, keyword and top searches). Any other search goes into its page's
+  Secondary Keywords. Minimum impressions: `min_gap_impressions_90d`. Searches that are equal after
+  normalizing spelling (ك/ک, ي/ی, half space, extra spaces, Persian or English digits) are one idea
+  row; the other spellings are listed in its Secondary Keywords. `gap_exclude_terms` (config only, a
+  list of whole words) never become ideas or Keyword Ideas; pages that rank for them stay normal rows.
+* **Primary Keyword** of a row that has none: the top non-brand search of the page (a Search Console
+  question with a page filter: the last 90 days, else the stored 16 months), else the page title
+  (read during the status check; note `From page title, not from searches`), else it stays empty (note
+  `No searches and no title found`). Once a row has a Primary Keyword no refresh changes it.
+
+### Removing a page: the only rule (v2.7)
+
+Every refresh looks at each page row's address once: no redirect is followed, a normal browser user
+agent, a timeout, a few requests at a time. **404 or 410** means gone; **301, 302, 307, 308** means
+moved. Anything else (403, 429, 5xx, no answer, a redirect to the same page with only a slash or
+`https` added) means unknown and changes nothing; it also clears an earlier warning, so only two
+answers in a row count. The first time, the Alerts column says `Page returns 404, will be removed next
+refresh if still gone` (or `Redirects to <address>`). If a refresh on another day finds the same, the
+row moves to the **Removed Pages** tab (address, keyword, reason, date, where it moved, and every
+column of yours): nothing is deleted for good, and the history and sitemap do not add it back. A
+moved page first hands its cells to the row of the page it redirects to (a row is made for it if it
+has none): a cell only where the target's is empty, so the target keeps its Primary Keyword, and the
+notes are added to. Rows without an address are never removed by this rule.
 
 **Keyword ideas.** Fill `Keyword Seeds` (seed, language fa/en, optional country, Active = Yes).
 Once a week PulseO asks Google's suggestion endpoint around each active seed (the seed, the seed
@@ -623,14 +659,26 @@ or let anyone with the link view it); the ids live in the secret, never in the r
   nothing, the same address spelled with or without a half space or tatweel (when it points to one
   free page, never merging two addresses); then the old Slug against the
   page's address, then the old Primary Keyword against the page's top searches, then against a
-  new-topic row of the file. The `Import Log` tab says how every row matched.
+  new-topic row of the file; then (v2.7) the **words of the URL slug**: the old Primary Keyword (and
+  Secondary Keywords of two or more words) against the words of each page's slug, after normalizing
+  Persian (half space is a space, ك→ک, ي→ی, no tatweel) and ignoring filler words (چیست, از, در, و, برای,
+  با, به, را, های, ها, بهترین, راهنمای, خرید, انواع, مدل). It matches when all the keyword's words are in
+  the slug, or at least 60% are, and exactly one page that nobody else has taken fits. A weaker fit
+  (40% to 60%), several pages that fit, or a row that has its own address are **never merged**: the row
+  is added and `Possible match: <address>` is written in the Import Log and in the row's Alerts.
+  The `Import Log` tab says how every row matched.
 * A matched row takes the old values for everything that is yours (Primary Keyword, Status, To Do and
   the planning columns); the performance columns are filled by the dashboard. The old Secondary Keywords
   of a page row go to its Notes/Checklist, because that column is rewritten every month.
 * An old row that matches nothing is still added, never dropped, with its Status as it is (any word,
   the dropdowns are not strict): with its URL when it had one, as a topic without a URL when it had
-  none. A topic marked `Published` gets the alert `Marked Published, page not found in Search Console`.
+  none. A topic marked `Published` gets the alert `Marked Published, page not found`.
   A row with neither keyword nor URL is skipped (logged as such).
+* `repair_imports: true` (once, recorded in `_state`): rows an earlier import added without a page
+  are matched again with the rules above. A clearly matched row is merged into its page row (the old
+  values win for the columns the dashboard fills when it makes a row, any other column only where the
+  page row is empty, notes are added to) and the old row moves to `Removed Pages`; a possible match is
+  only listed. Pages an earlier import already gave to an old row are not offered.
 
 ---
 

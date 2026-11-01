@@ -216,11 +216,13 @@ def _parse_deck(value, where: str) -> DeckConfig:
 # --------------------------------------------------------------------------- #
 
 CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "seasonal_regex", "min_gap_impressions_90d",
-                  "import_from")
+                  "import_from", "gap_exclude_terms", "repair_imports")
+MAX_EXCLUDE_TERMS = 200
 IMPORT_FIELDS = ("sheet_id", "source_tab", "target_tab")
 MAX_IMPORTS = 8
 CONTENT_TAB_FIELDS = ("name", "url_regex", "exclude_regex", "description", "gaps", "landing")
-RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas", "import log")
+RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas", "import log",
+                         "removed pages")
 MAX_CONTENT_TABS = 8
 
 
@@ -260,6 +262,8 @@ class ContentConfig:
     seasonal_regex: str = ""
     min_gap_impressions_90d: int = 100
     imports: list = field(default_factory=list)          # [ImportSpec]
+    gap_exclude_terms: list = field(default_factory=list)  # whole words that never become ideas
+    repair_imports: bool = False                         # once: merge clearly matched imported rows
 
     def sensitive_values(self) -> list:
         rules = [t.url_regex for t in self.tabs] + [t.exclude_regex for t in self.tabs]
@@ -356,6 +360,16 @@ def _parse_content(value, where: str) -> "ContentConfig":
             raise SitesConfigError(f"{iat}: 'target_tab' is not one of the configured tabs")
         cfg.imports.append(ImportSpec(item["sheet_id"].strip(), item["source_tab"].strip(),
                                       item["target_tab"].strip()))
+    terms = value.get("gap_exclude_terms") or []
+    if not isinstance(terms, list) or len(terms) > MAX_EXCLUDE_TERMS \
+            or any(not isinstance(t, str) or not t.strip() or len(t) > 60 for t in terms):
+        raise SitesConfigError(f"{at}: 'gap_exclude_terms' must be a list of up to "
+                               f"{MAX_EXCLUDE_TERMS} short words")
+    cfg.gap_exclude_terms = [t.strip() for t in terms]
+    repair = value.get("repair_imports", False)
+    if not isinstance(repair, bool):
+        raise SitesConfigError(f"{at}: 'repair_imports' must be true or false")
+    cfg.repair_imports = repair
     return cfg
 
 

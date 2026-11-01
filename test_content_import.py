@@ -215,7 +215,7 @@ class MatchingTests(base.Base):
         self.assertEqual(ghost["Impressions (90d)"], "0")
         idea = self.topic("Articles", "published idea")
         self.assertEqual(idea[content.STATUS], "Published")
-        self.assertEqual(idea["Alerts"], "Marked Published, page not found in Search Console")
+        self.assertEqual(idea["Alerts"], "Marked Published, page not found")
         lonely = [r for r in self.table("Articles")[1] if "Lonely" in str(r.get("Notes/Checklist"))]
         self.assertEqual(lonely, [])                                           # nothing to hold on to: skipped
 
@@ -225,7 +225,7 @@ class MatchingTests(base.Base):
             self.run_import()
             self.run_import(force=True)
         self.assertEqual(self.topic("Articles", "published idea")["Alerts"],
-                         "Marked Published, page not found in Search Console")
+                         "Marked Published, page not found")
 
     def test_it_runs_once(self):
         pages, pairs = with_c()
@@ -349,6 +349,171 @@ class MatchingTests(base.Base):
         _, body = content_run.owner_email(result, "Example", "link")
         self.assertIn("Old sheet imported into Articles", body)
         self.assertIn("Import Log", body)
+
+    # ---- the words of the URL slug (step 4) and the "possible match" (step 5) ---------------
+
+    W1 = f"{ROOT}/article/indoor-plant-care-guide"
+    W2 = f"{ROOT}/article/winter-boots-review"
+    P1 = f"{ROOT}/article/blue-garden-hose"
+    P2 = f"{ROOT}/article/garden-hose-reel"
+
+    @staticmethod
+    def old(keyword, status="", todo="", url="", slug="", secondary="", pillar="", cluster="", note=""):
+        return [keyword, status, todo, url, slug, "", "", pillar, cluster, "", secondary, note]
+
+    @staticmethod
+    def pages_with(extra):
+        """The invented site with more articles: {address: impressions}, each with a search of its own."""
+        pages, pairs = dict(base.PAGES), list(base.PAIRS)
+        for i, (url, impressions) in enumerate(extra.items()):
+            pages[url] = (4, impressions, 8.0)
+            pairs.append((f"unrelated search {i}", url, 4, impressions, 8.0))
+        return mock.patch(f"{base.__name__}.PAGES", pages), mock.patch(f"{base.__name__}.PAIRS", pairs)
+
+    def test_all_the_words_of_the_keyword_in_one_slug_is_a_match(self):
+        pages, pairs = self.pages_with({self.W1: 300, self.W2: 200})
+        reader = self.reader(rows=[self.old("plant care guide", "Briefed", "Write", pillar="Plants"),
+                                   self.old("winter boots", "Researched")])
+        with pages, pairs:
+            result = self.run_import(reader)
+        (spec, report), = result.imports
+        self.assertEqual([e.kind for e in report.entries], ["words", "words"])
+        one = self.find("Articles", self.W1)
+        self.assertEqual((one[content.KEY], one[content.STATUS], one[content.TODO]),
+                         ("plant care guide", "Briefed", "Write"))
+        self.assertIn("Pillar: Plants", one["Notes/Checklist"])
+        self.assertEqual(self.find("Articles", self.W2)[content.STATUS], "Researched")
+        self.assertIsNone(self.topic("Articles", "plant care guide"))        # no second row for it
+        self.assertIn("2 by URL words", report.text())
+        by_row = {int(r["Source row"]): r["Matched by"] for r in self.table(cs.IMPORT_LOG)[1]}
+        self.assertEqual(by_row, {2: "URL words", 3: "URL words"})
+
+    def test_filler_words_and_the_half_space_do_not_matter_in_persian(self):
+        from urllib.parse import quote
+        shoes = ROOT + "/article/" + quote("کفش-باغ")                 # کفش-باغ
+        want = ROOT + "/article/" + quote("می-خواهم-کفش")   # می-خواهم-کفش
+        pages, pairs = self.pages_with({shoes: 300, want: 200})
+        reader = self.reader(rows=[
+            self.old("بهترین کفش باغ", "Briefed"),     # بهترین کفش باغ
+            self.old("می‌خواهم کفش", "Published")])        # می‌خواهم کفش
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["words", "words"])
+        self.assertEqual(self.find("Articles", content.display_url(shoes))[content.STATUS], "Briefed")
+        self.assertEqual(self.find("Articles", content.display_url(want))[content.STATUS], "Published")
+
+    def test_at_least_sixty_percent_of_the_words_is_enough(self):
+        url = f"{ROOT}/article/garden-tools-shed-plans"
+        pages, pairs = self.pages_with({url: 300})
+        reader = self.reader(rows=[self.old("garden shed building plans", "Briefed")])   # 3 of 4 words
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["words"])
+        self.assertEqual(self.find("Articles", url)[content.KEY], "garden shed building plans")
+
+    def test_several_pages_that_fit_are_never_merged_and_the_row_points_to_them(self):
+        pages, pairs = self.pages_with({self.P1: 400, self.P2: 300})
+        reader = self.reader(rows=[self.old("garden hose", "Researched")])
+        with pages, pairs:
+            result = self.run_import(reader)
+            (e,) = result.imports[0][1].entries
+            self.assertEqual(e.kind, "possible")
+            topic = self.topic("Articles", "garden hose")
+            self.assertEqual(topic[content.STATUS], "Researched")
+            expected = f"No fitting page, Possible match: {self.P1} | {self.P2}"
+            self.assertEqual(topic["Alerts"], expected)
+            self.assertNotEqual(self.find("Articles", self.P1)[content.KEY], "garden hose")
+            self.run_import(reader, force=True)                              # the pointer survives the next refresh
+            self.assertEqual(self.topic("Articles", "garden hose")["Alerts"], expected)
+        log = {int(r["Source row"]): r for r in self.table(cs.IMPORT_LOG)[1]}
+        self.assertTrue(log[2]["Matched by"].startswith("Possible match"))
+        self.assertIn(self.P1, log[2]["Page"])
+        self.assertEqual(result.imports[0][1].text().count("1 with a possible match"), 1)
+
+    def test_a_weaker_fit_is_only_a_possible_match(self):
+        url = f"{ROOT}/article/garden-pond-supplies"
+        pages, pairs = self.pages_with({url: 250})
+        reader = self.reader(rows=[self.old("garden pond building design guide", "Briefed")])   # 2 of 5 words
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["possible"])
+        self.assertIn(f"Possible match: {url}", self.topic("Articles", "garden pond building design guide")["Alerts"])
+        self.assertNotEqual(self.find("Articles", url)[content.KEY], "garden pond building design guide")
+
+    def test_a_row_with_its_own_address_is_never_merged_by_words(self):
+        pages, pairs = self.pages_with({self.W2: 200})
+        elsewhere = f"{ROOT}/article/somewhere-else"
+        reader = self.reader(rows=[self.old("winter boots", "Published", url=elsewhere)])
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["possible"])
+        mine = self.find("Articles", elsewhere)                                # added with its own address
+        self.assertEqual((mine[content.KEY], mine[content.STATUS]), ("winter boots", "Published"))
+        self.assertIn(f"Possible match: {self.W2}", mine["Alerts"])
+        self.assertNotEqual(self.find("Articles", self.W2)[content.KEY], "winter boots")
+
+    def test_a_page_an_earlier_row_has_taken_is_not_offered_again(self):
+        pages, pairs = self.pages_with({self.W1: 300})
+        reader = self.reader(rows=[self.old("first", url=self.W1), self.old("plant care guide", "Briefed")])
+        with pages, pairs:
+            result = self.run_import(reader)
+        self.assertEqual([e.kind for e in result.imports[0][1].entries], ["url", "added"])
+
+    # ---- the repair: rows an earlier import added without a page ----------------------------
+
+    def test_the_repair_merges_clear_matches_lists_possible_ones_and_runs_once(self):
+        rows = [self.old("plant care guide", "Briefed", "Write", pillar="Plants", cluster="Care", note="keep me"),
+                self.old("garden hose", "Researched")]
+        reader = self.reader(rows=rows)
+        self.run_import(reader)                                              # no fitting page yet: both become topics
+        self.assertIsNotNone(self.topic("Articles", "plant care guide"))
+        self.assertIsNotNone(self.topic("Articles", "garden hose"))
+        self.site = base.make_site(import_from=IMPORT, repair_imports=True)  # the pages are in the sitemap now
+        sitemap = lambda: ([self.W1, self.P1, self.P2], True)
+        result = self.run_import(reader, sitemap=sitemap)
+        (spec, report), = result.repairs
+        self.assertEqual([e.kind for e in report.entries], ["r-words", "r-possible"])
+        self.assertEqual(result.imports, [])                                 # the old sheet is not read again
+        self.assertIsNone(self.topic("Articles", "plant care guide"))
+        page = self.find("Articles", self.W1)
+        self.assertEqual((page[content.KEY], page[content.STATUS], page[content.TODO]),
+                         ("plant care guide", "Briefed", "Write"))
+        self.assertEqual(page["Notes/Checklist"], "Pillar: Plants · Cluster: Care\nkeep me")
+        (removed,) = self.table(cs.REMOVED)[1]                               # nothing is lost: the old row is kept
+        self.assertEqual((removed["Primary Keyword"], removed["Reason"], removed["Moved To"]),
+                         ("plant care guide", ci.REPAIR_REASON, self.W1))
+        topic = self.topic("Articles", "garden hose")                        # a possible match is only listed
+        self.assertEqual(topic["Alerts"], f"No fitting page, Possible match: {self.P1} | {self.P2}")
+        self.assertNotEqual(self.find("Articles", self.P1)[content.KEY], "garden hose")
+        how = [r["Matched by"] for r in self.table(cs.IMPORT_LOG)[1]]
+        self.assertIn("Repair: merged by URL words", how)
+        self.assertIn("Repair: possible match, not merged", how)
+        self.assertIn("repair of Articles", result.text())
+        again = self.run_import(reader, force=True, sitemap=sitemap)         # once only
+        self.assertEqual(again.repairs, [])
+        self.assertEqual(len(self.table(cs.REMOVED)[1]), 1)
+        self.assertEqual(self.topic("Articles", "garden hose")["Alerts"], topic["Alerts"])
+
+    def test_the_repair_only_runs_when_the_config_asks_for_it(self):
+        reader = self.reader(rows=[self.old("plant care guide", "Briefed")])
+        self.run_import(reader)
+        result = self.run_import(reader, force=True, sitemap=lambda: ([self.W1], True))
+        self.assertEqual(result.repairs, [])
+        self.assertIsNotNone(self.topic("Articles", "plant care guide"))       # nothing was merged
+        self.assertNotIn(cs.REMOVED, self.fs.books[self.file_id])
+
+    def test_a_page_an_earlier_import_gave_to_an_old_row_is_not_taken_by_the_repair(self):
+        pages, pairs = self.pages_with({self.W1: 300})
+        reader = self.reader(rows=[self.old("indoor plant care guide", url=self.W1, status="Briefed"),
+                                   self.old("plant care guide", "Researched")])
+        with pages, pairs:
+            self.run_import(reader)                                          # row 2 took W1 by address
+            self.site = base.make_site(import_from=IMPORT, repair_imports=True)
+            result = self.run_import(reader, force=True)
+        (spec, report), = result.repairs
+        self.assertEqual([e.kind for e in report.entries], ["r-none"])
+        self.assertEqual(self.find("Articles", self.W1)[content.KEY], "indoor plant care guide")
+        self.assertIsNotNone(self.topic("Articles", "plant care guide"))
 
 
 if __name__ == "__main__":

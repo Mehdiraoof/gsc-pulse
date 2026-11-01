@@ -31,10 +31,16 @@ def row(keys, clicks, impressions, position):
     return {"keys": keys, "clicks": clicks, "impressions": impressions, "position": position}
 
 
+OLD_PAIRS = []          # searches a page had earlier than the last 90 days: asked for with a long range only
+
+
 def fetch(dimensions, first, last, groups=None):
     """Search Console: the 90-day tables, a scaled copy for each month, and one page over a range."""
-    if groups:                                           # a before/after look at one page
+    if groups:
         url = groups[0]["filters"][0]["expression"]
+        if dimensions == ["query"]:                      # the searches of one page
+            source = PAIRS + (OLD_PAIRS if (last - first).days > 100 else [])
+            return [row([q], c, n, p) for q, u, c, n, p in source if u == url]
         return [row([url], 10, 100, 8.0)] if last < date(2026, 8, 1) else [row([url], 15, 100, 6.0)]
     if dimensions == ["page"]:
         if (last - first).days < 40:                     # one month: September is twice as big as the others
@@ -80,11 +86,11 @@ class Base(unittest.TestCase):
         self.sent, self.logs = [], []
         self.file_id = None
 
-    def run_it(self, force=False, today=TODAY, final=FINAL, http=None, site=None):
+    def run_it(self, force=False, today=TODAY, final=FINAL, http=None, site=None, **kw):
         result = content_run.run_content(
             self.drive, self.fs, site or self.site, "REP", fetch, final, today,
             notify=lambda s, b: self.sent.append((s, b)), log=self.logs.append, force=force,
-            http_get=http or (lambda url: (200, "[]")), sleep=lambda s: None)
+            http_get=http or (lambda url: (200, "[]")), sleep=lambda s: None, **kw)
         self.file_id = result.file_id
         return result
 
@@ -230,10 +236,11 @@ class RowTests(Base):
         self.assertEqual((t[content.STATUS], t[content.TODO], t[content.URL]), ("Inboxed", "Write", ""))
         self.assertEqual(t["Suggested Action"], "New page")
         self.assertEqual(t["Alerts"], "No fitting page")
-        self.assertEqual(t["Secondary Keywords"], "bread recipe easy")
-        self.assertEqual(t["Why"], "800 impressions across 2 searches land on /, which doesn't cover this topic.")
-        self.assertEqual(t["Impressions (90d)"], "800")
-        self.assertEqual(self.result.new_topics, 1)
+        self.assertEqual(t["Secondary Keywords"], "")                          # a different search is its own idea
+        self.assertEqual(t["Why"], "500 impressions from 1 search that lands on /, which doesn't cover this topic.")
+        self.assertEqual(t["Impressions (90d)"], "500")
+        self.assertEqual(self.result.new_topics, 2)
+        self.assertIsNotNone(self.topic("Articles", "bread recipe easy"))
         self.assertIsNone(self.topic("Landing Pages", "best bread recipes"))     # topics go to the first tab
 
     def test_searches_a_content_page_already_answers_are_no_topics(self):

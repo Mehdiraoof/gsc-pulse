@@ -14,7 +14,10 @@ What happens to a row of the old sheet
   * "N/A", "TBD" and empty cells are empty. Dates become YYYY-MM-DD.
   * Matching, first hit wins: the normalized URL; the old Slug against the path of a page; the
     old Primary Keyword against the top searches of a page; the old Primary Keyword against a
-    new-topic row that has no page.
+    new-topic row that has no page; the words of the old Primary Keyword (and Secondary Keywords)
+    against the words of each URL slug (all words, or at least 60%, and exactly one page that
+    nobody else has taken). A weaker fit, or several pages that fit, is never merged: the row is
+    added and "Possible match: <address>" is written in the Import Log and in the row's Alerts.
   * A matched row keeps what the old sheet says in every column that is the owner's (Primary
     Keyword, Status, To Do, the planning columns); the dashboard fills the performance columns.
   * An old row that matches nothing is still added, never dropped: with its URL when it had one
@@ -39,6 +42,10 @@ DATE_COLUMNS = ("Briefed Date", "Published/Updated Date")
 WORDS = "Words Count (Suggested)"
 SECONDARY = "Secondary Keywords"
 TOP_QUERIES = 5                    # a page's top searches that the old Primary Keyword is compared with
+WORDS_CLEAR = 0.6                  # share of the keyword's words that must be in the URL slug
+WORDS_POSSIBLE = 0.4               # below this a page is not even a possible match
+MAX_POSSIBLE = 3                   # addresses written in a "Possible match"
+POSSIBLE_SEPARATOR = " | "
 
 # old header (lower case) -> header of the dashboard
 SYNONYMS = {
@@ -195,6 +202,48 @@ def slug_key(text: str) -> str:
     return t.strip("/").lower()
 
 
+def slug_words(url: str) -> set:
+    """The topic words of the last part of an address (its slug); empty for the home page."""
+    _, path = content._split_url(url)
+    return content.topic_words(path.rstrip("/").rsplit("/", 1)[-1])
+
+
+def keyword_phrases(old) -> list:
+    """The word sets an old row can be matched on: its Primary Keyword, then each Secondary
+    Keyword that has at least two words (one word says too little)."""
+    out = []
+    primary = content.topic_words(old.keyword)
+    if primary:
+        out.append(primary)
+    for part in re.split(r"[,\n،]+", str(old.values.get(SECONDARY, ""))):
+        words = content.topic_words(part)
+        if len(words) >= 2:
+            out.append(words)
+    return out
+
+
+def words_fit(old, index, claimed) -> list:
+    """[(share of the keyword's words found in the slug, impressions, rec)] for the pages that
+    fit at least a little, best first. A page someone else has taken is not offered."""
+    phrases = keyword_phrases(old)
+    if not phrases:
+        return []
+    scored = []
+    for rec, slug, impressions in index.pages:
+        if id(rec) in claimed or not slug:
+            continue
+        share = max(len(p & slug) / len(p) for p in phrases)
+        if share >= WORDS_POSSIBLE:
+            scored.append((share, impressions, rec))
+    scored.sort(key=lambda s: (-s[0], -s[1], content.url_key(s[2]["row"].get(content.URL, ""))))
+    return scored
+
+
+def possible_text(recs: list) -> str:
+    return POSSIBLE_SEPARATOR.join(content.display_url(str(r["row"].get(content.URL, "")))
+                                   for r in recs[:MAX_POSSIBLE])
+
+
 class Index:
     """The pages of a tab (rows that exist and pages that are about to get a row) by the things an
     old row can be matched on."""
@@ -203,9 +252,12 @@ class Index:
         self.by_url, self.by_last, self.by_path = {}, {}, {}
         self.by_folded = {}                 # the fallback: spelling without half space / tatweel
         self.by_query, self.by_topic = {}, {}
+        self.pages = []                     # (rec, words of the URL slug, impressions)
         for rec in recs:
             row = rec["row"]
             url = str(row.get(content.URL, "")).strip()
+            if rec.get("remove"):           # a row that is going away is nobody's page
+                continue
             if url:
                 self.by_url.setdefault(content.url_key(url), rec)
                 self.by_folded.setdefault(content.fold_url(content.url_key(url)), []).append(rec)
@@ -213,6 +265,7 @@ class Index:
                 self.by_path.setdefault(path, []).append(rec)
                 self.by_last.setdefault(path.rsplit("/", 1)[-1], []).append(rec)
                 stats = rec.get("stats") or ctx.data.stats.get(content.url_key(url))
+                self.pages.append((rec, slug_words(url), stats.impressions if stats else 0))
                 pairs = [(q[0], q[2]) for q in
                          content.nonbrand_queries(stats, ctx.brand)[:TOP_QUERIES]] if stats else []
                 kw = content.norm(row.get(content.KEY, ""))
@@ -230,10 +283,14 @@ def _free(recs, claimed):
     return [r for r in recs if id(r) not in claimed]
 
 
-def find_matches(old_rows: list, index: Index) -> dict:
-    """{OldRow.n: (kind, rec or None)}. kinds: url, slug, keyword, topic; (kind "duplicate", rec)
-    when the page was already taken by an earlier old row; ("added", None) when nothing matches."""
-    claimed, found = set(), {}
+def find_matches(old_rows: list, index: Index, claimed: set = None, topics: bool = True) -> dict:
+    """{OldRow.n: (kind, rec or None)}. kinds: url, slug, keyword, topic, words; (kind "duplicate",
+    rec) when the page was already taken by an earlier old row; ("possible", [recs]) when pages
+    fit the keyword's words but not clearly enough to merge; ("added", None) when nothing matches.
+    `claimed`: pages that are already taken (ids of records); `topics`: match on a topic row of
+    the file too (off when the old rows are themselves topic rows of the file)."""
+    claimed = set() if claimed is None else claimed
+    found = {}
     duplicate = set()
     for old in old_rows:                                              # 1. the URL
         if not old.url:
@@ -272,13 +329,23 @@ def find_matches(old_rows: list, index: Index) -> dict:
         if hits:
             claimed.add(id(hits[0]))
             found[old.n] = ("keyword", hits[0])
-    for old in old_rows:                                              # 4. a topic row of the file
-        if old.n in found or not old.keyword:
+    for old in old_rows:                                              # a topic row of the file
+        if not topics or old.n in found or not old.keyword:
             continue
         hits = _free(index.by_topic.get(content.norm(old.keyword), []), claimed)
         if hits:
             claimed.add(id(hits[0]))
             found[old.n] = ("topic", hits[0])
+    for old in old_rows:                                              # 4. the words of the URL slug
+        if old.n in found or not old.keyword:
+            continue
+        fits = words_fit(old, index, claimed)
+        clear = [f for f in fits if f[0] >= WORDS_CLEAR]
+        if len(clear) == 1 and not old.url:        # a row that has its own address is never merged by words
+            claimed.add(id(clear[0][2]))
+            found[old.n] = ("words", clear[0][2])
+        elif fits:                                 # 5. several fit, or only a weaker one: do not merge
+            found[old.n] = ("possible", [f[2] for f in fits[:MAX_POSSIBLE]])
     for old in old_rows:
         found.setdefault(old.n, ("added", None))
     return found
@@ -328,6 +395,7 @@ class ImportReport:
     source_rows: int = 0
     entries: list = field(default_factory=list)
     skipped: int = 0
+    possible: dict = field(default_factory=dict)      # row key -> "Possible match" addresses, for the Alerts
 
     def count(self, kind: str) -> int:
         return sum(1 for e in self.entries if e.kind == kind)
@@ -336,8 +404,9 @@ class ImportReport:
         c = self.count
         return (f"{self.source_rows} old rows: {c('url')} by URL, {c('url~')} by URL spelled with or "
                 f"without a half space or tatweel, {c('slug')} by slug, "
-                f"{c('keyword')} by keyword, {c('topic')} to a topic row; "
-                f"{c('added') + c('duplicate')} added as new rows"
+                f"{c('keyword')} by keyword, {c('words')} by URL words, {c('topic')} to a topic row; "
+                f"{c('possible')} with a possible match (added, not merged), "
+                f"{c('added') + c('duplicate')} unmatched (added as new rows)"
                 + (f", {self.skipped} skipped (no keyword, no URL)" if self.skipped else ""))
 
 
@@ -349,7 +418,11 @@ def apply(old_rows: list, recs: list, ctx, tab: str) -> ImportReport:
     for old in old_rows:
         kind, rec = matches[old.n]
         status = old.status
-        if kind in ("url", "url~", "slug", "keyword", "topic"):
+        possible = ""
+        if kind == "possible":                    # added like an unmatched row, with a pointer
+            possible = possible_text(rec)
+            rec = None
+        if kind in ("url", "url~", "slug", "keyword", "words", "topic"):
             vals = values_for(old, rec, kind)
             rec["row"].update(vals)
             rec["import"] = {**rec.get("import", {}), **vals}
@@ -369,18 +442,122 @@ def apply(old_rows: list, recs: list, ctx, tab: str) -> ImportReport:
             report.skipped += 1
             report.entries.append(Entry(old.n, "", "", status, "skipped"))
             continue
+        if possible:
+            new["possible"] = possible
+            report.possible[content.row_key(new["row"])] = possible
         recs.append(new)
         report.entries.append(Entry(old.n, old.keyword, old.url, vals.get(content.STATUS, ""), kind,
-                                    "(a duplicate of an earlier row)" if kind == "duplicate" else ""))
+                                    "(a duplicate of an earlier row)" if kind == "duplicate"
+                                    else (content.POSSIBLE_ALERT + possible) if possible else ""))
     return report
 
 
 LOG_HEADER = ["Source tab", "Source row", "Primary Keyword", "Status", "Old URL", "Matched by", "Page"]
-KIND_TEXT = {"url": "URL", "url~": "URL (half space / tatweel differs)", "slug": "Slug", "keyword": "Keyword", "topic": "Topic row",
+KIND_TEXT = {"url": "URL", "url~": "URL (half space / tatweel differs)", "slug": "Slug", "keyword": "Keyword",
+             "words": "URL words", "topic": "Topic row",
+             "possible": "Possible match: added, not merged",
              "added": "No match: added as a new row", "duplicate": "Same URL as an earlier row: added",
-             "skipped": "Skipped: no keyword and no URL"}
+             "skipped": "Skipped: no keyword and no URL",
+             "r-slug": "Repair: merged by slug", "r-keyword": "Repair: merged by keyword",
+             "r-words": "Repair: merged by URL words", "r-possible": "Repair: possible match, not merged",
+             "r-none": "Repair: still no match"}
 
 
 def log_rows(spec, report: ImportReport) -> list:
     return [[spec.source_tab, e.src_row, e.keyword, e.status, e.url, KIND_TEXT.get(e.kind, e.kind),
              e.page] for e in report.entries]
+
+
+# --------------------------------------------------------------------------- #
+# Repair: rows an earlier import added without a page (once, when the config asks for it)
+# --------------------------------------------------------------------------- #
+
+REPAIR_REASON = "Merged into its page row (import repair)"
+
+
+@dataclass
+class RepairReport(ImportReport):
+    def text(self) -> str:
+        c = self.count
+        return (f"repair of {self.tab}: {self.source_rows} imported rows without a page checked: "
+                f"{c('r-slug')} merged by slug, {c('r-keyword')} by keyword, {c('r-words')} by URL words; "
+                f"{c('r-possible')} with a possible match (not merged), {c('r-none')} still without a page")
+
+
+def old_row_of(row: dict, n: int) -> OldRow:
+    """An imported topic row of the file, read back as an old row: its owner's columns."""
+    old = OldRow(n=n, slug=str(row.get(content.SLUG, "")).strip())
+    for name, value in row.items():
+        target = TARGETS.get(_h(name))
+        if target is None or target == content.URL or str(value).strip() == "":
+            continue
+        old.values[target] = value if isinstance(value, (int, float)) else str(value).strip()
+    return old
+
+
+def merge_into(page_row: dict, vals: dict) -> dict:
+    """What of an old row goes into a page row that already exists. The columns the dashboard fills
+    itself when it creates a row (keyword, status, to do, intent, slug ...) take the old value;
+    every other column only where the page row has nothing; notes are added to."""
+    out = {}
+    for name, value in vals.items():
+        have = str(page_row.get(name, "")).strip()
+        if name == NOTES and have:
+            if str(value).strip() and str(value).strip() not in have:
+                out[name] = have + "\n" + str(value).strip()
+        elif name in content.ON_CREATE or not have:
+            out[name] = value
+    return out
+
+
+def repair(entries: list, recs: list, ctx, tab: str) -> RepairReport:
+    """Matches again the rows an earlier import added as topics (no page found then), with the
+    rules as they are now, and merges each clearly matched one into its page row: the page row gets
+    the old row's values, the old row is marked for removal (the caller copies it to `Removed Pages`
+    first). A possible match is only listed. `entries`: the Import Log rows of the source, as dicts
+    by LOG_HEADER names; `recs`: the records of the target tab."""
+    report = RepairReport(tab=tab)
+    index = Index(recs, ctx)
+    claimed = set()                              # pages an earlier import already gave to an old row
+    for e in entries:
+        if str(e.get("Matched by", "")) in {KIND_TEXT[k] for k in ("url", "url~", "slug", "keyword", "words")}:
+            claimed.update(id(r) for r in index.by_path.get(slug_key(str(e.get("Page", ""))), []))
+    todo, taken = [], set()
+    for e in entries:
+        if (str(e.get("Matched by", "")) not in (KIND_TEXT["added"], KIND_TEXT["possible"])
+                or str(e.get("Old URL", "")).strip()):
+            continue
+        keyword = content.norm(e.get("Primary Keyword", ""))
+        rec = next((r for r in recs if keyword and r.get("topic") and not r.get("new") and not r.get("remove")
+                    and id(r) not in taken and content.norm(r["row"].get(content.KEY, "")) == keyword), None)
+        if rec is not None:
+            taken.add(id(rec))
+            todo.append((e, rec))
+    olds, owners = [], {}
+    for i, (e, rec) in enumerate(todo, start=1):
+        old = old_row_of(rec["row"], i)
+        olds.append(old)
+        owners[old.n] = (e, rec)
+    report.source_rows = len(olds)
+    matches = find_matches(olds, index, claimed=claimed, topics=False)
+    for old in olds:
+        e, topic_rec = owners[old.n]
+        kind, rec = matches[old.n]
+        src = e.get("Source row", "")
+        if kind in ("slug", "keyword", "words"):
+            vals = merge_into(rec["row"], values_for(old, rec, kind))
+            rec["row"].update(vals)
+            rec["import"] = {**rec.get("import", {}), **vals}
+            topic_rec["remove"] = REPAIR_REASON
+            topic_rec["moved_to"] = content.display_url(str(rec["row"].get(content.URL, "")))
+            report.entries.append(Entry(src, old.keyword, "", old.status, "r-" + kind,
+                                        content.path_of(str(rec["row"].get(content.URL, "")))))
+        elif kind == "possible":
+            text = possible_text(rec)
+            topic_rec["possible"] = text
+            report.possible[content.row_key(topic_rec["row"])] = text
+            report.entries.append(Entry(src, old.keyword, "", old.status, "r-possible",
+                                        content.POSSIBLE_ALERT + text))
+        else:
+            report.entries.append(Entry(src, old.keyword, "", old.status, "r-none"))
+    return report

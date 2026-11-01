@@ -450,3 +450,47 @@ def _fill_summary(sheets, history_id, result: HistoryResult, final, state=None):
 def _has_state(sheets, history_id) -> bool:
     titles, _ = grid_info(sheets, history_id)
     return STATE_TAB in titles
+
+
+READ_CHUNK = 50000        # rows of the Page column read per call
+
+
+def read_page_urls(sheets, history_id: str, chunk: int = READ_CHUNK) -> list:
+    """Every distinct page address in the history's `H Pages` tab (the whole stored history), as
+    Search Console gave it, first seen first. Only the Page column is read. Raises HttpError when
+    the history sheet cannot be read."""
+    titles, _ = grid_info(sheets, history_id)
+    tab = "H Pages"
+    if tab not in titles:
+        return []
+    column = "B"
+    header = _read(sheets.spreadsheets().values().get(spreadsheetId=history_id, range=f"'{tab}'!A1:F1"))
+    top = (header.get("values") or [[]])[0]
+    if "Page" in top:
+        column = chr(65 + top.index("Page"))
+    total = read_state(sheets, history_id).get(tab, {}).get("rows", 0) if STATE_TAB in titles else 0
+    seen = {}
+    first = 2
+    while True:
+        last = first + chunk - 1
+        if total:
+            last = min(last, total + 1)
+            if first > total + 1:
+                break
+        try:
+            resp = _read(sheets.spreadsheets().values().get(
+                spreadsheetId=history_id, range=f"'{tab}'!{column}{first}:{column}{last}"))
+        except HttpError as e:
+            if e.resp.status == 400:           # past the end of the grid
+                break
+            raise
+        rows = resp.get("values", [])
+        for r in rows:
+            if r and str(r[0]).strip():
+                seen.setdefault(str(r[0]).strip(), None)
+        if not total and len(rows) < chunk:
+            break
+        first = last + 1
+        if not rows and not total:
+            break
+    return list(seen)

@@ -16,6 +16,10 @@ import tabs
 
 GUIDE, SEEDS, IDEAS, STATE = "Guide", "Keyword Seeds", "Keyword Ideas", "_state"
 IMPORT_LOG = "Import Log"
+REMOVED = "Removed Pages"
+# what a removed row keeps: where it was, why it went, where its notes moved, and every column of the
+# owner's, so that nothing is lost
+REMOVED_LEAD = ["Published URL", "Primary Keyword", "Reason", "Date", "Moved To"]
 SEEDS_HEADER = ["Seed", "Language", "Country", "Active", "Last run"]
 IDEAS_HEADER = ["Keyword", "Seed", "Pattern", "Language", "Impr (90d)", "Best Page", "Position",
                 "First Found", "Decision"]
@@ -358,6 +362,36 @@ def ensure_import_log(sheets, file_id: str):
     history._write(sheets.spreadsheets().batchUpdate(
         spreadsheetId=file_id, body={"requests": small_tab_requests(sid, header, None, True)}))
     tabs.patch_cells(sheets, file_id, [(f"'{IMPORT_LOG}'!A1:{letters(len(header) - 1)}1", [header])])
+
+
+def removed_header(import_columns: list) -> list:
+    """Header of the `Removed Pages` tab: the lead columns, then the owner's columns."""
+    return REMOVED_LEAD + [c for c in import_columns if c not in REMOVED_LEAD]
+
+
+def ensure_removed_pages(sheets, file_id: str, header: list):
+    """The `Removed Pages` tab: rows taken out of a tab (the page is gone or redirected, or an old
+    row was merged into its page). Made when the first row goes."""
+    titles, _ = history.grid_info(sheets, file_id)
+    if REMOVED in titles:
+        return
+    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
+        {"addSheet": {"properties": {"title": REMOVED}}}]}))
+    sid = made["replies"][0]["addSheet"]["properties"]["sheetId"]
+    history._write(sheets.spreadsheets().batchUpdate(
+        spreadsheetId=file_id, body={"requests": small_tab_requests(sid, header, None, True)}))
+    tabs.patch_cells(sheets, file_id, [(f"'{REMOVED}'!A1:{letters(len(header) - 1)}1", [header])])
+
+
+def delete_rows(sheets, file_id: str, sid: int, indexes: list):
+    """Deletes data rows of a tab by 0-based row index (the header is row 0). The one place a
+    row of a tab is taken out; the caller has written it to `Removed Pages` first."""
+    wanted = sorted(set(indexes), reverse=True)          # from the bottom up: the others keep their place
+    for i in range(0, len(wanted), 100):
+        history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
+            {"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS",
+                                           "startIndex": r, "endIndex": r + 1}}}
+            for r in wanted[i:i + 100]]}))
 
 
 def sheet_info(sheets, file_id: str) -> dict:

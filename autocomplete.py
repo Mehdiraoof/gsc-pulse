@@ -208,14 +208,15 @@ def collect(seeds: list, *, cache: Cache, today: date, http_get=default_http_get
 
 
 def new_ideas(found: dict, *, brand_terms: list, existing: set, known: set, today: date,
-              lookup=lambda k: None) -> list:
+              lookup=lambda k: None, exclude_terms=()) -> list:
     """Keyword Ideas rows for what is new: not already an idea (written before, kept or deleted)
     and not already a primary or secondary keyword. Nothing is filtered by topic, length or
-    wording: the owner decides. `lookup(norm keyword)` gives (impressions, best page, position)
-    from Search Console, or None."""
+    wording except the owner's own excluded terms (config only, whole words): the owner decides
+    the rest. `lookup(norm keyword)` gives (impressions, best page, position) from Search Console,
+    or None."""
     rows = []
     for k, (keyword, seed, pattern) in found.items():
-        if k in existing or k in known:
+        if k in existing or k in known or content.is_excluded(keyword, exclude_terms):
             continue
         hit = lookup(k)
         impr, page, pos = hit if hit else ("", "", "")

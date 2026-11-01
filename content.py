@@ -106,6 +106,35 @@ def words(text: str) -> set:
     return {w for w in re.split(r"[^\w]+", norm(text)) if len(w) >= 2 and w not in STOPWORDS}
 
 
+# words that say nothing about the topic of a keyword or of a URL slug
+FILLER = {norm(w) for w in ("چیست", "از", "در", "و", "برای", "با", "به", "را", "های", "ها",
+                            "بهترین", "راهنمای", "خرید", "انواع", "مدل")}
+
+
+def word_list(text: str) -> list:
+    """The words of a text in order: spelling normalized, punctuation gone."""
+    return [w for w in re.split(r"[\W_]+", norm(text)) if w]
+
+
+def topic_words(text: str) -> set:
+    """The words of a keyword or a URL slug that carry the topic: a half space counts as a space,
+    ك→ک, ي→ی, no tatweel, no filler words, no one-letter words."""
+    return {w for w in word_list(str(text).replace(ZWNJ, " "))
+            if (len(w) >= 2 or w.isdigit()) and w not in FILLER}
+
+
+def is_excluded(query: str, terms) -> bool:
+    """Does the search contain one of the owner's excluded terms as a whole word (or word group)?"""
+    if not terms:
+        return False
+    hay = " " + " ".join(word_list(query)) + " "
+    for term in terms:
+        w = " ".join(word_list(term))
+        if w and f" {w} " in hay:
+            return True
+    return False
+
+
 def decode_url(url: str) -> str:
     """A page address as readable text: percent-decoded (UTF-8), without #fragment."""
     return unquote(re.sub(r"#.*$", "", str(url).strip()), errors="replace")
@@ -150,6 +179,16 @@ def dup_key(url: str) -> str:
     """Equal for URLs that differ only by case, a trailing ZWNJ or a trailing slash."""
     u = fold_url(decode_url(url)).lower()
     return u.rstrip("/")
+
+
+def row_key(row: dict) -> str:
+    """What names a row in the file's bookkeeping: its page address, or, for a topic that has no
+    page yet, its keyword. Empty for a blank row."""
+    url = str(row.get(URL, "")).strip()
+    if url:
+        return "u:" + url_key(url)
+    keyword = norm(row.get(KEY, ""))
+    return "t:" + keyword if keyword else ""
 
 
 def path_of(url: str) -> str:
@@ -416,8 +455,11 @@ def impact_windows(published: date) -> tuple:
 
 ALERT_SEASON = "Seasonal: update 6 weeks before the peak"
 NO_DATA_ALERT = "No search data this month"
-NOT_FOUND_ALERT = "Marked Published, page not found in Search Console"
+NOT_FOUND_ALERT = "Marked Published, page not found"
 NO_PAGE_ALERT = "No fitting page"
+POSSIBLE_ALERT = "Possible match: "
+GONE_ALERT = "Page returns {code}, will be removed next refresh if still gone"
+REDIRECT_ALERT = "Redirects to {target}"
 
 
 def season_alert(peak_month: int, today: date) -> str:
@@ -447,9 +489,11 @@ def decaying(clicks: list) -> bool:
 
 def alerts_for(*, advice_code: str, competing: list, seasonal: bool, peak_month: int, today: date,
                url: str, duplicate: bool, decay: bool, position: float, impressions: float,
-               gone: bool, no_data: bool = False) -> str:
+               gone: bool, no_data: bool = False, check: str = "", possible: str = "") -> str:
     """The Alerts cell. `gone` is the owner's own Status; `no_data`: no impressions in the last
-    complete month (the row is kept as it is, only this alert says so)."""
+    complete month (the row is kept as it is, only this alert says so); `check`: what the status
+    check of the page said (404 / redirect, first time); `possible`: addresses an old sheet's row
+    might belong to."""
     out = []
     if competing:
         out.append("Cannibalization")
@@ -469,6 +513,10 @@ def alerts_for(*, advice_code: str, competing: list, seasonal: bool, peak_month:
         out.append(NO_DATA_ALERT)
     if gone:
         out.append("Gone")
+    if check:
+        out.append(check)
+    if possible:
+        out.append(POSSIBLE_ALERT + possible)
     return ", ".join(out)
 
 
@@ -500,76 +548,53 @@ class Gap:
     score: int = 0
 
 
-def _same_group(a: dict, b: dict) -> bool:
-    wa, wb = a["words"], b["words"]
-    if not wa or not wb:
+def _other_topic(query: str, url: str, page_words) -> bool:
+    """Is the search about something other than what the page covers? Fewer than half of the
+    search's topic words appear in the page's words (its URL slug and its top searches)."""
+    own = topic_words(query)
+    if not own:
         return False
-    inter = len(wa & wb)
-    if not inter:
-        return False
-    if wa <= wb or wb <= wa:
-        return True
-    if a["page"] == b["page"]:
-        return True
-    return inter / len(wa | wb) >= 0.5
-
-
-def group_queries(items: list) -> list:
-    """items: [{"query", "impressions", "clicks", "position", "page", "words"}] -> groups of items
-    that share their main words (or land on the same page and share a word)."""
-    parent = list(range(len(items)))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            if _same_group(items[i], items[j]):
-                parent[find(j)] = find(i)
-    groups = {}
-    for i, item in enumerate(items):
-        groups.setdefault(find(i), []).append(item)
-    return list(groups.values())
+    theirs = page_words(url) if page_words else topic_words(slug_of(url))
+    return len(own & theirs) / len(own) < 0.5
 
 
 def find_gaps(*, queries: dict, best: dict, tab_matches, brand_terms: list, minimum: float,
-              known: set, already: set, limit: int = None) -> list:
+              known: set, already: set, limit: int = None, exclude_terms=(), page_words=None) -> list:
     """
-    New-topic candidates for one tab.
+    New-page ideas for one tab.
       queries  {query: (clicks, impressions, position)} over the last 90 days
       best     {query: (url, impressions on that page, position on that page)}: the page with the
                most impressions for the search
-      tab_matches(url) -> bool: is the page one of this tab's pages?
+      tab_matches(url) -> bool: is the page one of the site's content pages?
       known    normalized searches that are already a primary or secondary keyword of some row
-      already  normalized searches of gap rows that exist, were dismissed or were added from ideas
-    Nothing is filtered by topic or by how many there are: every group is returned and the owner
-    decides. Only brand searches, address-like searches and searches under `minimum` impressions
-    are not candidates.
+      already  normalized searches of idea rows that exist, were dismissed or were added from ideas
+      exclude_terms  whole words the owner never wants as an idea (config only)
+      page_words(url) -> set of topic words of a page (its slug and top searches)
+    A search is an idea only when it has no good page: the page Google shows is not a content page
+    of the site (a song, a program, the home page, a shop ...), or it ranks beyond position 20 and
+    the page is about something else. Any other search belongs to its page (its Secondary
+    Keywords). Searches that are equal after normalizing spelling (ك/ک, ي/ی, half space, extra
+    spaces, Persian or English digits) become one idea; the other spellings are listed with it.
+    Nothing else is filtered: only brand searches, address-like searches, excluded terms and
+    searches under `minimum` impressions are not candidates.
     """
-    items = []
+    groups = {}
     for query, (c, n, p) in queries.items():
-        if n < minimum or skip_query(query, brand_terms):
+        if n < minimum or skip_query(query, brand_terms) or is_excluded(query, exclude_terms):
             continue
         page = best.get(query)
         if page is None:
             continue
-        url, page_impr, _ = page
-        covered = tab_matches(url)
-        weak = covered and n < 0.05 * page_impr and p > 8
-        if covered and not weak:
+        url = page[0]
+        if tab_matches(url) and not (p > 20 and _other_topic(query, url, page_words)):
             continue
-        items.append({"query": query, "impressions": n, "clicks": c, "position": p,
-                      "page": url_key(url), "words": words(query)})
-    items.sort(key=lambda i: (-i["impressions"], i["query"]))
+        groups.setdefault(norm(query), []).append(
+            {"query": query, "impressions": n, "clicks": c, "position": p, "page": url_key(url)})
     out = []
-    for group in group_queries(items):
+    for key, group in groups.items():
         group.sort(key=lambda i: (-i["impressions"], i["query"]))
         top = group[0]
-        keys = {norm(i["query"]) for i in group}
-        if norm(top["query"]) in known or keys & already:
+        if key in known or key in already:
             continue
         out.append(Gap(
             keyword=top["query"], queries=[i["query"] for i in group],
@@ -584,9 +609,16 @@ def find_gaps(*, queries: dict, best: dict, tab_matches, brand_terms: list, mini
     return out if limit is None else out[:limit]
 
 
+def why_text(impressions: int, searches: int, path: str) -> str:
+    """Why a topic needs a page: where the searches land today."""
+    if searches == 1:
+        return f"{impressions:,} impressions from 1 search that lands on {path}, which doesn't cover this topic."
+    return (f"{impressions:,} impressions across {searches} searches land on {path}, "
+            f"which doesn't cover this topic.")
+
+
 def gap_why(gap: Gap) -> str:
-    return (f"{int(round(gap.impressions)):,} impressions across {len(gap.queries)} searches land on "
-            f"{path_of(gap.best_page)}, which doesn't cover this topic.")
+    return why_text(int(round(gap.impressions)), len(gap.queries), path_of(gap.best_page))
 
 
 # --------------------------------------------------------------------------- #

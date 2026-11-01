@@ -282,6 +282,15 @@ class FakeSheets:
                         if t.sheet_id == ad["sheetId"] and ad["dimension"] == "COLUMNS":
                             t.col_count += ad["length"]
                     replies.append({})
+                elif "deleteDimension" in req:
+                    rg = req["deleteDimension"]["range"]
+                    for t in book.values():
+                        if t.sheet_id == rg["sheetId"] and rg["dimension"] == "ROWS":
+                            for _ in range(rg["endIndex"] - rg["startIndex"]):
+                                if rg["startIndex"] < len(t.data):
+                                    del t.data[rg["startIndex"]]
+                                t.row_count -= 1
+                    replies.append({})
                 elif "deleteSheet" in req:
                     sid = req["deleteSheet"]["sheetId"]
                     for title in [k for k, t in book.items() if t.sheet_id == sid]:
