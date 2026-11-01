@@ -696,8 +696,10 @@ def build_test_site(reset: bool = False):
     for name, expected, found in wrong:
         print(f"    {name}: expected {sorted(expected)}, found {sorted(found)}")
     for name, _, _ in [w for w in wrong if w[0] in world.sample_ids][:2]:     # how Google wrote it (the sample text is invented)
-        text = " ".join(fake_site.export_html(clients.drive, world.sample_ids[name]).split())
-        print(f"    export of {name}: {len(text)} characters; start: {text[:1800]}")
+        raw = fake_site.export_html(clients.drive, world.sample_ids[name])
+        fonts = sorted(set(re.findall(r"font-family:\s*([^;}]+)", raw)))[:8]
+        rtl_marks, h1s = raw.count('dir="rtl"'), raw.count('<h1')
+        print(f"    export of {name}: {len(raw)} characters, fonts {fonts}, {rtl_marks} right-to-left marks, {h1s} H1")
     if wrong:
         raise GscPulseError(f"test site: the checker got {len(wrong)} samples wrong")
     print("  ✅  The test site is ready in your Drive (folder PulseO Test)")

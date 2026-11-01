@@ -234,6 +234,18 @@ class SampleTests(Base):
         self.assertNotIn("ي", fs.draft_html("fa", "https://fa.fake-site.test"))
         self.assertNotIn("ك", fs.draft_html("fa", "https://fa.fake-site.test"))
 
+    def test_every_block_carries_the_font_and_the_direction(self):
+        import re
+        fa = fs.draft_html("fa", "https://fa.fake-site.test")
+        blocks = re.findall(r"<(?:p|h[1-6]|li|td|th)[^>]*>", fa)
+        self.assertGreater(len(blocks), 30)
+        self.assertTrue(all('dir="rtl"' in b and "Vazirmatn" in b for b in blocks))
+        en = fs.draft_html("en", "https://en.fake-site.test")
+        self.assertFalse(re.search(r'dir="rtl"', en))
+        self.assertIn("Arial", en)
+        flipped = fs.draft_html("fa", "https://fa.fake-site.test", rtl=False)
+        self.assertNotIn('dir="rtl"', flipped)                                    # the sample that breaks the rule on purpose
+        self.assertTrue(all("Vazirmatn" in b for b in re.findall(r"<(?:p|h[1-6]|li|td|th)[^>]*>", flipped)))
 
 class CommandTests(unittest.TestCase):
     """The workflow command that builds the fake site in the real Drive."""

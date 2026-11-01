@@ -23,6 +23,7 @@ it is given, so the tests run it against in-memory fakes.
 """
 
 import io
+import re
 from dataclasses import dataclass, field
 
 from googleapiclient.http import MediaIoBaseUpload
@@ -264,6 +265,18 @@ EN = {
 T = {"fa": FA, "en": EN}
 
 
+BLOCK_TAG = re.compile(r"<(p|h[1-6]|li|td|th)>")
+
+
+def inline_style(html: str, lang: str, rtl: bool = True) -> str:
+    """Puts the font (and, for a right-to-left document, the direction) on every paragraph, heading,
+    list item and cell: Google keeps what is written on the element but does not always keep what is
+    written once for the whole page."""
+    font = "font-family:'Vazirmatn',Tahoma,sans-serif" if lang == "fa" else "font-family:Arial,sans-serif"
+    attrs = f' style="{font}"' + (' dir="rtl"' if (lang == "fa" and rtl) else "")
+    return BLOCK_TAG.sub(lambda m: f"<{m.group(1)}{attrs}>", html)
+
+
 def _page_start(lang: str, rtl: bool = True) -> str:
     t = T[lang]
     attrs = ' lang="fa" dir="rtl"' if (lang == "fa" and rtl) else (' lang="fa"' if lang == "fa" else ' lang="en"')
@@ -309,7 +322,7 @@ def draft_html(lang: str, domain: str, *, h1s: int = 1, faq_level: int = 2, summ
     if quality:
         out.append(f"<h2>{t['quality']}</h2><ul>" + "".join(f"<li>{c}</li>" for c in t["checks"]) + "</ul>")
     out.append("</body></html>")
-    return "".join(out)
+    return inline_style("".join(out), lang, rtl)
 
 
 BRIEF_HEADINGS = {
@@ -334,7 +347,7 @@ def brief_html(lang: str, keyword: str, *, drop: str = "", h1s: int = 1, update:
     if words:
         out.append(f"<p>{words}</p>")
     out.append("</body></html>")
-    return "".join(out)
+    return inline_style("".join(out), lang)
 
 
 def sop_html(site: FakeSite) -> str:
