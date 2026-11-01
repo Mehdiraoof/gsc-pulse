@@ -46,6 +46,7 @@ except ImportError:
 import auth
 import content_import
 import content_run
+import fake_site
 import deck_runner
 import mailer
 import page_discovery
@@ -680,6 +681,25 @@ def connect_me(runs: list, smtp):
                      + "\n".join(refused) + "\n\nSites that were fine kept running.")
 
 
+def build_test_site(reset: bool = False):
+    """Makes (or finds) the fake test site in the owner's Drive, folder "PulseO Test", and tries the
+    content checker on the sample documents as Google gives them back. Prints counts and the
+    invented sample names only; the ids are in the test folder's own Index sheet."""
+    try:
+        clients = auth.build_me_clients(os.environ, build)
+    except auth.AuthError as e:
+        raise GscPulseError(f"test site: {e}") from None
+    world = fake_site.build(clients.drive, clients.sheets, print, reset=reset)
+    wrong = fake_site.check_samples_in_drive(clients.drive, world)
+    print(f"  test site: {len(world.sites)} fake sites, {len(world.sample_ids)} sample documents, "
+          f"{len(wrong)} the checker got wrong")
+    for name, expected, found in wrong:
+        print(f"    {name}: expected {sorted(expected)}, found {sorted(found)}")
+    if wrong:
+        raise GscPulseError(f"test site: the checker got {len(wrong)} samples wrong")
+    print("  ✅  The test site is ready in your Drive (folder PulseO Test)")
+
+
 def notify_owner_or_raise(smtp, subject: str, body: str):
     """Like notify_owner, but a failure raises (provision logs it and tries again next run)."""
     mailer.send(smtp, mailer.build_plain(smtp.user, [smtp.user], subject, body))
@@ -783,6 +803,11 @@ def main():
     for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
         for kind in ("weekly", "monthly"):
             _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients_for(kind), os.environ))
+
+    # ---- The fake test site: its own command, nothing else runs (no real site is touched) --------
+    if os.environ.get("BUILD_TEST_SITE", "").strip().lower() in ("1", "true", "yes"):
+        build_test_site(reset=os.environ.get("RESET_TEST_SITE", "").strip().lower() in ("1", "true", "yes"))
+        return
 
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
     enabled = [r for r in runs if r.status != "disabled"]

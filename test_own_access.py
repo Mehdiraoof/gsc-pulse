@@ -49,26 +49,32 @@ class FakeDrive:
 
     def list(self, q, spaces=None, fields=None, pageSize=None, orderBy=None):
         def run():
-            name = re.search(r"name = '((?:[^'\\]|\\.)*)'", q).group(1)
-            name = name.replace("\\'", "'").replace("\\\\", "\\")
-            mime = re.search(r"mimeType = '([^']+)'", q).group(1)
+            name = re.search(r"name = '((?:[^'\\]|\\.)*)'", q)
+            if name:
+                name = name.group(1).replace("\\'", "'").replace("\\\\", "\\")
+            mime = re.search(r"mimeType = '([^']+)'", q)
             parent = re.search(r"'([^']+)' in parents", q)
             return {"files": [
-                {"id": i, "name": f["name"]} for i, f in self.files_.items()
-                if f["name"] == name and f["mimeType"] == mime and not f["trashed"]
-                and (not parent or parent.group(1) in f["parents"])]}
+                {"id": i, "name": f["name"], "mimeType": f["mimeType"]} for i, f in self.files_.items()
+                if (not name or f["name"] == name) and (not mime or f["mimeType"] == mime.group(1))
+                and not f["trashed"] and (not parent or parent.group(1) in f["parents"])]}
         return Req(run)
 
-    def create(self, body, fields=None):
+    def create(self, body, fields=None, media_body=None):
         def run():
             self.n += 1
             fid = f"DRIVE-{self.n}"
             self.files_[fid] = {"name": body["name"], "mimeType": body["mimeType"],
                                 "parents": body.get("parents", []), "trashed": False}
+            if media_body is not None:                     # a document made from HTML: what export gives back
+                self.files_[fid]["content"] = media_body.getbytes(0, media_body.size())
             if body["mimeType"] == provision.SHEET:
                 self.sheets.add_book(fid)
             return {"id": fid}
         return Req(run)
+
+    def export(self, fileId, mimeType=None):
+        return Req(lambda: self.files_[fileId].get("content", b""))
 
     def id_of(self, name):
         return next(i for i, f in self.files_.items() if f["name"] == name)

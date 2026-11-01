@@ -27,6 +27,16 @@ on:
         description: "With rebuild_deck_site: monthly, weekly or both (default both)"
         required: false
         default: ""
+      build_test_site:
+        description: "Make (or find) the fake test site in your Drive (folder PulseO Test) and try the content checker on its sample documents. No real site is touched"
+        required: false
+        type: boolean
+        default: false
+      reset_test_site:
+        description: "With build_test_site: put the fake dashboards back to their starting rows"
+        required: false
+        type: boolean
+        default: false
       cleanup_gone_site:
         description: "One-off: move the pages of this site (a name from SITES_JSON) that were added already gone (first warned on cleanup_gone_since) to Removed Pages"
         required: false
@@ -91,6 +101,8 @@ jobs:
           REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
           REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
           TEST_DECK: ${{ inputs.test_deck }}
+          BUILD_TEST_SITE: ${{ inputs.build_test_site }}
+          RESET_TEST_SITE: ${{ inputs.reset_test_site }}
           CLEANUP_GONE_SITE: ${{ inputs.cleanup_gone_site }}
           CLEANUP_GONE_SINCE: ${{ inputs.cleanup_gone_since }}
           MARK_DECKS_SITE: ${{ inputs.mark_decks_site }}
