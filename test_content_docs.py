@@ -82,6 +82,21 @@ class PersianTests(unittest.TestCase):
         self.assertEqual(cd.strip_dashes("a - b"), "a - b")
 
 
+class CalendarAndEscapeTests(unittest.TestCase):
+
+    def test_the_persian_calendar(self):
+        from datetime import date
+        self.assertEqual(cd.to_jalali(date(2021, 3, 21)), (1400, 1, 1))
+        self.assertEqual(cd.to_jalali(date(2025, 3, 21)), (1404, 1, 1))
+        self.assertEqual(cd.to_jalali(date(2026, 11, 2)), (1405, 8, 11))
+
+    def test_a_backslash_before_a_bracket_is_taken_away(self):
+        out = cd.clean_text(r"قیمت \[needs checking\] و \[لینک\](https://site.test/a)", "fa")
+        self.assertNotIn("\\", out)
+        self.assertEqual(cd.links_in(out), [("لینک", "https://site.test/a")])
+        self.assertIn("[needs checking]", out)
+
+
 class LinkTests(unittest.TestCase):
 
     ALLOWED = [("one", f"{DOMAIN}/article/one"), ("two", f"{DOMAIN}/article/two"), ("three", f"{DOMAIN}/article/three"),

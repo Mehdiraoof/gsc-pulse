@@ -62,6 +62,7 @@ class CreateConfig:
     max_requests: int = 30           # AI requests in one run
     daily_requests: int = 0          # the day's own limit (0: only the provider's)
     ai_drafts: bool = True           # false: the site stops at the brief and a Draft row is left untouched
+    today: date = None               # the day of the run (prompts say so; run() fills it in)
 
 
 @dataclass
@@ -221,6 +222,20 @@ def pages_list(candidates: list) -> str:
     return "\n".join(f"- {kw}: {url}" for kw, url in candidates) or "(none)"
 
 
+def today_line(cfg: CreateConfig) -> str:
+    """The date for the prompts, and for a Persian site the Persian-calendar date (a model without web access
+    otherwise writes an old year)."""
+    d = cfg.today
+    if not d:
+        return ""
+    text = f"Today is {d.isoformat()}."
+    if cfg.language == "fa":
+        y, m, dd = cd.to_jalali(d)
+        text += (f" In the Persian calendar it is {dd} {cd.JALALI_MONTHS[m - 1]} {y}. Use the current Persian year ({y}) "
+                 "for every date and price; never an older year.")
+    return text
+
+
 def brief_prompt(cfg: CreateConfig, item: Item, sop: str, page_text: str, candidates: list) -> str:
     update = bool(item.url)
     research = ("Research in English with Google Search: translate the keyword and its follow-up questions into English "
@@ -233,6 +248,7 @@ Write a content brief for ONE page of the website "{cfg.label}". A writer will f
 
 THE ROW
 {row_facts(item)}
+{today_line(cfg)}
 
 THE SITE'S SOP (it wins over your habits)
 {sop[:MAX_SOP_CHARS] or '(the site has no SOP)'}
@@ -311,6 +327,7 @@ Write the full article for ONE page of the website "{cfg.label}", following the 
 
 THE ROW
 {row_facts(item)}
+{today_line(cfg)}
 
 THE BRIEF (follow it)
 {brief_text[:MAX_BRIEF_CHARS]}
@@ -350,6 +367,8 @@ def edit_prompt(cfg: CreateConfig, item: Item, sop: str, brief_text: str, links:
     return f"""STEP: EDIT
 You are the editor. Below is a draft of an article. Check it against the brief and the SOP checklist, fix every
 problem, and return the complete corrected article (not a list of changes).
+
+{today_line(cfg)}
 
 THE BRIEF
 {brief_text[:MAX_BRIEF_CHARS]}
@@ -678,6 +697,7 @@ def run(drive, sheets, file_id: str, cfg: CreateConfig, ai, mode: str, today: da
         http_get=site_check.default_get, log=print) -> CreateResult:
     """One run for one site. mode: "briefs", "drafts" or "both". Never raises for the AI's limit."""
     result = CreateResult()
+    cfg.today = cfg.today or today
     state = content_run.State(cs.read_all(sheets, file_id, cs.STATE, 4))
     day = today.isoformat()
     used_before = int(state.get("ai", day, "0") or 0)

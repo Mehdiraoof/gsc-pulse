@@ -422,6 +422,18 @@ class SettingsTests(Base):
         self.assertTrue(any("Write the brief in English" in p for p in ai.prompts))
         self.assertTrue(any("Write the brief in Persian (Farsi)" in p for p in ai.prompts))
 
+    def test_the_prompts_say_what_day_it_is(self):
+        ai = FakeAI()
+        self.run_site("fake-fa", ai, mode="both")
+        self.run_site("fake-en", ai, mode="briefs")
+        fa_brief = next(p for p in ai.prompts if p.startswith("STEP: BRIEF") and "Persian (Farsi)" in p)
+        self.assertIn("Today is 2026-11-02.", fa_brief)
+        self.assertIn("In the Persian calendar it is 11 Aban 1405", fa_brief)
+        self.assertIn("never an older year", next(p for p in ai.prompts if p.startswith("STEP: EDIT")))
+        en_brief = next(p for p in ai.prompts if p.startswith("STEP: BRIEF") and "Persian (Farsi)" not in p)
+        self.assertIn("Today is 2026-11-02.", en_brief)
+        self.assertNotIn("Persian calendar", en_brief)
+
     def test_the_prompts_are_in_english_and_carry_the_rules(self):
         ai = FakeAI()
         self.run_site("fake-fa", ai, mode="both")

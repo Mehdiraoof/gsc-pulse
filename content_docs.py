@@ -96,6 +96,28 @@ def _fa_text(text: str) -> str:
     return _DIGIT_RUN.sub(lambda m: m.group(0).translate(_LATIN_TO_FA), text)
 
 
+JALALI_MONTHS = ["Farvardin", "Ordibehesht", "Khordad", "Tir", "Mordad", "Shahrivar", "Mehr", "Aban", "Azar", "Dey",
+                 "Bahman", "Esfand"]
+
+
+def to_jalali(d) -> tuple:
+    """(year, month, day) of a date in the Persian calendar."""
+    gy, gm, gd = d.year, d.month, d.day
+    before = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 + gd + before[gm - 1]
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        return jy, 1 + days // 31, 1 + days % 31
+    return jy, 7 + (days - 186) // 30, 1 + (days - 186) % 30
+
+
 def fa_letters(text: str) -> str:
     return text.translate(_LETTERS)
 
@@ -123,8 +145,9 @@ def strip_dashes(text: str, lang: str = "en") -> str:
 
 
 def clean_text(text: str, lang: str) -> str:
-    """The rules that can be made true in code, applied to Markdown."""
-    text = strip_dashes(text, lang)
+    """The rules that can be made true in code, applied to Markdown (a backslash before a bracket, which
+    some models add, is taken away so that links, markers and image slots still read as such)."""
+    text = strip_dashes(text.replace("\\[", "[").replace("\\]", "]"), lang)
     return normalize_fa(text) if lang == "fa" else text
 
 
