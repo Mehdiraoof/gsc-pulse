@@ -105,6 +105,28 @@ class GeminiTests(unittest.TestCase):
         for leaked in (KEY, "prompt text", "my secret prompt"):
             self.assertNotIn(leaked, text)
 
+    def test_a_missing_model_lists_the_models_that_can_write(self):
+        listing = (200, json.dumps({"models": [
+            {"name": "models/gemini-9-flash", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-embedding-1", "supportedGenerationMethods": ["embedContent"]}]}).encode())
+        seen = []
+
+        def get(url, headers):
+            seen.append(headers)
+            return listing
+        g = ai.Gemini(KEY, post=FakeNet(error(404, "x", code="NOT_FOUND")), sleep=lambda s: None, get=get)
+        with self.assertRaises(ai.AiError) as caught:
+            g.generate("", "x")
+        text = str(caught.exception)
+        self.assertIn("404", text)
+        self.assertIn("gemini-9-flash", text)
+        self.assertNotIn("embedding", text)
+        self.assertNotIn(KEY, text)
+        broken = ai.Gemini(KEY, post=FakeNet(error(404, "x", code="NOT_FOUND")), get=lambda url, headers: (500, b""))
+        with self.assertRaises(ai.AiError) as caught:
+            broken.generate("", "x")
+        self.assertIn("unknown", str(caught.exception))
+
     def test_a_blocked_empty_or_cut_off_answer(self):
         for body in ({"promptFeedback": {"blockReason": "SAFETY"}}, {"candidates": []},
                      {"candidates": [{"content": {"parts": [{"text": "  "}]}}]},

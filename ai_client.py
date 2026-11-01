@@ -23,6 +23,7 @@ import urllib.error
 import urllib.request
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODELS = {"gemini": ("gemini-2.5-flash", "gemini-2.5-flash-lite"),
                   "anthropic": ("claude-sonnet-5-5", "")}
@@ -42,6 +43,18 @@ class QuotaExhausted(AiError):
 def default_post(url: str, headers: dict, body: bytes, timeout: float = TIMEOUT_S) -> tuple:
     """(status, bytes). A network problem raises AiError."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        raise AiError(f"no answer from the AI ({type(e).__name__})") from None
+
+
+def default_get(url: str, headers: dict, timeout: float = 60) -> tuple:
+    """(status, bytes) of a GET; a network problem raises AiError."""
+    request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read()
@@ -77,12 +90,24 @@ def _unfence(text: str) -> str:
 class Gemini:
     provider = "gemini"
 
-    def __init__(self, api_key: str, model: str = "", fallback: str = None, post=default_post, sleep=time.sleep):
+    def __init__(self, api_key: str, model: str = "", fallback: str = None, post=default_post, sleep=time.sleep,
+                 get=default_get):
         self.key = api_key
         self.model = model or DEFAULT_MODELS["gemini"][0]
         self.fallback = DEFAULT_MODELS["gemini"][1] if fallback is None else fallback
-        self.post, self.sleep = post, sleep
+        self.post, self.sleep, self.get = post, sleep, get
         self.calls = 0                                   # requests sent, retries included
+
+    def model_names(self) -> list:
+        """The names of the models this key may use to write text (public names, safe to print); [] when unknown."""
+        try:
+            status, raw = self.get(GEMINI_MODELS_URL, {"x-goog-api-key": self.key})
+        except AiError:
+            return []
+        if status != 200:
+            return []
+        return sorted(str(m.get("name", "")).replace("models/", "") for m in _json(raw).get("models", [])
+                      if "generateContent" in (m.get("supportedGenerationMethods") or []))
 
     def generate(self, system: str, prompt: str, search: bool = False, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
         models = [self.model] + ([self.fallback] if self.fallback and self.fallback != self.model else [])
@@ -124,7 +149,11 @@ class Gemini:
                 continue
             if status != 200:
                 reason = (data.get("error", {}) or {}).get("status", "")
-                raise AiError(f"the AI refused the request (status {status} {reason})".strip())
+                hint = ""
+                if status == 404:                        # most likely a model name that no longer exists
+                    names = [n for n in self.model_names() if "gemini" in n and "embedding" not in n]
+                    hint = f"; model {model} not found, models that can write: {', '.join(names[:25]) or 'unknown'}"
+                raise AiError(f"the AI refused the request (status {status} {reason}){hint}".strip())
             return self._text(data)
 
     @staticmethod
