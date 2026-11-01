@@ -72,6 +72,18 @@ class GeminiTests(unittest.TestCase):
         with self.assertRaises(ai.QuotaExhausted):
             g.generate("", "x")
 
+    def test_the_limit_that_was_hit_is_named_without_secrets(self):
+        details = [{"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "20",
+                                    "quotaMetric": "x"}]}]
+        g, _, _ = gemini(error(429, "quota PerDay", details), error(429, "quota PerDay", details))
+        with self.assertRaises(ai.QuotaExhausted) as caught:
+            g.generate("", "x")
+        text = str(caught.exception)
+        self.assertIn("GenerateRequestsPerDayPerProjectPerModel-FreeTier limit 20", text)
+        self.assertIn("gemini-3.8-flash", text)
+        self.assertNotIn(KEY, text)
+
     def test_a_short_wait_is_waited_out_once(self):
         wait = [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "7s"}]
         g, net, sleeps = gemini(error(429, "per minute", wait), answer("ok"))

@@ -91,6 +91,15 @@ def _unfence(text: str) -> str:
     return m.group(1).strip() if m else t
 
 
+def _quota_note(model: str, data: dict) -> str:
+    """Which limit a 429 names: public metric names and numbers only (no key, no text)."""
+    bits = []
+    for detail in (data.get("error", {}) or {}).get("details", []) or []:
+        for v in detail.get("violations", []) or []:
+            bits.append(re.sub(r"[^A-Za-z0-9_.:/ -]", "", f"{v.get('quotaId', '')} limit {v.get('quotaValue', '?')}"))
+    return f"{model}: " + ("; ".join(dict.fromkeys(bits)) or "no detail")
+
+
 class Gemini:
     provider = "gemini"
 
@@ -115,17 +124,17 @@ class Gemini:
 
     def generate(self, system: str, prompt: str, search: bool = False, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
         models = [self.model] + ([self.fallback] if self.fallback and self.fallback != self.model else [])
-        unavailable = None
+        unavailable, limits = None, []
         for model in models:
             try:
                 return self._ask(model, system, prompt, search, max_tokens)
             except ModelUnavailable as e:
                 unavailable = e                          # this key cannot use that model: the next one
-            except QuotaExhausted:
-                continue                                 # this model's limit: the next one, if there is one
-        if unavailable:
+            except QuotaExhausted as e:
+                limits.append(str(e))                    # this model's limit: the next one, if there is one
+        if unavailable and not limits:
             raise AiError(str(unavailable))
-        raise QuotaExhausted("the AI's request limit is reached")
+        raise QuotaExhausted("the AI's request limit is reached: " + " | ".join(limits))
 
     def _ask(self, model, system, prompt, search, max_tokens) -> str:
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -146,7 +155,7 @@ class Gemini:
                 text = raw.decode("utf-8", errors="replace")
                 wait = _retry_seconds(data)
                 if "PerDay" in text or waited_for_minute or wait > 60:
-                    raise QuotaExhausted("a request limit of the AI is reached")
+                    raise QuotaExhausted(f"a request limit of the AI is reached ({_quota_note(model, data)})")
                 waited_for_minute = True
                 self.sleep(wait + 1)
                 continue
