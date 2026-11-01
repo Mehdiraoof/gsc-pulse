@@ -522,6 +522,21 @@ def _present(rows: list) -> set:
     return out
 
 
+def _targeted(recs: list) -> set:
+    """Normalized searches the rows already target: the Primary Keyword of every row, and the
+    Secondary Keywords of a topic row. A page row's secondary list is only what the page happens to
+    rank for (the tool rewrites it every month), so it does not keep a search from being an idea."""
+    out = set()
+    for rec in recs:
+        eff = _effective(rec)
+        k = content.norm(eff[content.KEY])
+        if k:
+            out.add(k)
+        if not str(rec["row"].get(content.URL, "")).strip():
+            out.update(content.norm(x) for x in _split(eff["Secondary Keywords"]))
+    return out
+
+
 def _effective(rec: dict) -> dict:
     """The keyword cells of a record as they are (or will be) in the file."""
     vals = rec.get("vals") or {}
@@ -780,7 +795,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
 
     # ---- ideas marked Add become topic rows, then content gaps --------------------
     live = [rec for recs in work.values() for rec in recs if not rec.get("remove")]
-    present = _present([_effective(rec) for rec in live])
+    present = _targeted(live)
     gap_tab = next((t for t in cfg.tabs if t.gaps and t.name in work), None)
     already = state.keys({"gap", "dismissed", "idea"})
 
@@ -842,7 +857,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             already.update(content.norm(q) for q in g.queries)
 
     # an idea row the owner deleted is not proposed again
-    kept = _present([_effective(rec) for recs in work.values() for rec in recs if not rec.get("remove")])
+    kept = _targeted([rec for recs in work.values() for rec in recs if not rec.get("remove")])
     for r in list(state.rows):
         if r[0] == "gap" and r[1] == r[2] and r[1] not in kept:
             for other in state.rows:
