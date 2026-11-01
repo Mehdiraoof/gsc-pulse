@@ -151,6 +151,15 @@ def slide_headline(ctx, c, d):
                      align="r" if ctx.rtl else "l")
 
 
+def fit_size(text: str, width: float, biggest: int = 40, smallest: int = 22, em: float = 0.62) -> int:
+    """The largest font size (pt) at which the text stays on one line in `width` inches. A bold
+    digit is about `em` of the size wide; with four cards the numbers keep their full size, with
+    five (an AI Overview card) they shrink to fit instead of wrapping."""
+    if not text:
+        return biggest
+    return max(smallest, min(biggest, int(width * 72 / (em * len(str(text))))))
+
+
 def slide_scorecard(ctx, c, d):
     T = c.T
     slide = content_slide(ctx, d["kicker"], T["c_t_score"])
@@ -161,7 +170,8 @@ def slide_scorecard(ctx, c, d):
         card(slide, x, 1.7, w, 4.3, TINT, 0.06)
         al = "r" if ctx.rtl else "l"
         text_box(slide, x + 0.25, 1.95, w - 0.5, 0.4, [k["label"]], ctx, size=15, color=SLATE, align=al)
-        text_box(slide, x + 0.25, 2.5, w - 0.5, 0.95, [k["value"]], ctx, size=40, color=INK, bold=True,
+        text_box(slide, x + 0.25, 2.5, w - 0.5, 0.95, [k["value"]], ctx,
+                 size=fit_size(k["value"], w - 0.5), color=INK, bold=True,
                  anchor=MSO_ANCHOR.MIDDLE, align=al)
         box = text_box(slide, x + 0.25, 3.6, w - 0.5, 1.0, [""], ctx, size=13, align=al)
         for j, line in enumerate(k["lines"]):
@@ -332,12 +342,21 @@ def slide_ideas(ctx, c, d):
                  align=align_for(ctx, k["keyword"]))
     if d["merge"]:
         top = (2.15 + (1 if len(d["cards"]) <= 3 else 2) * 1.35 + 0.25) if d["cards"] else 1.75
-        card(slide, mirror_x(ctx, LEFT, WIDTH), top, WIDTH, 1.5, TINT, 0.05)
-        box = text_box(slide, mirror_x(ctx, LEFT + 0.35, WIDTH - 0.7), top + 0.1, WIDTH - 0.7, 1.3, [""],
-                       ctx, size=15, anchor=MSO_ANCHOR.MIDDLE, align="r" if ctx.rtl else "l")
-        write_paragraph(box.text_frame.paragraphs[0], "", ctx, size=15,
+        card(slide, mirror_x(ctx, LEFT, WIDTH), top, WIDTH, 1.55, TINT, 0.05)
+        box = text_box(slide, mirror_x(ctx, LEFT + 0.35, WIDTH - 0.7), top + 0.08, WIDTH - 0.7, 0.85, [""],
+                       ctx, size=14, anchor=MSO_ANCHOR.MIDDLE, align="r" if ctx.rtl else "l")
+        write_paragraph(box.text_frame.paragraphs[0], "", ctx, size=14,
                         runs=[(d["merge"]["title"] + " ", {"bold": True, "color": INK}),
                               (d["merge"]["body"], {"color": SLATE})])
+        # the keywords sit in chips of their own, each with its own direction, not in the sentence
+        names = d["merge"].get("names") or []
+        chip_gap = 0.15
+        chip_w = min(3.6, (WIDTH - 0.7 - chip_gap * (len(names) - 1)) / max(len(names), 1))
+        for j, name in enumerate(names):
+            cx = mirror_x(ctx, LEFT + 0.35 + j * (chip_w + chip_gap), chip_w)
+            shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, cx, top + 0.98, chip_w, 0.46, "FFFFFF", 0.3)
+            text_box(slide, cx + 0.12, top + 0.98, chip_w - 0.24, 0.46, [label_item(name)], ctx, size=14,
+                     color=INK, bold=True, anchor=MSO_ANCHOR.MIDDLE, align=align_for(ctx, name))
 
 
 def slide_next(ctx, c, d):
@@ -409,28 +428,13 @@ RENDERERS = {"headline": slide_headline, "scorecard": slide_scorecard, "climbs":
 # Building the deck
 # --------------------------------------------------------------------------- #
 
-def _set_prepared(layouts, text: str):
-    """The title layout's static line at the bottom reads 'Prepared by ... built with PulseO'."""
-    layout = layouts["Title"]
-    for shp in layout.shapes:
-        if shp.has_text_frame and "PulseO" in shp.text_frame.text:
-            p = shp.text_frame.paragraphs[0]
-            runs = p.runs
-            if runs:
-                runs[0].text = text
-                for extra in runs[1:]:
-                    extra._r.getparent().remove(extra._r)
-            return
-
-
 def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None, log=None) -> bytes:
     """The client-ready monthly deck as .pptx bytes. cfg is the site's DeckConfig."""
     lang = cfg.language
     path = os.path.join(template_dir, "gsc_pulse_template_fa.pptx" if lang == "fa"
                         else "gsc_pulse_template.pptx")
-    prs, layouts = decks.open_template(path)
     c = cd.ClientReport(report, lang, cfg.site_label)
-    _set_prepared(layouts, c.T["c_prepared"])
+    prs, layouts = decks.open_template(path, c.T["c_prepared"])      # the title slide says who prepared it
     ctx = decks.Ctx(prs=prs, layouts=layouts, lang=lang, T=c.T, label=cfg.site_label, report=report,
                     report_title=c.T["monthly_report"], period_title=decks.period_title(report, lang),
                     accent=(cfg.accent_color or AMBER), brand=(cfg.brand_color or PERIWINKLE),
@@ -443,7 +447,7 @@ def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None,
         RENDERERS[sid](ctx, c, payload)
     core = prs.core_properties
     core.title = f"{c.T['monthly_report']} · {cfg.site_label} · {ctx.period_title}"
-    core.author = "PulseO"
+    core.author = "Mehdi Raoof"
     core.subject = c.T["monthly_report"]
     core.comments = ""
     out = io.BytesIO()

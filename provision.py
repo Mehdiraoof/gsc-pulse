@@ -145,13 +145,13 @@ def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
 
     if notify and not row[5] and row_no is not None:
         body = "\n".join([
-            f"PulseO created the Google Sheets for {label}.", "",
+            f"The Google Sheets for {label} are ready.", "",
             f"Data:    {link(ids['data'])}", f"History: {link(ids['history'])}",
             f"Reports: {link(ids['reports'])}", "",
-            f"Index of all PulseO sheets: {link(index_id)}", "",
-            "They are in your Drive, in the folder PulseO.", "", "PulseO", ""])
+            f"The Index lists all of them: {link(index_id)}", "",
+            "They are in your Drive, in the same folder as the Index.", ""])
         try:
-            notify(f"PulseO · sheets ready · {label}", body)
+            notify(f"Sheets ready · {label}", body)
         except Exception as e:  # noqa: BLE001  the sheets exist; the Index still lists them
             log(f"  provision: could not send the 'sheets ready' email ({type(e).__name__})")
         else:

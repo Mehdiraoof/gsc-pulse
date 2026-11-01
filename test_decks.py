@@ -218,7 +218,8 @@ class MonthlyStructureTests(unittest.TestCase):
     def test_about_slide(self):
         text = all_text(self.prs.slides[10])
         self.assertIn("About this report", text)
-        self.assertIn("PulseO", text)
+        self.assertNotIn("PulseO", text)
+        self.assertIn("Source: Google Search Console.", text)
         self.assertIn("Anonymized queries", text)
 
     def test_no_slide_shows_internal_names_or_regexes(self):
@@ -229,7 +230,7 @@ class MonthlyStructureTests(unittest.TestCase):
 
     def test_document_properties(self):
         core = self.prs.core_properties
-        self.assertEqual(core.author, "PulseO")
+        self.assertEqual(core.author, "Mehdi Raoof")
         self.assertIn("Example", core.title)
 
 
@@ -380,9 +381,24 @@ class TemplateTests(unittest.TestCase):
             self.assertTrue(set(decks.PLACEHOLDERS) <= set(layouts), name)
             self.assertEqual(len(prs.slides), 0)
 
-    def test_the_mark_comes_from_the_template(self):
-        prs, layouts = decks.open_template(os.path.join(TEMPLATES, "gsc_pulse_template.pptx"))
-        self.assertTrue(decks.template_mark(layouts))
+    def test_the_layouts_carry_no_mark_and_no_tool_name(self):
+        import zipfile
+        for name in ("gsc_pulse_template.pptx", "gsc_pulse_template_fa.pptx"):
+            prs, layouts = decks.open_template(os.path.join(TEMPLATES, name), "Prepared by Mehdi Raoof")
+            self.assertIsNone(decks.template_mark(layouts), name)
+            for layout in prs.slide_layouts:
+                for sh in layout.shapes:
+                    self.assertNotEqual(sh.shape_type, 13, name)
+                    if sh.has_text_frame:
+                        self.assertNotIn("PulseO", sh.text_frame.text, name)
+            title = "\n".join(s.text_frame.text for s in layouts["Title"].shapes if s.has_text_frame)
+            self.assertIn("Prepared by Mehdi Raoof", title)
+            out = io.BytesIO()
+            prs.save(out)
+            with zipfile.ZipFile(out) as z:
+                for part in z.namelist():
+                    if part.endswith((".xml", ".rels")) and part != "docProps/core.xml":   # (the deck sets its own properties)
+                        self.assertNotIn(b"PulseO", z.read(part), f"{name}: {part}")
 
 
 class PersianTests(unittest.TestCase):
@@ -740,11 +756,10 @@ class NoInternalNamesTests(unittest.TestCase):
             for make in (fx.monthly_report, fx.weekly_report):
                 rep = make()
                 T = i18n.table(lang)
-                title = T["monthly_report" if rep.kind == "monthly" else "weekly_report"]
-                subject, body = deck_runner.email_text(rep, cfg(lang), lang, title, decks.period_title(rep, lang))
+                subject, body = deck_runner.email_text(rep, cfg(lang), lang, decks.period_title(rep, lang))
                 self.check(f"email/{lang}", subject)
                 self.check(f"email/{lang}", body)
-                self.assertIn("PulseO", subject)
+                self.assertNotIn("PulseO", subject + body)
 
     def test_the_ai_summary_input_and_the_notes_use_names_too(self):
         text = dd.aggregated_text(fx.monthly_report(), "Example")

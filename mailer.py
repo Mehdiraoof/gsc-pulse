@@ -72,10 +72,12 @@ def split_recipients(addresses: list, owner: str) -> tuple:
     return (others, [owner]) if others else ([owner], [])
 
 
-def safe_filename(label: str, period: str) -> str:
-    """'<label>-SEO-Report-<period>.pptx' with safe characters only."""
-    base = re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-._") or "Site"
-    return f"{base}-SEO-Report-{period}.pptx"
+def deck_filename(name: str) -> str:
+    """'<name>.pptx' for a deck whose name reads like the subject ('Kalameh SEO Report · September
+    2026'): letters of any script are kept, only characters a file name cannot hold are dropped."""
+    base = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", " ", name)
+    base = " ".join(base.split()).strip(" .")[:120]
+    return f"{base or 'SEO Report'}.pptx"
 
 
 def build_message(sender: str, recipients: list, subject: str, body: str, filename: str,

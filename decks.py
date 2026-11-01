@@ -99,7 +99,35 @@ class Ctx:
                                        period=self.period_title)
 
 
-def open_template(path: str):
+def strip_brand(prs, prepared: str = ""):
+    """The template ships with the tool's mark and name on its layouts. A deck is the owner's own
+    work, so both are taken out: every picture on a layout (the mark), every plain text line that
+    holds the tool's name, and the title layout's bottom line becomes `prepared` ('Prepared by ...')
+    when there is one. The theme's name goes too."""
+    for layout in prs.slide_layouts:
+        for shp in list(layout.shapes):
+            if shp.shape_type == 13:                                   # PICTURE
+                rid = shp._element.blip_rId
+                shp._element.getparent().remove(shp._element)
+                layout.part.drop_rel(rid)
+            elif shp.has_text_frame and not shp.is_placeholder and "PulseO" in shp.text_frame.text:
+                runs = shp.text_frame.paragraphs[0].runs
+                if prepared and runs and shp.text_frame.text.strip() != "PulseO":
+                    runs[0].text = prepared
+                    for extra in runs[1:]:
+                        extra._r.getparent().remove(extra._r)
+                else:
+                    shp._element.getparent().remove(shp._element)
+    for master in prs.slide_masters:
+        for rel in master.part.rels.values():
+            if rel.reltype.endswith("/theme"):
+                try:
+                    rel.target_part._blob = rel.target_part.blob.replace(b'name="PulseO"', b'name="Report"')
+                except AttributeError:
+                    pass
+
+
+def open_template(path: str, prepared: str = ""):
     prs = Presentation(path)
     layouts = {l.name: l for l in prs.slide_layouts}
     for name in PLACEHOLDERS:
@@ -109,15 +137,18 @@ def open_template(path: str):
     for sld_id in list(sld_ids):
         prs.part.drop_rel(sld_id.rId)
         sld_ids.remove(sld_id)
+    strip_brand(prs, prepared)
     return prs, layouts
 
 
 def template_mark(layouts) -> bytes:
-    """The PulseO mark (a picture on the layouts), reused for the 'What it means' callout."""
+    """A picture on the layouts, reused for the 'What it means' callout. The templates carry none
+    any more (the mark was the tool's), so the callout has no picture."""
     for shape in layouts["Scorecard"].shapes:
         if shape.shape_type == 13:                       # PICTURE
             return shape.image.blob
     return None
+
 
 
 # --------------------------------------------------------------------------- #
@@ -863,8 +894,8 @@ def build_deck(report: dd.Report, cfg, template_dir: str, summary=None, logo: by
     """The .pptx as bytes. cfg is the site's DeckConfig."""
     lang = cfg.language
     path = os.path.join(template_dir, "gsc_pulse_template_fa.pptx" if lang == "fa" else "gsc_pulse_template.pptx")
-    prs, layouts = open_template(path)
     T = i18n.table(lang)
+    prs, layouts = open_template(path, T["prepared"])
     ctx = Ctx(prs=prs, layouts=layouts, lang=lang, T=T, label=cfg.site_label, report=report,
               report_title=T["monthly_report" if report.kind == "monthly" else "weekly_report"],
               period_title=period_title(report, lang),
@@ -875,7 +906,7 @@ def build_deck(report: dd.Report, cfg, template_dir: str, summary=None, logo: by
         build(ctx)
     core = prs.core_properties
     core.title = f"{ctx.report_title} · {cfg.site_label} · {ctx.period_title}"
-    core.author = "PulseO"
+    core.author = "Mehdi Raoof"
     core.subject = ctx.report_title
     core.comments = ""
     out = io.BytesIO()

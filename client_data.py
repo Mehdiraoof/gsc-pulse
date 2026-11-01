@@ -76,7 +76,9 @@ class ClientReport:
                          and rep.row(segment=s)]
         self.pos_worse = self._pos_worse()
         self.gone = [g for g in rep.gone if not self.res.page(g["Page"])]
-        self.opps = [o for o in rep.opps if not self._opp_resolved(o) and not self._opp_unfit(o)]
+        self.gone_paths = {tabs.path_of(g["Page"]) for g in rep.gone}
+        self.opps = [o for o in rep.opps if not self._opp_resolved(o) and not self._opp_unfit(o)
+                     and not self._opp_vanished(o)]
         self.decisions = []                  # which rules decided what, for the log (numbers only)
 
     def _opp_unfit(self, o: dict) -> bool:
@@ -87,6 +89,36 @@ class ClientReport:
             return True
         return (o["type"] in ("quick_win", "ctr_fix", "update_page", "cannibal", "question")
                 and bool(o["page"]) and op.is_homepage(o["page"]))
+
+    def vanished(self, url: str) -> bool:
+        """A page that has gone: on the gone list (counted in the 'old URLs' line), or one that lost
+        all its impressions this month (a redirect shows as -100%). It is neither a page to check
+        nor something we are watching."""
+        if tabs.path_of(url) in self.gone_paths:
+            return True
+        for r in self.rep.pages:
+            if r["Type"] == "Declining" and r["Page"] == url:
+                impr, prev = dd.num(r["Impressions"]), dd.num(r["Impr prev"])
+                if prev and impr is not None and impr / prev <= 0.005:
+                    return True
+        return False
+
+    def _opp_vanished(self, o: dict) -> bool:
+        return o["type"] in ("check_page", "decliner") and bool(o["page"]) and self.vanished(o["page"])
+
+    def plural(self, label: str) -> bool:
+        """Does the name of a section read as a plural in English ('Programs', 'Old node pages')? Its
+        verb is then 'are' / 'grow'. Persian verbs do not change."""
+        if self.lang != "en":
+            return False
+        words = label.replace("&", " ").split()
+        last = words[-1].lower() if words else ""
+        return last.endswith("s") and not last.endswith("ss") and last not in ("news", "series", "analysis", "status")
+
+    def seg_text(self, key: str, segment: str, **kw) -> str:
+        """A sentence about a section, with 'is' or 'are' to match its name."""
+        label = self.seg_label(segment)
+        return self.T[key + "_pl" if self.plural(label) else key].format(segment=label, **kw)
 
     def seg_label(self, segment: str) -> str:
         """The name of a segment in the deck. The segment's own label stays as it is everywhere else."""
@@ -350,9 +382,10 @@ class ClientReport:
         rows.sort(key=lambda x: -x["score"])
         shown = rows[:7]
         onto = [x for x in rows if x["prev"] > 10 and x["now"] <= 10]
+        hidden = [x for x in onto if x not in shown]
         foot = ""
-        if onto:
-            names = [x["label"] for x in onto[:2]]
+        if hidden:                                  # a page the table already shows is not named again
+            names = [x["label"] for x in hidden[:2]]
             joined = names[0] if len(names) == 1 else T["c_and"].format(a=names[0], b=names[1])
             foot = T["c_climb_foot_one" if len(onto) == 1 else "c_climb_foot"].format(
                 n=len(onto), names=joined)
@@ -399,11 +432,11 @@ class ClientReport:
         top = yoy_pages[0] if yoy_pages and (dd.num(yoy_pages[0]["Clicks diff"]) or 0) > 0 else None
         fact = None
         if seg_best and top:
-            fact = T["c_yoy_both"].format(segment=self.seg_label(seg_best[0]), pct=pct_abs(seg_best[1]),
-                                          page=self.label_of_page(top["Page"]),
-                                          n=i18n.fmt_int(dd.num(top["Clicks diff"])))
+            fact = self.seg_text("c_yoy_both", seg_best[0], pct=pct_abs(seg_best[1]),
+                                 page=self.label_of_page(top["Page"]),
+                                 n=i18n.fmt_int(dd.num(top["Clicks diff"])))
         elif seg_best:
-            fact = T["c_yoy_seg"].format(segment=self.seg_label(seg_best[0]), pct=pct_abs(seg_best[1]))
+            fact = self.seg_text("c_yoy_seg", seg_best[0], pct=pct_abs(seg_best[1]))
         elif top:
             fact = T["c_yoy_page"].format(page=self.label_of_page(top["Page"]),
                                           n=i18n.fmt_int(dd.num(top["Clicks diff"])))
@@ -554,12 +587,10 @@ class ClientReport:
         merge = None
         if cannibal:
             counts = [int(_first_int(o["diagnosis"]) or 2) for o in cannibal]
-            names = [self.short(o["keyword"]) for o in cannibal]
-            sep = "، " if self.lang == "fa" else ", "
-            joined = (names[0] if len(names) == 1
-                      else T["c_and"].format(a=sep.join(names[:-1]), b=names[-1]))
-            merge = {"title": T["c_cannibal"],
-                     "body": T["c_cannibal_b"].format(names=joined, n=min(counts))}
+            # the keywords are shown on their own lines under the sentence, never inside it: a Persian
+            # keyword in an English sentence (or the other way round) reads in a mixed direction
+            merge = {"title": T["c_cannibal"], "body": T["c_cannibal_b"].format(n=min(counts)),
+                     "names": [self.short(o["keyword"], 30) for o in cannibal]}
         return {"intro": T["c_intro_q"].format(site=self.label), "cards": cards, "merge": merge}
 
     # ---- slide 13 ------------------------------------------------------------------------
@@ -592,8 +623,7 @@ class ClientReport:
         bullets = []
         slide_ref = (nums or {}).get("pages")
         for s, g, _ in sorted((x for x in growth if x[1] > 0), key=lambda x: -x[1])[:2]:
-            bullets.append(T["c_do_seg_slide" if slide_ref else "c_do_seg"].format(
-                segment=self.seg_label(s), n=slide_ref))
+            bullets.append(self.seg_text("c_do_seg_slide" if slide_ref else "c_do_seg", s, n=slide_ref))
         seasonal = [o for o in self.opps_of("seasonal")]
         seasonal.sort(key=lambda o: -(dd.num(o["potential_gain_month"]) or 0))
         for o in seasonal[:3]:

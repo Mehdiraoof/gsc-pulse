@@ -56,24 +56,40 @@ class DeckResult:
 # The email
 # --------------------------------------------------------------------------- #
 
-def email_text(report: dd.Report, cfg, lang: str, report_title: str, period: str) -> tuple:
-    """(subject, body): three headline numbers and the top alarm."""
+def email_text(report: dd.Report, cfg, lang: str, period: str) -> tuple:
+    """(subject, body): a short personal note. A greeting, where the report is, two plain sentences
+    with the key numbers (clicks, searches shown, average position) and the sign-off. No list of
+    metrics, no alarms, no name of the tool."""
     T = i18n.table(lang)
-    cards = dd.scorecard(report, T)
-    head = [c for c in cards if c.label_key in ("sc_clicks", "sc_impressions", "sc_position")]
-    lines = []
-    for c in head:
-        changes = "; ".join(f"{T[l.label_key]} {l.text}" for l in c.lines if l.text != "—")
-        lines.append(f"- {T[c.label_key]}: {c.value}" + (f" ({changes})" if changes else ""))
-    top = (dd.alarm_text(report.alarms[0], lang) if report.alarms else T["mail_no_alarm"])
-    report_lc = T["monthly_report_lc" if report.kind == "monthly" else "weekly_report_lc"]
-    body = "\n".join([
-        T["mail_greeting"], "",
-        T["mail_intro"].format(report_lc=report_lc, label=cfg.site_label, period=period), "",
-        T["mail_headlines"], *lines, "",
-        *([] if report.kind == "monthly" else [f"{T['mail_top_alarm']}: {top}", ""]),   # the client deck has no alarms
-        T["mail_attached"], "", T["mail_sign"], ""])
-    subject = T["mail_subject"].format(report=report_title, label=cfg.site_label, period=period)
+    label = cfg.site_label
+    pre = "MoM" if report.kind == "monthly" else "WoW"
+    prev_name = (i18n.month_name(report.prev_period, lang) if report.kind == "monthly"
+                 else T["mail_prev_week"])
+    cur, prev = report.row(), report.row(report.prev_period)
+    sentences = []
+    if cur is not None:
+        clicks = dd.num(cur.get("Clicks"))
+        if clicks is not None:
+            change_pct = dd.num(cur.get(f"Clicks {pre} %"))
+            if change_pct is None:
+                change = ""
+            elif round(abs(change_pct)) < 1:
+                change = T["mail_flat"].format(prev=prev_name)
+            else:
+                change = T["mail_up" if change_pct > 0 else "mail_down"].format(
+                    pct=f"{abs(change_pct):.0f}%", prev=prev_name)
+            sentences.append(T["mail_clicks"].format(label=label, clicks=i18n.fmt_int(clicks), change=change))
+        impr, pos = dd.num(cur.get("Impressions")), dd.num(cur.get("Avg. Position"))
+        if impr is not None and pos is not None:
+            prev_pos = dd.num(prev.get("Avg. Position")) if prev else None
+            pos_prev = (T["mail_pos_prev"].format(prev_pos=f"{prev_pos:.1f}", prev=prev_name)
+                        if prev_pos is not None else "")
+            sentences.append(T["mail_impr"].format(impr=i18n.fmt_int(impr), pos=f"{pos:.1f}", pos_prev=pos_prev))
+    body = "\n".join([T["mail_greeting"], "",
+                      T["mail_intro"].format(label=label, period=period), "",
+                      *([" ".join(sentences), ""] if sentences else []),
+                      T["mail_sign"], ""])
+    subject = T["mail_subject"].format(label=label, report_name=T["report_name"], period=period)
     return subject, body
 
 
@@ -123,11 +139,8 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             payload = (client_deck.build_monthly(report, cfg, template_dir, logo, log) if kind == "monthly"
                        else decks.build_deck(report, cfg, template_dir, ai, logo))
             period = decks.period_title(report, cfg.language)
-            T = i18n.table(cfg.language)
-            subject, body = email_text(report, cfg, cfg.language,
-                                       T["monthly_report" if kind == "monthly" else "weekly_report"],
-                                       period)
-            filename = mailer.safe_filename(cfg.site_label, report.period)
+            subject, body = email_text(report, cfg, cfg.language, period)
+            filename = mailer.deck_filename(subject)
             message = mailer.build_message(smtp.user, to, subject, body, filename, payload, bcc=bcc)
             send(smtp, message)
         except Exception as e:                           # noqa: BLE001  one deck never blocks the other

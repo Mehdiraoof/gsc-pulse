@@ -598,8 +598,8 @@ def discover_page_types(gsc_service, sheets_service, site, start_date: str, end_
 
 
 NO_ACCESS = 'no Search Console access with "me" auth'
-LOST_ACCESS_SUBJECT = "PulseO · lost access to your Google account"
-LOST_ACCESS_BODY = ("PulseO lost access to your Google account, re-authorize (README steps: "
+LOST_ACCESS_SUBJECT = "Lost access to your Google account"
+LOST_ACCESS_BODY = ("Access to your Google account was lost. Please authorize it again (README steps: "
                     "'Using your own Google access'). Sites that use the service account kept "
                     "running; the sites that use your own access were skipped.")
 
@@ -673,8 +673,8 @@ def connect_me(runs: list, smtp):
             continue
         r.gsc, r.sheets, r.drive = clients.gsc, clients.sheets, clients.drive
     if refused:
-        notify_owner(smtp, "PulseO · no Search Console access",
-                     "PulseO could not read these Search Console properties with your Google "
+        notify_owner(smtp, "No Search Console access",
+                     "These Search Console properties could not be read with your Google "
                      "account (not in your property list, or only an unverified owner):\n\n"
                      + "\n".join(refused) + "\n\nSites that were fine kept running.")
 

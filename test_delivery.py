@@ -173,15 +173,19 @@ class MailerTests(unittest.TestCase):
                          ["a@b.test", USER])
         self.assertEqual(mailer.resolve_recipients(["env:MISSING"], {}), [])
 
-    def test_file_names_are_safe(self):
-        self.assertEqual(mailer.safe_filename("Example", "2026-09"), "Example-SEO-Report-2026-09.pptx")
-        self.assertEqual(mailer.safe_filename("My Site / Ltd.", "2026-W41"), "My-Site-Ltd-SEO-Report-2026-W41.pptx")
-        self.assertEqual(mailer.safe_filename("نمونه", "2026-09"), "Site-SEO-Report-2026-09.pptx")
-        self.assertRegex(mailer.safe_filename("a:b*c?", "2026-09"), r"^[A-Za-z0-9._-]+$")
+    def test_file_names_read_like_the_subject_and_hold_no_unsafe_characters(self):
+        self.assertEqual(mailer.deck_filename("Kalameh SEO Report \u00b7 September 2026"),
+                         "Kalameh SEO Report \u00b7 September 2026.pptx")
+        self.assertEqual(mailer.deck_filename("My Site / Ltd. SEO Report: 2026"), "My Site Ltd. SEO Report 2026.pptx")
+        self.assertEqual(mailer.deck_filename("گزارش سئو نمونه \u00b7 2026"), "گزارش سئو نمونه \u00b7 2026.pptx")
+        self.assertEqual(mailer.deck_filename("a:b*c?"), "a b c.pptx")
+        self.assertEqual(mailer.deck_filename("///"), "SEO Report.pptx")
+        self.assertNotRegex(mailer.deck_filename("x" * 300), r"x{121}")
+        self.assertNotIn("PulseO", mailer.deck_filename("Example SEO Report"))
 
     def test_message_has_subject_recipients_and_the_attachment(self):
-        msg = mailer.build_message(USER, ["a@b.test", "c@d.test"], "PulseO · Monthly", "Body", "x.pptx", b"PPTX")
-        self.assertEqual(msg["Subject"], "PulseO · Monthly")
+        msg = mailer.build_message(USER, ["a@b.test", "c@d.test"], "Example SEO Report", "Body", "x.pptx", b"PPTX")
+        self.assertEqual(msg["Subject"], "Example SEO Report")
         self.assertEqual(msg["To"], "a@b.test, c@d.test")
         attachment = list(msg.iter_attachments())[0]
         self.assertEqual(attachment.get_filename(), "x.pptx")
@@ -299,26 +303,28 @@ class DeckRunnerTests(ReportsTestCase):
         self.assertEqual(len(self.sent), 2)
         monthly, weekly = self.sent
         self.assertEqual(monthly["To"], USER)                                  # from the secret
-        self.assertEqual(monthly["Subject"], "PulseO · Monthly SEO Report · Example · September 2026")
-        self.assertTrue(weekly["Subject"].startswith("PulseO · Weekly SEO Report · Example · Week 41"))
+        self.assertEqual(monthly["Subject"], "Example SEO Report \u00b7 September 2026")
+        self.assertTrue(weekly["Subject"].startswith("Example SEO Report \u00b7 Week 41"))
         names = [list(m.iter_attachments())[0].get_filename() for m in self.sent]
-        self.assertEqual(names, ["Example-SEO-Report-2026-09.pptx", "Example-SEO-Report-2026-W41.pptx"])
+        self.assertEqual(names, ["Example SEO Report \u00b7 September 2026.pptx", weekly["Subject"] + ".pptx"])
         counts = [len(Presentation(io.BytesIO(list(m.iter_attachments())[0].get_content())).slides)
                   for m in self.sent]
         self.assertGreaterEqual(counts[0], 5)                  # the client deck: slides without data are left out
         self.assertEqual(counts[1], 6)
         self.assertEqual(self.state(), {"monthly_deck_sent": "2026-09", "weekly_deck_sent": "2026-W41"})
 
-    def test_the_monthly_email_has_three_headlines_and_no_alarm_the_weekly_one_has_both(self):
+    def test_both_emails_are_short_personal_notes_signed_mehdi(self):
         self.run_decks()
         body = self.sent[0].get_body().get_content()
-        self.assertIn("monthly SEO report for Example (September 2026)", body)
-        for label in ("Clicks:", "Impressions:", "Avg. position:"):
-            self.assertIn(label, body)
-        self.assertNotIn("Top alarm:", body)                     # the monthly deck is client-ready: no alarms
+        self.assertIn("Here is the SEO report for Example, September 2026.", body)
+        self.assertIn("clicks from Google", body)
         weekly_body = self.sent[1].get_body().get_content()
-        self.assertIn("Top alarm:", weekly_body)
-        self.assertTrue(body.strip().endswith("PulseO"))
+        self.assertIn("Here is the SEO report for Example, Week 41", weekly_body)
+        for text in (body, weekly_body):
+            self.assertTrue(text.startswith("Hi,"))
+            self.assertTrue(text.strip().endswith("Mehdi"))
+            for banned in ("PulseO", "Top alarm", "Clicks:", "Impressions:", "Avg. position:"):
+                self.assertNotIn(banned, text)
 
     def test_nothing_is_sent_twice(self):
         self.run_decks()
@@ -526,8 +532,8 @@ class DeckRunnerTests(ReportsTestCase):
         site = site_with(deck=deck(language="fa", site_label="نمونه"))
         self.run_decks(site=site)
         self.assertIn("گزارش ماهانه", self.sent[0]["Subject"])
-        self.assertTrue(self.sent[0]["Subject"].startswith("PulseO"))
-        self.assertEqual(list(self.sent[0].iter_attachments())[0].get_filename(), "Site-SEO-Report-2026-09.pptx")
+        self.assertNotIn("PulseO", self.sent[0]["Subject"])
+        self.assertEqual(list(self.sent[0].iter_attachments())[0].get_filename(), self.sent[0]["Subject"] + ".pptx")
 
 
 class WeeklyMoversTests(ReportsTestCase):
@@ -672,8 +678,9 @@ class NamingAndPrivacyTests(unittest.TestCase):
         self.assertEqual(self.read("README.md").splitlines()[0], "# PulseO")
         self.assertNotIn("GSC Pulse", self.read("README.md"))
         self.assertTrue(self.read(".github/workflows/gsc_pulse.yml").startswith("name: PulseO weekly sync"))
-        subject = deck_runner.i18n.table("en")["mail_subject"]
-        self.assertTrue(subject.startswith("PulseO"))
+        for lang in ("en", "fa"):                                  # ... but the emails and decks never say so
+            self.assertNotIn("PulseO", deck_runner.i18n.table(lang)["mail_subject"])
+            self.assertNotIn("PulseO", deck_runner.i18n.table(lang)["mail_sign"])
 
     def test_no_workflow_uploads_anything(self):
         for path in glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml")):

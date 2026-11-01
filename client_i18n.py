@@ -9,7 +9,7 @@ is filled by client_data; numbers and names are never part of the translation.
 EN = {
     "footer": "{label} · {period}",
     "c_subtitle": "{period} · Google Search performance, progress and next steps",
-    "c_prepared": "Prepared by Mehdi Raoof · built with PulseO",
+    "c_prepared": "Prepared by Mehdi Raoof",
 
     # slide 2
     "c_k_headline": "Headline", "c_t_headline": "This month in one line",
@@ -79,6 +79,8 @@ EN = {
     "c_yoy_best": "Best year-on-year result.",
     "c_yoy_both": "Year on year, {segment} is up {pct} and {page} gained {n} clicks.",
     "c_yoy_seg": "Year on year, {segment} is up {pct}.",
+    "c_yoy_both_pl": "Year on year, {segment} are up {pct} and {page} gained {n} clicks.",
+    "c_yoy_seg_pl": "Year on year, {segment} are up {pct}.",
     "c_yoy_page": "Year on year, {page} gained {n} clicks.",
 
     # slide 6
@@ -126,7 +128,7 @@ EN = {
                  "them directly.",
     "c_q_pos": "{n} impr. · position {pos}", "c_q_ctr": "{n} impr. · CTR {ctr}",
     "c_cannibal": "Also: one page per topic.",
-    "c_cannibal_b": "{names} each have {n} pages competing for the same search. Google cannot "
+    "c_cannibal_b": "Each of these keywords has {n} pages competing for the same search. Google cannot "
                     "tell which one to rank, so none reaches the top. Merging each set into one "
                     "page usually lifts it.",
 
@@ -137,6 +139,8 @@ EN = {
     "c_do_now": "What we do now",
     "c_do_seg": "{segment} grows most next month: refresh the top pages first.",
     "c_do_seg_slide": "{segment} grows most next month: refresh the top pages from slide {n} first.",
+    "c_do_seg_pl": "{segment} grow most next month: refresh the top pages first.",
+    "c_do_seg_slide_pl": "{segment} grow most next month: refresh the top pages from slide {n} first.",
     "c_do_page": "Update {page} before {month}: it grew {pct} into {month} last year.",
 
     # slide 14
@@ -175,7 +179,7 @@ EN = {
 FA = {
     "footer": "{label} · {period}",
     "c_subtitle": "{period} · عملکرد در جستجوی گوگل، پیشرفت و گام‌های بعدی",
-    "c_prepared": "تهیه‌شده توسط مهدی رئوف · ساخته‌شده با PulseO",
+    "c_prepared": "تهیه‌شده توسط مهدی رئوف",
 
     "c_k_headline": "خلاصه", "c_t_headline": "این ماه در یک جمله",
     "h_pos": "{site} بالاتر از تمام سال گذشته رتبه گرفته است.",
@@ -241,6 +245,8 @@ FA = {
     "c_yoy_best": "بهترین نتیجه نسبت به سال قبل.",
     "c_yoy_both": "نسبت به سال قبل، {segment} {pct} رشد کرده و {page} {n} کلیک بیشتر گرفته است.",
     "c_yoy_seg": "نسبت به سال قبل، {segment} {pct} رشد کرده است.",
+    "c_yoy_both_pl": "نسبت به سال قبل، {segment} {pct} رشد کرده و {page} {n} کلیک بیشتر گرفته است.",
+    "c_yoy_seg_pl": "نسبت به سال قبل، {segment} {pct} رشد کرده است.",
     "c_yoy_page": "نسبت به سال قبل، {page} {n} کلیک بیشتر گرفته است.",
 
     "c_t_new": "جستجوهای تازه‌ای که {site} را پیدا می‌کنند",
@@ -283,7 +289,7 @@ FA = {
                  "مستقیم جواب بدهد.",
     "c_q_pos": "{n} نمایش · جایگاه {pos}", "c_q_ctr": "{n} نمایش · نرخ کلیک {ctr}",
     "c_cannibal": "همچنین: یک صفحه برای هر موضوع.",
-    "c_cannibal_b": "{names} هرکدام {n} صفحه دارند که بر سر یک جستجو با هم رقابت می‌کنند. گوگل "
+    "c_cannibal_b": "برای هر یک از این کلمه‌ها {n} صفحه بر سر یک جستجو با هم رقابت می‌کنند. گوگل "
                     "نمی‌داند کدام را بالا بیاورد، پس هیچ‌کدام به صدر نمی‌رسد. ادغام هر مجموعه در "
                     "یک صفحه معمولاً آن را بالا می‌برد.",
 
@@ -294,6 +300,9 @@ FA = {
     "c_do_seg": "{segment} ماه بعد بیشترین رشد را دارد: ابتدا صفحه‌های برتر را به‌روز کنیم.",
     "c_do_seg_slide": "{segment} ماه بعد بیشترین رشد را دارد: ابتدا صفحه‌های برتر اسلاید {n} را "
                       "به‌روز کنیم.",
+    "c_do_seg_pl": "{segment} ماه بعد بیشترین رشد را دارد: ابتدا صفحه‌های برتر را به‌روز کنیم.",
+    "c_do_seg_slide_pl": "{segment} ماه بعد بیشترین رشد را دارد: ابتدا صفحه‌های برتر اسلاید {n} را "
+                         "به‌روز کنیم.",
     "c_do_page": "{page} را پیش از {month} به‌روز کنیم: سال قبل به {month} {pct} رشد کرد.",
 
     "c_k_watch": "فعلاً اقدامی لازم نیست", "c_t_watch": "آنچه زیر نظر داریم",

@@ -346,7 +346,7 @@ class ProvisionTests(unittest.TestCase):
         site = self.site()
         provision.provision_site(self.drive, self.sheets, site, self.notify)
         (subject, body), = self.mails
-        self.assertEqual(subject, "PulseO · sheets ready · Kalameh")
+        self.assertEqual(subject, "Sheets ready · Kalameh")
         for sheet_id in (site.sheet_id, site.history_sheet_id, site.reports_sheet_id,
                          self.drive.id_of(provision.INDEX_NAME)):
             self.assertIn(f"https://docs.google.com/spreadsheets/d/{sheet_id}", body)
@@ -519,7 +519,7 @@ class MainTests(unittest.TestCase):
         self.assertIsNone(err, out)
         self.assertIn("Dashboard", self.sheets.books["S1-REPORTS"])
         self.assertGreater(len(self.sheets.books["S1-MAIN"]["Queries"].data), 1)
-        self.assertEqual(self.subjects().count("PulseO · sheets ready · site-2"), 1)
+        self.assertEqual(self.subjects().count("Sheets ready · site-2"), 1)
         self.assertFalse(any("site-1" in s for s in self.subjects()))
 
     def test_a_site_with_its_own_access_gets_all_its_sheets_and_a_full_sync(self):
@@ -631,7 +631,7 @@ class MainTests(unittest.TestCase):
             self.assertIn("site-1: ok", self.summary_line(out, "site-1"))
             self.assertEqual(self.me.site_urls, [])
             self.assertEqual(self.drive.files_, {})                           # no sheets for a site we cannot read
-            self.assertEqual(self.subjects(), ["PulseO · no Search Console access"])
+            self.assertEqual(self.subjects(), ["No Search Console access"])
             self.assertIn(S2_URL, FakeSMTP.sent[0].get_content())
 
     def test_the_property_list_is_never_logged(self):

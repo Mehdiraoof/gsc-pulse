@@ -504,8 +504,11 @@ email: nothing is saved to Drive or anywhere else. The change applies from the n
 the current decks to the new address right away, run the workflow with *rebuild_decks* ticked
 (this also resends them to everyone on the list).
 
-Each email has its own subject, a short body with three headline numbers and the top alarm,
-and the deck attached, so your inbox is the archive. If sending fails, it is retried once, the
+Each email is a short personal note signed "Mehdi": a greeting, where the report is, two plain
+sentences with the key numbers (clicks, searches shown, average position), and the deck attached, so
+your inbox is the archive. The subject and the file name read "<Site> SEO Report · <Month YYYY>". Neither
+the emails nor the decks (slides, footers, layouts, file properties) name PulseO: the title slide says
+"Prepared by Mehdi Raoof" and the footer is "<Site> · <Month YYYY>". If sending fails, it is retried once, the
 error is logged (with addresses and passwords hidden) and the run ends red; decks that were sent
 stay marked as sent.
 
@@ -698,7 +701,7 @@ account, PulseO can read it **as you**, so nobody has to add anything. This is c
 * `"auth": "me"`: your own Google account. `sheet_id`, `history_sheet_id` and `reports_sheet_id`
   are optional: PulseO **creates the sheets itself** in your Drive (folder `PulseO`, a folder per site,
   and `PulseO · Index` that remembers which sheet belongs to which site, so no ID has to be written
-  down). Once per new site you get an email, `PulseO · sheets ready · <label>`, with the links. Ids
+  down). Once per new site you get an email, `Sheets ready · <label>`, with the links. Ids
   you do put in `SITES_JSON` win over the Index, but they must be sheets PulseO created.
 * `"recipients": []` in a `deck` means: send to the address in the `SMTP_USER` secret.
 
