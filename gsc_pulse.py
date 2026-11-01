@@ -727,10 +727,10 @@ def probe_ai():
         except ai_client.AiError as e:
             result = str(e)
         print(f"    {name}: {result}")
+        if result == "ok":
+            print(f"      with search: {client.probe(name, search=True)}")
         if result == "ok" and not working:
             working = name
-    if working:
-        print(f"    {working} with search: {client.probe(working, search=True)}")
 
 
 def create_content_test(mode: str, limit: int = 0):
