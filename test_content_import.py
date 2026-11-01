@@ -489,6 +489,7 @@ class MatchingTests(base.Base):
         self.assertIn("Repair: merged by URL words", how)
         self.assertIn("Repair: possible match, not merged", how)
         self.assertIn("repair of Articles", result.text())
+        self.assertEqual(result.removed, {"merged": 1})
         again = self.run_import(reader, force=True, sitemap=sitemap)         # once only
         self.assertEqual(again.repairs, [])
         self.assertEqual(len(self.table(cs.REMOVED)[1]), 1)

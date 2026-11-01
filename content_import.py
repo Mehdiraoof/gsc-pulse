@@ -549,6 +549,7 @@ def repair(entries: list, recs: list, ctx, tab: str) -> RepairReport:
             rec["row"].update(vals)
             rec["import"] = {**rec.get("import", {}), **vals}
             topic_rec["remove"] = REPAIR_REASON
+            topic_rec["remove_kind"] = "merged"
             topic_rec["moved_to"] = content.display_url(str(rec["row"].get(content.URL, "")))
             report.entries.append(Entry(src, old.keyword, "", old.status, "r-" + kind,
                                         content.path_of(str(rec["row"].get(content.URL, "")))))
