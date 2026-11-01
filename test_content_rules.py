@@ -22,6 +22,10 @@ ZWNJ_WORD = "می‌خواهم"            # می‌خواهم (half space)
 TATWEEL_WORD = "میـخواهم"
 
 
+def base_key(url):
+    return content.url_key(url)
+
+
 def probes(table):
     """A fake live site: the answer for each address, 200 for the ones not named."""
     return lambda url: table.get(url, Probe(200))
@@ -165,6 +169,40 @@ class SourceTests(base.Base):
         self.assertIn("1 from history", result.text())
         self.assertIn("1 from sitemap", result.text())
 
+    def test_history_and_sitemap_pages_that_are_already_gone_never_get_a_row(self):
+        gone_h, gone_s = f"{ROOT}/article/h-gone", f"{ROOT}/article/s-gone"
+        live, moved = f"{ROOT}/article/h-live", f"{ROOT}/article/h-moved"
+        probe = probes({gone_h: Probe(404), gone_s: Probe(410), B: Probe(404), moved: Probe(301, A)})
+        result = self.run_it(history_pages=lambda: [gone_h, live, moved], sitemap=lambda: ([gone_s], True),
+                             probe=probe)
+        self.assertEqual(self.urls(), {A, B, live, moved})                  # a page from Search Console keeps the 2-refresh rule
+        self.assertIn("Page returns 404", self.find("Articles", B)["Alerts"])
+        self.assertIn("Redirects to", self.find("Articles", moved)["Alerts"])    # only gone pages are left out
+        self.assertEqual(result.found_gone, 2)
+        self.assertEqual(result.added, {"search": 3, "history": 2, "sitemap": 0, "redirect": 0})
+        self.assertEqual(result.new_pages, 5)
+        self.assertIn("2 history/sitemap pages already gone", result.text())
+        state = {tuple(r[:2]) for r in map(list, self.raw("_state").data[1:])}
+        self.assertNotIn(("gone", base_key(gone_h)), state)                  # nothing is remembered about them
+        self.run_it(force=True, today=DAY2, history_pages=lambda: [gone_h, live], probe=probe)
+        self.assertNotIn(gone_h, self.urls())
+        back = self.run_it(force=True, today=DAY3, history_pages=lambda: [gone_h, live], probe=probes({}))
+        self.assertIn(gone_h, self.urls())                                    # it answers again: now it is a page
+        self.assertEqual(back.found_gone, 0)
+
+    def test_a_one_off_clean_up_moves_the_rows_that_were_added_already_gone(self):
+        old, mine = f"{ROOT}/article/old-h", f"{ROOT}/article/mine"
+        self.run_it()
+        self.add_row("Articles", **{content.KEY: "old h", content.URL: old, content.STATUS: "Published"})
+        self.add_row("Articles", **{content.KEY: "mine", content.URL: mine, content.STATUS: "Published", "PIC": "Sara"})
+        gone = probes({old: Probe(404), mine: Probe(404)})
+        self.run_it(force=True, probe=gone)                                  # the first warning, on TODAY
+        result = self.run_it(force=True, today=DAY2, probe=gone, cleanup_gone_since="2026-10-27")
+        reasons = {r["Published URL"]: r["Reason"] for r in self.table(cs.REMOVED)[1]}
+        self.assertEqual(reasons[old], "Already gone when found")
+        self.assertEqual(reasons[mine], "Page returns 404")                  # a row with work in it keeps the normal rule
+        self.assertEqual(result.removed, {"found gone": 1, "gone": 1})
+        self.assertNotIn(old, self.urls())
     def test_a_sitemap_that_cannot_be_read_changes_nothing(self):
         self.run_it()
         before = self.urls()
@@ -340,6 +378,39 @@ class IdeaRuleTests(base.Base):
             self.run_it()
         self.assertIsNone(self.topic("Articles", "garden shoes cheap"))
 
+
+class DropdownTests(base.Base):
+
+    def choices(self):
+        out = []
+        for book, req in self.fs.requests:
+            if book == self.file_id and "setDataValidation" in req:
+                out.append([v["userEnteredValue"] for v in req["setDataValidation"]["rule"]["condition"]["values"]])
+        return out
+
+    def test_the_new_choices_exist(self):
+        self.assertIn("Draft", content.TODOS)
+        self.assertIn("Review", content.TODOS)
+        self.assertIn("Drafted", content.STATUSES)
+        self.assertLess(content.STATUSES.index("Ordered"), content.STATUSES.index("Drafted"))
+        self.assertLess(content.STATUSES.index("Drafted"), content.STATUSES.index("Published"))
+
+    def test_a_new_file_has_them(self):
+        self.run_it()
+        self.assertTrue(any("Review" in v and "Draft" in v for v in self.choices()))
+        self.assertTrue(any("Drafted" in v for v in self.choices()))
+
+    def test_every_refresh_puts_them_into_a_file_that_already_exists(self):
+        self.run_it()
+        self.fs.requests.clear()                                              # as if the file had been made before
+        self.run_it(force=True)
+        self.assertTrue(any("Review" in v and "Draft" in v for v in self.choices()))
+        self.assertTrue(any("Drafted" in v for v in self.choices()))
+        # one for Status and one for To Do, for each of the two tabs; no cell of the owner's changes
+        self.assertEqual(len([v for v in self.choices() if "Drafted" in v]), 2)
+
+    def test_the_search_question_limit_is_high_enough_for_a_big_site(self):
+        self.assertGreaterEqual(content_run.MAX_PAGE_QUERY_CALLS, 4000)
 
 if __name__ == "__main__":
     unittest.main()

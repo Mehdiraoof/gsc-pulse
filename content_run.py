@@ -42,8 +42,8 @@ MAX_IMPACT_CALLS = 60          # per-page before/after lookups in one refresh
 PATCH_CHUNK = 400              # cells written one by one per call
 TOP_URGENT = 5
 PAGE_QUERY_DAYS = 480          # a page with no searches in 90 days is asked about for the stored 16 months
-MAX_PAGE_QUERY_CALLS = 800     # Search Console calls for the searches of single pages, per refresh
-PAGE_QUERY_BUDGET_S = 10 * 60
+MAX_PAGE_QUERY_CALLS = 4000    # Search Console calls for the searches of single pages, per refresh
+PAGE_QUERY_BUDGET_S = 25 * 60
 NOTE_FROM_TITLE = "From page title, not from searches"
 NOTE_NO_KEYWORD = "No searches and no title found"
 SOURCES = ("search", "history", "sitemap", "redirect")
@@ -75,6 +75,7 @@ class ContentResult:
     warned: int = 0                                 # pages that got the first warning
     removed: dict = field(default_factory=dict)     # gone / redirect / merged -> rows moved to Removed Pages
     keywords: dict = field(default_factory=lambda: {"searches": 0, "title": 0, "empty": 0})
+    found_gone: int = 0                             # pages of the history or sitemap that already returned 404/410: no row
 
     def added_text(self) -> str:
         return ", ".join(f"{self.added[s]} from {s}" for s in SOURCES if self.added.get(s))
@@ -87,6 +88,8 @@ class ContentResult:
             parts.append(f"refreshed for {self.month}: {self.new_pages} new pages"
                          + (f" ({self.added_text()})" if self.new_pages else "")
                          + f", {self.new_topics} new topics")
+            if self.found_gone:
+                parts.append(f"{self.found_gone} history/sitemap pages already gone, no row")
             if self.checked:
                 parts.append("status check " + ", ".join(f"{k} {n}" for k, n in sorted(self.checked.items())))
             if self.warned or self.removed:
@@ -282,6 +285,7 @@ class Context:
     history_urls: list = field(default_factory=list)   # every page address in the stored history
     sitemap_urls: list = field(default_factory=list)   # every page address in the sitemap(s)
     probe: object = None             # url -> site_check.Probe, or None: no status check this run
+    cleanup_gone_since: str = ""     # once: move pages first warned as gone on this day to Removed Pages
 
 
 def _num(v, digits=None):
@@ -694,6 +698,10 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                      if str(rec["row"].get(content.URL, "")).strip()]
         probes = site_check.check_all(addresses, ctx.probe)
         moves = []
+        protected = set()                              # addresses an old sheet brought in: never cleaned up
+        if ctx.cleanup_gone_since and cs.IMPORT_LOG in info:
+            _, logged = cs.table_of(cs.read_all(sheets, file_id, cs.IMPORT_LOG))
+            protected = {content.url_key(e.get("Old URL")) for e in logged if str(e.get("Old URL", "")).strip()}
         for recs in work.values():
             for rec in recs:
                 url = str(rec["row"].get(content.URL, "")).strip()
@@ -704,7 +712,20 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 label = str(probe.status) if kind == site_check.GONE_KIND else kind
                 result.checked[label] = result.checked.get(label, 0) + 1
                 rec["probe"] = probe
-                verdict, text = judge(state, content.url_key(url), kind, target, probe.status, today)
+                key = content.url_key(url)
+                if rec["new"] and rec.get("source") in ("history", "sitemap") and kind == site_check.GONE_KIND:
+                    rec["skip_new"] = True             # already gone when found: it never gets a row
+                    continue
+                if (ctx.cleanup_gone_since and not rec["new"] and kind == site_check.GONE_KIND
+                        and state.get("gone", key) == "gone" and state.when("gone", key) == ctx.cleanup_gone_since
+                        and key not in protected and str(rec["row"].get(content.STATUS, "")).strip() == "Published"
+                        and not any(str(rec["row"].get(c, "")).strip() for c in ("PIC", "Briefed Date"))
+                        and not (rec.get("stats") or ctx.data.stats.get(key) or content.PageStats("")).impressions):
+                    rec["remove"] = "Already gone when found"     # one-off: pages added gone by the first run
+                    rec["remove_kind"] = "found gone"
+                    state.delete("gone", key)
+                    continue
+                verdict, text = judge(state, key, kind, target, probe.status, today)
                 if verdict == "remove" and rec["new"]:
                     verdict, text = "warn", (content.GONE_ALERT.format(code=probe.status)
                                              if kind == site_check.GONE_KIND
@@ -717,9 +738,22 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                     rec["remove_kind"] = "gone" if kind == site_check.GONE_KIND else "redirect"
                     if kind == site_check.REDIRECT:
                         moves.append((rec, target))
+        for name, recs in work.items():                # ... and a page that was never added is not counted
+            kept = []
+            for rec in recs:
+                if rec.get("skip_new"):
+                    result.added[rec["source"]] -= 1
+                    result.new_pages -= 1
+                    result.found_gone += 1
+                    by_key.pop(content.url_key(rec["row"].get(content.URL, "")), None)
+                else:
+                    kept.append(rec)
+            work[name] = kept
         for rec, target in moves:
             hand_over(rec, target, cfg, work, by_key, ctx, result)
         log(f"  content: status check {sorted(result.checked.items())}")
+        if result.found_gone:
+            log(f"  content: {result.found_gone} pages of the history or sitemap were already gone: no row")
 
     fill_keywords(ctx, work, result)
 
@@ -890,6 +924,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                     columns[name].append(current)
         # new rows have no old values: the lists above hold their computed values already
         cs.write_columns(sheets, file_id, t.name, header, 2, columns)
+        cs.refresh_dropdowns(sheets, file_id, sid, header)
         if extra > 0:
             names = list(content.ON_CREATE)               # an imported row brings more columns
             for rec in recs[n_old:]:
@@ -1006,7 +1041,7 @@ def load_pages(ctx: Context, result: ContentResult, history_pages, sitemap, log)
 def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today: date, notify=None,
                 log=print, force: bool = False, http_get=autocomplete.default_http_get,
                 sleep=time.sleep, read_source=None, history_pages=None, sitemap=None,
-                probe=None) -> ContentResult:
+                probe=None, cleanup_gone_since: str = "") -> ContentResult:
     """The content dashboard of one site: created if missing, refreshed once per complete month
     (or when `force`, or when an old sheet is waiting to be imported or repaired), ideas once a
     week. `read_source(spec) -> (header, rows)` reads an old sheet named in `content.import_from`;
@@ -1038,14 +1073,15 @@ def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today:
     waiting = (read_source is not None and any(
         not state.get("import", content_import.spec_key(s)) for s in cfg.imports)) \
         or (cfg.repair_imports and not state.get("repair", "v1"))
-    if force or created or waiting or state.get("meta", "last_refresh") != month:
+    if force or created or waiting or cleanup_gone_since or state.get("meta", "last_refresh") != month:
         _, aio_pages = aio_import.load_raw(sheets, reports_id)
         newest = max(aio_pages) if aio_pages else ""
         aio = {}
         for url, n in (aio_pages.get(newest) or {}).items():
             aio[content.url_key(url)] = aio.get(content.url_key(url), 0) + n
         ctx = Context(site=site, data=data, today=today, cm=cm, brand=brand, aio=aio,
-                      seasonal_regex=cfg.seasonal_regex, read_source=read_source, probe=probe)
+                      seasonal_regex=cfg.seasonal_regex, read_source=read_source, probe=probe,
+                      cleanup_gone_since=cleanup_gone_since)
         load_pages(ctx, result, history_pages, sitemap, log)
         refresh(sheets, file_id, site, ctx, state, result, log)
         state.set("meta", "last_refresh", month, today)

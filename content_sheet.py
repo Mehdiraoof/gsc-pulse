@@ -175,6 +175,24 @@ def conditional_rules(sid: int) -> list:
     return rules
 
 
+def refresh_dropdowns(sheets, file_id: str, sid: int, header: list):
+    """Puts the current choices into the Status, To Do ... dropdowns of a tab that already exists
+    (a choice added later reaches the old files this way). Columns are found by header name; the
+    owner's own cells are not touched."""
+    reqs = []
+    for name, values in DROPDOWNS.items():
+        c = col_of(header, name)
+        if c is None:
+            continue
+        reqs.append({"setDataValidation": {
+            "range": _range(sid, r1=1, c1=c, c2=c + 1),
+            "rule": {"condition": {"type": "ONE_OF_LIST",
+                                   "values": [{"userEnteredValue": v} for v in values]},
+                     "strict": False, "showCustomUi": True}}})
+    if reqs:
+        history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": reqs}))
+
+
 def small_tab_requests(sid: int, header: list, dropdowns: dict = None, filter_on: bool = False) -> list:
     n = len(header)
     reqs = base_requests(sid, 1000, max(n, 6))
@@ -255,7 +273,7 @@ def guide_lines(label: str, tab_list: list) -> list:
         ["Column", "", "Meaning"],
         ["Primary Keyword", "", "The main search query this page should rank for."],
         ["Published URL", "", "The live page. Empty = a new topic that has no page yet."],
-        ["Status", "", "Inboxed → Briefed → Ordered → Published. Later = parked. Gone = redirected or removed."],
+        ["Status", "", "Inboxed → Briefed → Ordered → Drafted → Published. Later = parked. Gone = redirected or removed."],
         ["To Do", "", "Brief = prepare a brief · Write = new page · Update = improve content · Rewrite = start "
                       "over around the right keyword · Optimization = title, meta and intro · Merge = combine "
                       "with a competing page · Redirect = 301 to another page · Keep = no action · Prune = "

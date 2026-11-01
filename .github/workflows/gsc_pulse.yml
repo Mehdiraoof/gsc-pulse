@@ -27,6 +27,14 @@ on:
         description: "With rebuild_deck_site: monthly, weekly or both (default both)"
         required: false
         default: ""
+      cleanup_gone_site:
+        description: "One-off: move the pages of this site (a name from SITES_JSON) that were added already gone (first warned on cleanup_gone_since) to Removed Pages"
+        required: false
+        default: ""
+      cleanup_gone_since:
+        description: "With cleanup_gone_site: the day (YYYY-MM-DD) those pages were first warned"
+        required: false
+        default: ""
       test_deck:
         description: "With rebuild_deck_site: send a test copy to the owner only, subject starts with [Test], and do not mark the deck as sent"
         required: false
@@ -83,6 +91,8 @@ jobs:
           REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
           REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
           TEST_DECK: ${{ inputs.test_deck }}
+          CLEANUP_GONE_SITE: ${{ inputs.cleanup_gone_site }}
+          CLEANUP_GONE_SINCE: ${{ inputs.cleanup_gone_since }}
           MARK_DECKS_SITE: ${{ inputs.mark_decks_site }}
           REBUILD_CONTENT_SITE: ${{ inputs.rebuild_content_site }}
           REBUILD_VIEWS: ${{ inputs.rebuild_views }}

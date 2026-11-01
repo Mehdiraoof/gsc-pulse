@@ -56,8 +56,8 @@ FILL_IF_EMPTY = [FANOUTS, RECOMMENDATIONS]
 # written when the row is created, never again
 ON_CREATE = [KEY, URL, STATUS, TODO, "Intent", "Keyword Type", "Content Type", SLUG]
 
-STATUSES = ["Inboxed", "Briefed", "Ordered", "Published", "Later", "Gone"]
-TODOS = ["Brief", "Write", "Update", "Rewrite", "Optimization", "Merge", "Redirect", "Keep", "Prune"]
+STATUSES = ["Inboxed", "Briefed", "Ordered", "Drafted", "Published", "Later", "Gone"]
+TODOS = ["Brief", "Write", "Draft", "Review", "Update", "Rewrite", "Optimization", "Merge", "Redirect", "Keep", "Prune"]
 PRIORITIES = ["Urgent", "High", "Moderate", "Low"]
 INTENTS = ["Informational", "Commercial", "Navigational", "Transactional"]
 KEYWORD_TYPES = ["General", "Seasonal", "Local", "Time-Sensitive"]

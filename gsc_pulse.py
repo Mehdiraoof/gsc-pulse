@@ -16,6 +16,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -466,7 +467,7 @@ def source_reader(run: SiteRun):
     return read
 
 
-def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False):
+def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False, cleanup_gone_since: str = ""):
     """Phase 1c2: the content dashboard of one site (own-access sites only: PulseO has to be able
     to create the file in the owner's Drive)."""
     site = run.site
@@ -507,7 +508,7 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False):
             history_pages=((lambda: history.read_page_urls(run.sheets, site.history_sheet_id))
                            if site.history_sheet_id else None),
             sitemap=lambda: site_check.read_sitemaps(origin, site_check.default_get),
-            probe=site_check.fetch_probe)
+            probe=site_check.fetch_probe, cleanup_gone_since=cleanup_gone_since)
     except Exception:
         run.content_text = "failed"
         raise
@@ -769,6 +770,10 @@ def main():
     mark_decks_site = os.environ.get("MARK_DECKS_SITE", "").strip().lower()           # one site: mark decks sent, email nothing
     test_deck = os.environ.get("TEST_DECK", "").strip().lower() in ("1", "true", "yes")   # with rebuild_deck_site: a test copy to the owner only
     rebuild_content_site = os.environ.get("REBUILD_CONTENT_SITE", "").strip().lower() # one site: refresh its content dashboard now
+    cleanup_gone_site = os.environ.get("CLEANUP_GONE_SITE", "").strip().lower()       # one site: one-off clean-up of pages added already gone
+    cleanup_gone_since = os.environ.get("CLEANUP_GONE_SINCE", "").strip()             # ... first warned on this day (YYYY-MM-DD)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", cleanup_gone_since):
+        cleanup_gone_site = ""
     rebuild_views = os.environ.get("REBUILD_VIEWS", "").strip().lower() in ("1", "true", "yes")
     smtp = mailer.settings_from_env(os.environ)
     if smtp:
@@ -855,7 +860,8 @@ def main():
             continue
         try:
             sync_content(r.gsc, r, smtp,
-                         force=bool(rebuild_content_site) and r.name.lower() == rebuild_content_site)
+                         force=bool(rebuild_content_site) and r.name.lower() == rebuild_content_site,
+                         cleanup_gone_since=(cleanup_gone_since if r.name.lower() == cleanup_gone_site else ""))
         except Exception as e:
             fail_site(r, e)
             print()
