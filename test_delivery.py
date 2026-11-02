@@ -871,9 +871,10 @@ class HandoffTests(ReportsTestCase):
             first = len(ai_notes.read_rows(self.sheets, RID))
             our_work.prepare_notes(None, self.sheets, self.site, date(2026, 11, 12), None, lambda s: None)
         rows = ai_notes.read_rows(self.sheets, RID)
-        self.assertEqual((first, len(rows)), (2, 2))                       # a second run adds nothing
+        self.assertEqual((first, len(rows)), (3, 3))                       # a second run adds nothing
         self.assertEqual({(r["Report"], r["Slot"], r["Status"]) for r in rows},
-                         {("weekly", "weekly_summary", "waiting"), ("monthly", "our_work_intro", "waiting")})
+                         {("weekly", "weekly_summary", "waiting"), ("monthly", "our_work_intro", "waiting"),
+                          ("monthly", "client_slides", "waiting")})
         monthly = [r for r in rows if r["Slot"] == "our_work_intro"][0]
         self.assertIn("Updated page: Garden tools", monthly["Input"])      # the facts the writer works from
         self.assertIn("280 → 420", monthly["Input"])

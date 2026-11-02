@@ -156,7 +156,8 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             logo = fetch_logo(cfg.logo_url) if cfg.logo_url else None
             work = extra.get("work")
             payload = (client_deck.build_monthly(report, cfg, template_dir, logo, log, work=work,
-                                                 work_intro=extra.get("texts", {}).get(ai_notes.OUR_WORK_INTRO, ""))
+                                                 work_intro=extra.get("texts", {}).get(ai_notes.OUR_WORK_INTRO, ""),
+                                                 slide_choice=extra.get("texts", {}).get(ai_notes.CLIENT_SLIDES, ""))
                        if kind == "monthly"
                        else decks.build_deck(report, cfg, template_dir, ai, logo, work=work,
                                              handoff=extras is not None))

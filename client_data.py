@@ -715,8 +715,9 @@ class ClientReport:
         return {"cards": cards[:4]} if cards else None
 
     # ---- the whole deck ------------------------------------------------------------------
-    def slides(self) -> list:
-        """[(id, payload)] in deck order; slides without data are left out."""
+    def slides(self, only: list = None) -> list:
+        """[(id, payload)] in deck order; slides without data are left out. With `only` (a list of ids) the deck
+        has just those slides, in that order; the slide numbers the texts point to follow the deck that is built."""
         self.decisions.clear()
         pages = self.work_pages()
         base = [("headline", self.headline()), ("scorecard", self.scorecard()),
@@ -726,13 +727,15 @@ class ClientReport:
                 ("wins", self.quick_wins()), ("pages", self.pages_to_update()),
                 ("ideas", self.ideas()), ("next", self.next_month_slide()),
                 ("watch", self.watching(None)), ("focus", self.focus())]
-        present = [sid for sid, payload in base if payload]
+        payloads = {sid: payload for sid, payload in base if payload}
+        present = [sid for sid, _ in base if sid in payloads]
+        if only is not None:
+            present = [sid for sid in only if sid in payloads]
         # slide numbers (the title is slide 1) for the texts that point at other slides
         nums = {sid: i + 2 for i, sid in enumerate(present)}
         out = []
-        for sid, payload in base:
-            if not payload:
-                continue
+        for sid in present:
+            payload = payloads[sid]
             if sid == "next":
                 payload = self.next_month_slide(nums)
             elif sid == "watch":

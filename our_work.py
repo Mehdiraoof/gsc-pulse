@@ -13,6 +13,8 @@ import re
 from datetime import date, timedelta
 
 import ai_notes
+import client_data as cd
+import client_slides
 import client_i18n
 import content
 import content_run
@@ -157,6 +159,10 @@ def prepare_notes(drive, sheets, site, today: date, queries=None, log=print) -> 
                 wanted.append(ai_notes.Slot("monthly", rep.period, ai_notes.OUR_WORK_INTRO,
                                             ai_notes.our_work_intro_input(label, dd.period_title(rep, lang), lang,
                                                                           facts_text(items, T, lang)), lang))
+            # the slides the client deck could have: the owner's plan chooses which of them go in
+            slides = cd.ClientReport(rep, lang, label, items, "").slides()
+            wanted.append(ai_notes.Slot("monthly", rep.period, ai_notes.CLIENT_SLIDES,
+                                        client_slides.input_text(label, dd.period_title(rep, lang), lang, slides), lang))
     result = ai_notes.prepare(sheets, site.reports_sheet_id, wanted, today, log) if wanted else {"added": 0, "refreshed": 0}
     wi.ensure_our_work_tab(sheets, site.reports_sheet_id)
     log(f"  AI notes: {result['added']} rows added, {result['refreshed']} refreshed")

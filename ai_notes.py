@@ -30,8 +30,8 @@ HEADER = ["Report", "Period", "Slot", "Input", "Text", "Status", "Language", "Cr
 LAST_COL = "H"
 COL = {name: i for i, name in enumerate(HEADER)}
 WAITING, READY = "waiting", "ready"
-WEEKLY_SUMMARY, OUR_WORK_INTRO = "weekly_summary", "our_work_intro"
-SLOTS = {"weekly": (WEEKLY_SUMMARY,), "monthly": (OUR_WORK_INTRO,)}
+WEEKLY_SUMMARY, OUR_WORK_INTRO, CLIENT_SLIDES = "weekly_summary", "our_work_intro", "client_slides"
+SLOTS = {"weekly": (WEEKLY_SUMMARY,), "monthly": (OUR_WORK_INTRO, CLIENT_SLIDES)}
 LANGUAGE_NAMES = {"en": "English", "fa": "Persian (Farsi)"}
 
 

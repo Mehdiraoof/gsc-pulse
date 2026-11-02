@@ -18,6 +18,7 @@ from pptx.util import Emu, Pt
 
 import charts
 import client_data as cd
+import client_slides
 import deck_data as dd
 import decks
 import i18n
@@ -431,8 +432,10 @@ RENDERERS = {"headline": slide_headline, "scorecard": slide_scorecard, "climbs":
 # --------------------------------------------------------------------------- #
 
 def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None, log=None, work: list = None,
-                  work_intro: str = "") -> bytes:
-    """The client-ready monthly deck as .pptx bytes. cfg is the site's DeckConfig."""
+                  work_intro: str = "", slide_choice: str = "") -> bytes:
+    """The client-ready monthly deck as .pptx bytes. cfg is the site's DeckConfig. `slide_choice` is the text of
+    the AI Notes slot client_slides: the deck then has only the slides it names (the cover and the work slides
+    always stay); empty or unusable, the full deck."""
     lang = cfg.language
     path = os.path.join(template_dir, "gsc_pulse_template_fa.pptx" if lang == "fa"
                         else "gsc_pulse_template.pptx")
@@ -444,6 +447,10 @@ def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None,
                     logo=logo, mark=decks.template_mark(layouts))
     slide_title(ctx, c)
     slides = c.slides()
+    if slide_choice:
+        order = client_slides.choose(slide_choice, [sid for sid, _ in slides], log or (lambda s: None))
+        if order:
+            slides = c.slides(only=order)
     for line in c.decisions:                    # which rule decided what: numbers only, safe in a public log
         (log or (lambda s: None))(f"decks: monthly {line}")
     for sid, payload in slides:
