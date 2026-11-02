@@ -26,12 +26,13 @@ FA = f"{ROOT}/article/%D9%85%DB%8C%DA%A9%D8%B1%D9%88%D8%B3%DA%A9%D9%88%D9%BE-%D8
 FAD = content.display_url(FA)
 TIE = f"{ROOT}/article/best-binoculars-for-bird-watching-beginners-guide"
 FEW = f"{ROOT}/article/stone-bridges"
+LOW = f"{ROOT}/article/stone-lanterns"
 
 FA_PLAIN = "میکروسکوپ"                  # میکروسکوپ
 FA_ARABIC = "ميكروسكوپ‌ زيستي"   # same, ك ي and a half space
 
 PAGES = {BIO: (60, 9000, 6.0), WEAK: (5, 800, 9.0), ID: (3, 500, 8.0), FA: (20, 1200, 5.0), TIE: (9, 1000, 6.0),
-         FEW: (1, 60, 12.0), f"{ROOT}/about": (50, 600, 2.0)}
+         FEW: (1, 60, 12.0), LOW: (0, 6, 12.0), f"{ROOT}/about": (50, 600, 2.0)}
 PAIRS = [("microscope", BIO, 40, 2000, 6.0), ("biological microscope", BIO, 5, 300, 7.0),
          ("biologcal microscope", BIO, 1, 1500, 8.0),                      # a typo with many impressions
          ("biological microscope amazon.com", BIO, 1, 4000, 8.0),          # names another site
@@ -40,7 +41,7 @@ PAIRS = [("microscope", BIO, 40, 2000, 6.0), ("biological microscope", BIO, 5, 3
          (FA_PLAIN, FA, 14, 1000, 5.0), (FA_ARABIC, FA, 6, 200, 6.0),
          ("best binoculars for bird watching beginners guide", TIE, 2, 50, 6.0),
          ("binoculars for bird watching beginners guide", TIE, 7, 900, 6.0),
-         ("stone bridge", FEW, 0, 5, 12.0), ("old unrelated words", FEW, 1, 55, 12.0),
+         ("stone bridge", FEW, 0, 5, 12.0), ("old unrelated words", FEW, 1, 55, 12.0), ("stone lantern", LOW, 0, 6, 12.0),
          ("about us", f"{ROOT}/about", 40, 500, 2.0)]
 
 
@@ -301,6 +302,12 @@ class OneTimeFixTests(FakeSiteBase):
         self.edit("Pages", BIO, "Notes/Checklist", "")
         self.edit("Pages", BIO, content.KEY, "a keyword Mehdi chose")                   # not the automatic pick
         self.assertNotIn(BIO, {c.url for c in self.plan()})
+
+    def test_a_keyword_that_fits_the_page_is_not_flagged_just_because_the_page_has_few_searches(self):
+        self.edit("Pages", LOW, content.KEY, "stone lantern")                      # the top search, 6 impressions: too few to win
+        self.assertNotIn(LOW, {c.url for c in self.plan()})
+        self.edit("Pages", LOW, content.KEY, "stone")                              # still fits? one word of two: it does not
+        self.assertNotIn(LOW, {c.url for c in self.plan()})                        # (not the page's top search any more)
 
     def test_a_row_that_changed_since_the_plan_is_left_alone(self):
         changes = self.plan()

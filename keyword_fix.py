@@ -83,7 +83,9 @@ def plan(sheets, file_id: str, site, data, brand: list, probe=site_check.fetch_p
             old_score = content.match_score(old, content.page_wordsets(url, title, brand))
             if pick.strong and content.norm(pick.keyword) != content.norm(old):
                 found.append(Change(t.name, number, CHANGE, url, old, pick.keyword, pick.score, old_score))
-            elif not pick.strong:
+            elif not pick.strong and old_score < cfg.keyword_strong_match:
+                # no search fits, and the keyword itself does not fit the page's title and slug either (a keyword
+                # that fits is left alone: a page with few searches has nothing better to offer)
                 found.append(Change(t.name, number, REVIEW, url, old, "", pick.score, old_score))
         log(f"  keyword fix: {t.name}: {len(candidates)} rows may change, "
             f"{sum(1 for c in found if c.tab == t.name and c.action == CHANGE)} to change, "
