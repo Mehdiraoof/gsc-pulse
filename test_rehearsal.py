@@ -177,13 +177,13 @@ class NoScheduledAiTests(unittest.TestCase):
                             and node.func.value.id in ("content_create", "rehearsal", "ai_client")
                             and node.func.attr in ("run", "prepare", "make_client")):
                         callers.setdefault(fn.name, set()).add(f"{node.func.value.id}.{node.func.attr}")
-        self.assertEqual(set(callers), {"create_content_test", "rehearsal_command", "probe_ai"}, callers)
+        self.assertEqual(set(callers), {"create_content_test", "one_run", "rehearsal_command", "probe_ai"}, callers)   # one_run: inside create_content_test
 
     def test_the_test_commands_send_nothing_except_the_one_asked_for_summary(self):
         import ast
         tree = ast.parse(self.read("gsc_pulse.py"))
         for fn in ast.walk(tree):
-            if isinstance(fn, ast.FunctionDef) and fn.name in ("create_content_test", "rehearsal_command", "probe_ai"):
+            if isinstance(fn, ast.FunctionDef) and fn.name in ("create_content_test", "one_run", "rehearsal_command", "probe_ai"):
                 for node in ast.walk(fn):
                     if isinstance(node, ast.Call):
                         name = getattr(node.func, "id", getattr(node.func, "attr", ""))
