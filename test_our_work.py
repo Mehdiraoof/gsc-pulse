@@ -472,5 +472,82 @@ class SlideTests(unittest.TestCase):
         self.assertNotIn("Changes in progress", "\n".join(deck_texts(Presentation(io.BytesIO(without)))))
 
 
+
+
+# --------------------------------------------------------------------------- #
+# The whole way through the sheets: sitemap, content dashboard, stored history, the manual tab
+# --------------------------------------------------------------------------- #
+
+import our_work
+import site_check
+import test_content_run as tcr
+
+SITEMAP = """<?xml version="1.0"?><urlset>
+<url><loc>{r}/article/new</loc><lastmod>2026-10-05</lastmod></url>
+<url><loc>{r}/article/updated</loc><lastmod>2026-10-12</lastmod></url>
+<url><loc>{r}/article/steady</loc><lastmod>2026-03-01</lastmod></url>
+</urlset>""".format(r=ROOT).encode()
+
+
+def sitemap_get(url):
+    if url.endswith("/sitemap.xml"):
+        return 200, SITEMAP
+    return 404, b""
+
+
+class FlowTests(tcr.Base):
+
+    def setUp(self):
+        super().setUp()
+        self.run_it()                                                    # the content dashboard exists
+        self.fs.add_book("HIST", {"H Pages": (3000, 6)})
+        tab = self.fs.books["HIST"]["H Pages"]
+        self.fs.write_cells(tab, 1, 1, [["Date", "Page", "Clicks", "Impressions", "CTR (%)", "Avg. Position"]]
+                            + [[d.isoformat(), p, c, n, 1.0, pos] for d, p, c, n, pos in history_rows()])
+        self.site.history_sheet_id = "HIST"
+        self.fs.add_book("REP2")
+        self.site.reports_sheet_id = "REP"
+        wi.ensure_our_work_tab(self.fs, "REP")
+        self.fs.write_cells(self.fs.books["REP"][wi.OUR_WORK_TAB], 2, 1, [
+            ["2026-10-10", u("/article/moved"), "Old address redirected to the new one", "Yes"]])
+
+    def test_the_first_scan_uses_the_history_and_the_items_are_measured(self):
+        found = our_work.scan_site(self.drive, self.fs, self.site, TODAY, sitemap_get, lambda s: None)
+        self.assertEqual(found, 2)                                       # the new page and the updated page
+        state, _, _ = our_work.load_content(self.fs, self.file_id, self.site)
+        key_old, key_new = content.url_key(u("/article/old-url")), content.url_key(u("/article/moved"))
+        state.set("gone", key_old, "redirect|" + key_new, TODAY)          # the redirect map the content refresh keeps
+        state.save(self.fs, self.file_id)
+        items = our_work.items_for(self.drive, self.fs, self.site, TODAY, None, lambda s: None)
+        got = {(i.kind, i.day, content.path_of(i.scope)): (i.impact.status, i.impact.before.clicks, i.impact.after.clicks)
+               for i in items}
+        self.assertEqual(got, {
+            (wi.NEW, D(10, 5), "/article/new"): (wi.GOOD, 0, 168),
+            (wi.UPDATED, D(10, 12), "/article/updated"): (wi.GOOD, 280, 420),
+            (wi.MANUAL, D(10, 10), "/article/moved"): (wi.FLAT, 700, 700),         # the old address was joined through the map
+        })
+        manual = [i for i in items if i.kind == wi.MANUAL][0]
+        self.assertEqual(manual.what, "Old address redirected to the new one")
+        # a second scan changes nothing, and the sync run's rows for the writer can be made from these items
+        self.assertEqual(our_work.scan_site(self.drive, self.fs, self.site, TODAY, sitemap_get, lambda s: None), 0)
+
+    def test_an_update_found_by_a_later_scan_is_dated_by_its_lastmod(self):
+        our_work.scan_site(self.drive, self.fs, self.site, D(10, 4), lambda url: (200, SITEMAP.replace(b"2026-10-12", b"2026-05-01")
+                                                                                     .replace(b"2026-10-05", b"2026-05-02")) if url.endswith("/sitemap.xml") else (404, b""),
+                           lambda s: None)
+        found = our_work.scan_site(self.drive, self.fs, self.site, D(10, 13), sitemap_get, lambda s: None)
+        items = our_work.wi.auto_items(our_work.load_content(self.fs, self.file_id, self.site)[0], D(10, 13), 120)
+        self.assertEqual(found, 2)
+        self.assertEqual(sorted((i.kind, i.day) for i in items), [(wi.NEW, D(10, 5)), (wi.UPDATED, D(10, 12))])
+
+    def test_a_site_without_a_content_dashboard_or_history_still_gets_its_manual_items(self):
+        self.site.history_sheet_id = ""
+        items = our_work.items_for(self.drive, self.fs, self.site, TODAY, None, lambda s: None)
+        self.assertEqual([i.kind for i in items], [wi.MANUAL])
+        self.assertIsNone(items[0].impact)                               # no history: nothing to measure, nothing is shown
+        self.assertEqual(wi.for_client(items, TODAY), [])
+        self.assertEqual(our_work.items_for(None, self.fs, self.site, TODAY, None, lambda s: None)[0].kind, wi.MANUAL)
+
+
 if __name__ == "__main__":
     unittest.main()
