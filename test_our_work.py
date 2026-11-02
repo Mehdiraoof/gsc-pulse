@@ -444,7 +444,7 @@ class SlideTests(unittest.TestCase):
         self.assertIn("صفحه جدید:", text)                                  # New page:
         self.assertIn("به‌روزرسانی صفحه:", text)        # Updated page:
         self.assertIn("نتیجه اولیه", text)                         # early results
-        self.assertIn("280 ← 420", text)                        # the arrow points from before to after, right to left
+        self.assertIn("280 ← 420", text.replace("200e", ""))                        # the arrow points from before to after, right to left
         table_xml = [sh._element.xml for sh in slide.shapes if getattr(sh, "has_table", False) and sh.has_table][0]
         self.assertIn('rtl="1"', table_xml)
         self.assertNotIn("Our work and its results", text)
