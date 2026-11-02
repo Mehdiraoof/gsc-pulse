@@ -364,7 +364,7 @@ TIE_BAND = 0.1                     # among strong matches this close to the best
 REVIEW_ALERT = "Keyword needs review"
 KEYWORD_CHECKED = "keyword checked"       # in Notes/Checklist: someone looked at the keyword; it is never flagged
 PLAN_NOTE = "Keyword set [{day}]: changed from «{old}», better match with page title and slug"
-_TITLE_SPLIT = re.compile(r"\s+[|\-–—·•:»«]+\s+|\s*\|\s*")
+_TITLE_SPLIT = re.compile(r"\s*[|–—·•»«]+\s*|\s+-+\s+|:\s+")
 _ID_SEGMENT = re.compile(r"^(?:[a-z]{0,3}[-_]?\d+|[0-9a-f]{12,}|[0-9a-f]{8}-[0-9a-f-]{20,})$")
 
 
@@ -397,12 +397,12 @@ def is_id_segment(segment: str) -> bool:
 
 
 def slug_text(url: str) -> str:
-    """The last meaningful segment of a page address, as words ("" for the homepage or a slug made of numbers)."""
+    """The slug of a page address (its last segment) as words. "" for the homepage and for a slug that is only
+    numbers or an ID: such a slug says nothing, and the folders above it say too little to match a search with."""
     parts = [p for p in urlsplit(decode_url(url)).path.split("/") if p]
-    for segment in reversed(parts):
-        if not is_id_segment(segment):
-            return re.sub(r"\.(?:html?|php|aspx?)$", "", segment).replace("-", " ").replace("_", " ")
-    return ""
+    if not parts or is_id_segment(parts[-1]):
+        return ""
+    return re.sub(r"\.(?:html?|php|aspx?)$", "", parts[-1]).replace("-", " ").replace("_", " ")
 
 
 def title_text(title: str, brand_terms: list) -> str:
