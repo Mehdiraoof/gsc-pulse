@@ -75,7 +75,7 @@ class ContentResult:
     checked: dict = field(default_factory=dict)     # status check: ok, 404, 410, redirect, unknown -> pages
     warned: int = 0                                 # pages that got the first warning
     removed: dict = field(default_factory=dict)     # gone / redirect / merged -> rows moved to Removed Pages
-    keywords: dict = field(default_factory=lambda: {"searches": 0, "title": 0, "empty": 0})
+    keywords: dict = field(default_factory=lambda: {"searches": 0, "title": 0, "empty": 0, "review": 0})
     found_gone: int = 0                             # pages of the history or sitemap that already returned 404/410: no row
     tab_notes: list = field(default_factory=list)   # page types left without a tab (over the limit): said in the owner's note
 
@@ -330,7 +330,7 @@ def page_values(ctx: Context, row: dict, stats, had_before: bool, hint: str = ""
         "AIO Impressions": ctx.aio.get(key, ""),
     }
     kw_cell = str(row.get(content.KEY, "")).strip()
-    kw = kw_cell or (content.primary_keyword(stats, ctx.brand) if stats else "") or hint
+    kw = kw_cell or hint          # the keyword cell wins; an empty cell gets the search that fits the page (fill_keywords)
     seasonal = (str(row.get("Keyword Type", "")) == "Seasonal"
                 or content.keyword_type_for(ctx.seasonal_regex, url, kw) == "Seasonal")
     peak = 0
@@ -497,10 +497,18 @@ def hand_over(rec: dict, target: str, cfg, work: dict, by_key: dict, ctx: Contex
     rec["moved_to"] = content.display_url(target)
 
 
+def _title_of(rec: dict) -> str:
+    """The page title read by the status check of this run (empty when the page was not read)."""
+    probe = rec.get("probe")
+    return probe.title if probe is not None and probe.kind == site_check.OK else ""
+
+
 def fill_keywords(ctx: Context, work: dict, result: ContentResult):
-    """A page row with an empty Primary Keyword: the top non-brand search of the page (the 90-day
-    tables, else a page-filter question to Search Console), else the page title read by the status
-    check (with a note), else nothing (with a note). Rows that have a keyword are never touched."""
+    """A page row with an empty Primary Keyword: the search that fits the page's title and slug best (the page's
+    own 90-day searches, else a page-filter question to Search Console). When no search fits well the cell stays
+    empty and the row is flagged for review instead of guessing. A page with no searches at all gets its title (with
+    a note), else nothing (with a note). Rows that have a keyword are never touched."""
+    cfg = ctx.site.content
     for recs in work.values():
         for rec in recs:
             row = rec["row"]
@@ -508,19 +516,24 @@ def fill_keywords(ctx: Context, work: dict, result: ContentResult):
             if (not url or rec["blank"] or rec.get("remove") or rec.get("settled")
                     or str(row.get(content.KEY, "")).strip()):
                 continue
+            title = _title_of(rec)
             stats = rec.get("stats") or ctx.data.stats.get(content.url_key(url))
-            keyword = content.primary_keyword(stats, ctx.brand) if stats else ""
-            if not keyword:
+            if not (stats and content.nonbrand_queries(stats, ctx.brand)):
                 found = ctx.data.page_searches(url)
                 if found is None:                  # no more questions this run: try again next time
                     continue
-                keyword = next((q for q, _, _, _ in found if not content.skip_query(q, ctx.brand)), "")
-            if keyword:
-                result.keywords["searches"] += 1
-                rec["keyword_hint"] = keyword
+                found = [q for q in found if not content.skip_query(q[0], ctx.brand)]
+                stats = content.PageStats(url, queries=sorted(found, key=lambda q: (-q[2], q[0]))) if found else None
+            if stats and stats.queries:
+                pick = content.pick_keyword(stats, ctx.brand, url, title, cfg.keyword_strong_match,
+                                            cfg.keyword_min_impressions)
+                if pick.strong:
+                    result.keywords["searches"] += 1
+                    rec["keyword_hint"] = pick.keyword
+                else:
+                    result.keywords["review"] += 1
+                    rec["review"] = True
                 continue
-            probe = rec.get("probe")
-            title = probe.title if probe is not None and probe.kind == site_check.OK else ""
             if title:
                 result.keywords["title"] += 1
                 rec["keyword_hint"] = title
@@ -528,6 +541,26 @@ def fill_keywords(ctx: Context, work: dict, result: ContentResult):
             else:
                 result.keywords["empty"] += 1
                 add_note(rec, NOTE_NO_KEYWORD)
+
+
+def needs_review(ctx: Context, rec: dict, row: dict, stats, title: str) -> bool:
+    """Is the row flagged "Keyword needs review"? Never when its notes say "Keyword checked". An empty keyword is
+    flagged when no search of the page fits it (see fill_keywords). A keyword that is set stays as it is; the flag
+    says only that no search of the page is a strong match and the keyword itself does not fit the page's title
+    and slug either."""
+    if content.checked(row.get(content_import.NOTES, "")):
+        return False
+    kw = str(row.get(content.KEY, "")).strip()
+    if not kw:
+        return bool(rec.get("review"))
+    if not (stats and content.nonbrand_queries(stats, ctx.brand)):
+        return False
+    cfg = ctx.site.content
+    url = str(row.get(content.URL, "")).strip()
+    if content.pick_keyword(stats, ctx.brand, url, title, cfg.keyword_strong_match,
+                            cfg.keyword_min_impressions).strong:
+        return False
+    return not content.keyword_fits(kw, url, title, ctx.brand, cfg.keyword_strong_match)
 
 
 # --------------------------------------------------------------------------- #
@@ -846,6 +879,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 peak_month=vals["_peak"], today=ctx.today, url=str(row.get(content.URL, "")),
                 duplicate=content.dup_key(str(row.get(content.URL, ""))) in dups,
                 decay=content.decaying(vals["_series"]), position=vals["_position"],
+                review=needs_review(ctx, rec, row, stats, _title_of(rec)),
                 impressions=vals["_impressions"], no_data=no_data,
                 gone=content.is_settled(row),
                 check=rec.get("check", ""), possible=state.get("possible", content.row_key(row)))

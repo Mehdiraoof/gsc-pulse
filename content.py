@@ -354,6 +354,132 @@ def primary_keyword(stats: PageStats, brand_terms: list) -> str:
     return top[0][0] if top else ""
 
 
+# --------------------------------------------------------------------------- #
+# The Primary Keyword: the search that fits the page best (code only, no AI)
+# --------------------------------------------------------------------------- #
+
+STRONG_MATCH = 0.8                 # a search with at least this score is a strong match (config: keyword_strong_match)
+MIN_KEYWORD_IMPRESSIONS = 10       # a search with fewer impressions in 90 days cannot win (keyword_min_impressions)
+TIE_BAND = 0.1                     # among strong matches this close to the best, the most impressions wins
+REVIEW_ALERT = "Keyword needs review"
+KEYWORD_CHECKED = "keyword checked"       # in Notes/Checklist: someone looked at the keyword; it is never flagged
+PLAN_NOTE = "Keyword set [{day}]: changed from «{old}», better match with page title and slug"
+_TITLE_SPLIT = re.compile(r"\s+[|\-–—·•:»«]+\s+|\s*\|\s*")
+_ID_SEGMENT = re.compile(r"^(?:[a-z]{0,3}[-_]?\d+|[0-9a-f]{12,}|[0-9a-f]{8}-[0-9a-f-]{20,})$")
+
+
+def stem(word: str) -> str:
+    """Plain plurals only: microscopes = microscope, batteries = battery, glasses = glass. A Persian word loses
+    a joined plural ending (ها). Both sides of a comparison go through here, so the result only has to be the same."""
+    if re.fullmatch(r"[a-z0-9]+", word):
+        if len(word) > 4 and word.endswith("ies"):
+            return word[:-3] + "y"
+        if len(word) > 4 and word.endswith(("sses", "shes", "ches", "xes", "zes")):
+            return word[:-2]
+        if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+            return word[:-1]
+        return word
+    if len(word) > 4 and word.endswith("ها"):
+        return word[:-2]
+    return word
+
+
+def keyword_words(text: str) -> set:
+    """The topic words of a search or a page, spelling normalized (URL decoded, lower case, ك→ک, ي→ی, half space
+    as a space, Persian digits as Latin, extra spaces gone), without filler words and with plural endings off."""
+    return {stem(w) for w in topic_words(unquote(str(text))) if w not in STOPWORDS}
+
+
+def is_id_segment(segment: str) -> bool:
+    """A URL segment that names nothing: only digits and signs, or an ID (DT-3321, a long hex code, a UUID)."""
+    s = re.sub(r"\.(?:html?|php|aspx?)$", "", unquote(segment).strip().lower())
+    return not re.search(r"[^\W\d_]", s) or bool(_ID_SEGMENT.fullmatch(s))
+
+
+def slug_text(url: str) -> str:
+    """The last meaningful segment of a page address, as words ("" for the homepage or a slug made of numbers)."""
+    parts = [p for p in urlsplit(decode_url(url)).path.split("/") if p]
+    for segment in reversed(parts):
+        if not is_id_segment(segment):
+            return re.sub(r"\.(?:html?|php|aspx?)$", "", segment).replace("-", " ").replace("_", " ")
+    return ""
+
+
+def title_text(title: str, brand_terms: list) -> str:
+    """The page title without the name of the site: parts separated by | - – — · : that contain a brand term are
+    dropped (nothing is dropped from a title that is only the brand: it is then empty)."""
+    parts = [p.strip() for p in _TITLE_SPLIT.split(str(title or "")) if p.strip()]
+    kept = [p for p in parts if not is_brand(p, brand_terms)]
+    return " ".join(kept)
+
+
+def page_wordsets(url: str, title: str, brand_terms: list) -> list:
+    """The word sets a search is compared with: the slug and the title (each only when it has words)."""
+    sets = [keyword_words(slug_text(url)), keyword_words(title_text(title, brand_terms))]
+    return [s for s in sets if s]
+
+
+def match_score(query: str, wordsets: list) -> float:
+    """How well a search fits a page: the better of the scores against the slug and against the title. A score is
+    the balance (F1) of two shares: how many of the search's words are in the page words, and how many of the page
+    words are in the search. A number in the page words that the search does not have is not counted against it."""
+    q = keyword_words(query)
+    if not q:
+        return 0.0
+    best = 0.0
+    for page in wordsets:
+        p = {w for w in page if not (w.isdigit() and w not in q)}
+        if not p:
+            continue
+        common = len(q & p)
+        if not common:
+            continue
+        qcov, pcov = common / len(q), common / len(p)
+        best = max(best, 2 * qcov * pcov / (qcov + pcov))
+    return round(best, 4)
+
+
+@dataclass
+class KeywordPick:
+    keyword: str = ""              # the winner, "" when no search is a strong match
+    score: float = 0.0             # its score, or the best score of all when there is no winner
+    strong: bool = False
+    top: str = ""                  # the page's highest-impression non-brand search (the old automatic pick)
+    best: str = ""                 # the best-fitting search, strong or not
+
+
+def pick_keyword(stats, brand_terms: list, url: str, title: str = "", strong: float = STRONG_MATCH,
+                 min_impressions: float = MIN_KEYWORD_IMPRESSIONS) -> KeywordPick:
+    """The search that fits the page best. Impressions only break ties between good matches: among the strong
+    matches within TIE_BAND of the best score the most impressions wins. A search under `min_impressions` cannot
+    win. No strong match: no keyword (the row is flagged for review instead of guessing)."""
+    pick = KeywordPick()
+    queries = nonbrand_queries(stats, brand_terms) if stats else []
+    if queries:
+        pick.top = queries[0][0]
+    sets = page_wordsets(url, title, brand_terms)
+    scored = [(match_score(q[0], sets), q[2], q[0]) for q in queries if q[2] >= min_impressions]
+    if not scored:
+        return pick
+    top = max(scored, key=lambda s: (s[0], s[1]))
+    pick.score, pick.best = top[0], top[2]
+    if top[0] < strong:
+        return pick
+    pool = [s for s in scored if s[0] >= strong and s[0] >= top[0] - TIE_BAND]
+    win = max(pool, key=lambda s: (s[1], s[0], -len(s[2])))
+    pick.keyword, pick.score, pick.strong = win[2], win[0], True
+    return pick
+
+
+def keyword_fits(keyword: str, url: str, title: str, brand_terms: list, strong: float = STRONG_MATCH) -> bool:
+    """Does a keyword (as text, whether or not the page ranks for it) fit the page's slug or title?"""
+    return match_score(keyword, page_wordsets(url, title, brand_terms)) >= strong
+
+
+def checked(notes) -> bool:
+    return KEYWORD_CHECKED in norm(notes or "")
+
+
 def secondary_keywords(stats: PageStats, brand_terms: list, primary: str) -> list:
     out = []
     for q, _, _, _ in nonbrand_queries(stats, brand_terms):
@@ -527,12 +653,14 @@ def decaying(clicks: list) -> bool:
 
 def alerts_for(*, advice_code: str, competing: list, seasonal: bool, peak_month: int, today: date,
                url: str, duplicate: bool, decay: bool, position: float, impressions: float,
-               gone: bool, no_data: bool = False, check: str = "", possible: str = "") -> str:
+               gone: bool, no_data: bool = False, check: str = "", possible: str = "", review: bool = False) -> str:
     """The Alerts cell. `gone` is the owner's own Status; `no_data`: no impressions in the last
     complete month (the row is kept as it is, only this alert says so); `check`: what the status
     check of the page said (404 / redirect, first time); `possible`: addresses an old sheet's row
     might belong to."""
     out = []
+    if review:
+        out.append(REVIEW_ALERT)
     if competing:
         out.append("Cannibalization")
     if seasonal:

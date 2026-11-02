@@ -63,6 +63,9 @@ import reports
 import site_check
 import views
 import history
+import keyword_fix
+import opportunities
+import tabs
 import sites
 
 
@@ -880,6 +883,48 @@ def content_copy_command(site_name: str, runs: list):
     print("  ✅  The refresh on the copy kept every row and every column of yours")
 
 
+def keyword_fix_command(site_name: str, apply: bool, runs: list):
+    """The one-time fix of Primary Keywords (keyword_fix.py) for ONE site. Without `apply` it is a dry run: the
+    plan goes into a new sheet "Keyword plan" in the owner's Drive (folder PulseO Test / Keyword plans) and nothing in
+    the dashboard is written. With `apply` the plan is written to the dashboard. The log holds counts only and
+    nothing is emailed."""
+    run = next((r for r in runs if r.name.lower() == site_name and r.status != "failed" and r.drive is not None), None)
+    if run is None or not run.site.content.enabled:
+        raise GscPulseError("keyword fix: that site is not available for it")
+    site = run.site
+    today = date.today()
+
+    def fetch(dimensions, first, last, filter_groups=None):
+        rows = []
+        for page in iter_gsc_pages(run.gsc, site.site_url, first.isoformat(), last.isoformat(),
+                                   dimensions, history.HISTORY_ROW_LIMIT,
+                                   num_retries=history.RETRIES, filter_groups=filter_groups):
+            rows.extend(page)
+        return rows
+
+    final = history.last_final_date(
+        functools.partial(iter_gsc_pages, run.gsc, site.site_url, num_retries=history.RETRIES), today)
+    if final is None:
+        raise GscPulseError("keyword fix: no final Search Console data available yet")
+    brand = opportunities.brand_terms_for(site)
+    file_id = rehearsal.source_dashboard_id(run.drive, run.sheets, site)
+    data = content_run.Data(fetch, final, brand)
+    changes = keyword_fix.plan(run.sheets, file_id, site, data, brand)
+    folder = provision.ensure_folder(run.drive, "Keyword plans", provision.ensure_folder(run.drive, "PulseO Test"))
+    label = site.deck.site_label or site.name
+    plan_id = provision.create(run.drive, f"Keyword plan · {label} · {today.isoformat()}"
+                               + ("" if not apply else " · applied"), provision.SHEET, folder)
+    rows = keyword_fix.plan_rows(changes)
+    tabs.patch_cells(run.sheets, plan_id, [(f"'Sheet1'!A1:H{len(rows)}", rows)])
+    print(f"  keyword fix: {sum(1 for c in changes if c.action == keyword_fix.CHANGE)} keywords to change, "
+          f"{sum(1 for c in changes if c.action == keyword_fix.REVIEW)} rows to flag; the plan is in your Drive: "
+          f"PulseO Test / Keyword plans")
+    if not apply:
+        print("  keyword fix: DRY RUN, nothing was written to the dashboard")
+        return
+    keyword_fix.apply(run.sheets, file_id, changes, today)
+
+
 def create_content_test(mode: str, limit: int = 0):
     """Content creation on the fake test site and nowhere else: makes the fake world, runs the briefs and/or
     the drafts on its three sites with the real AI, then tests the "done" checklist (content_accept.py).
@@ -1098,6 +1143,13 @@ def main():
     copy_site = os.environ.get("CONTENT_COPY_SITE", "").strip().lower()
     if copy_site:
         content_copy_command(copy_site, enabled)
+        return
+
+    # ---- The one-time fix of Primary Keywords of one site: dry run unless asked to apply ----------------------
+    fix_site = os.environ.get("FIX_KEYWORDS_SITE", "").strip().lower()
+    if fix_site:
+        keyword_fix_command(fix_site, os.environ.get("FIX_KEYWORDS_APPLY", "").strip().lower() in ("1", "true", "yes"),
+                            enabled)
         return
 
     # ---- The second run: build and send the decks of every site, with the texts that are ready -----

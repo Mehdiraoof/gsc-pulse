@@ -216,7 +216,7 @@ def _parse_deck(value, where: str) -> DeckConfig:
 # --------------------------------------------------------------------------- #
 
 CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "page_type_tabs", "skip_types", "tab_names",
-                  "seasonal_regex", "min_gap_impressions_90d",
+                  "seasonal_regex", "min_gap_impressions_90d", "keyword_strong_match", "keyword_min_impressions",
                   "import_from", "gap_exclude_terms", "repair_imports",
                   "sop_doc_id", "briefs_folder_id", "drafts_folder_id", "language", "extra_rules",
                   "max_briefs_per_run", "max_drafts_per_run", "ai", "ai_drafts")
@@ -305,6 +305,8 @@ class ContentConfig:
     tabs: list = field(default_factory=list)             # [ContentTab]
     seasonal_regex: str = ""
     min_gap_impressions_90d: int = 100
+    keyword_strong_match: float = 0.8                    # a search that fits the page this well can be its Primary Keyword
+    keyword_min_impressions: int = 10                    # a search with fewer impressions in 90 days cannot win
     imports: list = field(default_factory=list)          # [ImportSpec]
     gap_exclude_terms: list = field(default_factory=list)  # whole words that never become ideas
     repair_imports: bool = False                         # once: merge clearly matched imported rows
@@ -373,6 +375,14 @@ def _parse_content(value, where: str) -> "ContentConfig":
         raise SitesConfigError(f"{at}: 'sheet_id' must be text")
     cfg.sheet_id = (sheet_id or "").strip()
     cfg.seasonal_regex = _regex(value.get("seasonal_regex"), at, "seasonal_regex", False)
+    strong = value.get("keyword_strong_match", 0.8)
+    if isinstance(strong, bool) or not isinstance(strong, (int, float)) or not 0.3 <= strong <= 1:
+        raise SitesConfigError(f"{at}: 'keyword_strong_match' must be a number from 0.3 to 1")
+    cfg.keyword_strong_match = float(strong)
+    min_kw = value.get("keyword_min_impressions", 10)
+    if isinstance(min_kw, bool) or not isinstance(min_kw, int) or not 0 <= min_kw <= 10000:
+        raise SitesConfigError(f"{at}: 'keyword_min_impressions' must be a whole number from 0 to 10000")
+    cfg.keyword_min_impressions = min_kw
     gap = value.get("min_gap_impressions_90d", 100)
     if isinstance(gap, bool) or not isinstance(gap, (int, float)) or gap < 1:
         raise SitesConfigError(f"{at}: 'min_gap_impressions_90d' must be a number, 1 or more")

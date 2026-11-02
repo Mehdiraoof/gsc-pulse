@@ -271,7 +271,10 @@ def guide_lines(label: str, tab_list: list) -> list:
                                     "(4 weeks before vs after)."],
         [],
         ["Column", "", "Meaning"],
-        ["Primary Keyword", "", "The main search query this page should rank for."],
+        ["Primary Keyword", "", "The main search query this page should rank for: the search that fits the page's "
+                                "title and slug best, not just the one with the most impressions. Once it is set, a "
+                                "refresh never changes it. Empty, with the alert \"Keyword needs review\": no search "
+                                "fits the page well enough to choose one."],
         ["Published URL", "", "The live page. Empty = a new topic that has no page yet."],
         ["Status", "", "Inboxed → Briefed → Ordered → Drafted → Published. Later = parked. Removed = the page is gone. "
                        "Redirected = the page now redirects (the new address is in Alerts). Both stay in their tab, "
@@ -300,7 +303,9 @@ def guide_lines(label: str, tab_list: list) -> list:
                                          "title, description, outline, slug, word count, links, owner and dates."],
         ["Impact Since Update", "", "Clicks and position for the 4 weeks before vs after the Published/Updated Date."],
         ["Suggested Action / Why", "", "The recommended next step and the data behind it."],
-        ["Alerts", "", "Things to watch: seasonal deadlines, competing pages, duplicate URLs, low visibility."],
+        ["Alerts", "", "Things to watch: seasonal deadlines, competing pages, duplicate URLs, low visibility, "
+                       "\"Keyword needs review\" (no search of the page fits its title and slug; write \"Keyword checked\" "
+                       "in Notes/Checklist once you have decided and the alert stays away)."],
         ["Recommendations", "", "Details for the decision: internal links to add (from page, to page, anchor "
                                 "text), what to merge or redirect, quick content fixes."],
         [],
