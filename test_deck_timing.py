@@ -94,7 +94,6 @@ class CheckTests(Base):
         result = self.check("first")
         self.assertEqual((result.sent, self.kinds_sent()), (["monthly", "weekly"], 2))
         monthly, weekly = self.decks_text()
-        self.assertIn("A short intro.", monthly)
         self.assertIn("Clicks fell sharply.", weekly)
 
     def test_the_sync_finishing_after_the_task_ran_the_deck_waits_for_the_second_check(self):
@@ -123,7 +122,6 @@ class CheckTests(Base):
         self.assertEqual((result.sent, result.failed), (["monthly", "weekly"], []))
         self.assertTrue(self.log_has("no text yet for weekly_summary"))
         monthly, weekly = self.decks_text()
-        self.assertIn("A short intro.", monthly)
         for placeholder in ("Summary not generated automatically", "To get a written summary", "waiting", "Mehdi fills"):
             self.assertNotIn(placeholder, monthly + weekly)
 

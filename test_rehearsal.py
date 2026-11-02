@@ -154,10 +154,10 @@ class NoScheduledAiTests(unittest.TestCase):
         with open(name, encoding="utf-8") as f:
             return f.read()
 
-    def test_the_only_schedule_is_the_weekly_sync_and_it_has_no_content_test(self):
+    def test_the_only_schedules_are_the_weekly_sync_and_the_deck_checks_and_none_has_a_content_test(self):
         import re
         workflow = self.read(".github/workflows/gsc_pulse.yml")
-        self.assertEqual(len(re.findall(r"^\s*-?\s*cron:", workflow, re.MULTILINE)), 1)
+        self.assertEqual(len(re.findall(r"^\s*-?\s*cron:", workflow, re.MULTILINE)), 4)        # sync, two deck checks, catch-up
         self.assertEqual(len(re.findall(r"^\s*schedule:", workflow, re.MULTILINE)), 1)
         for name in ("create_content_test", "email_test_summary", "rehearsal_site", "ai_model"):
             block = re.search(rf"^      {name}:.*?default: \"(.*?)\"", workflow, re.MULTILINE | re.DOTALL)

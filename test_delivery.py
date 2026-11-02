@@ -866,7 +866,9 @@ class HandoffTests(ReportsTestCase):
 
     def test_the_sync_run_writes_the_rows_the_task_needs(self):
         items = tow.all_items()
-        with mock.patch.object(our_work, "items_for", return_value=items):
+        real = wi.for_client                                              # the fake report is for September: its work is October's
+        october = lambda its, today, period="", shown=(): real(its, today, "2026-10", shown)      # noqa: E731
+        with mock.patch.object(our_work, "items_for", return_value=items), mock.patch.object(wi, "for_client", october):
             our_work.prepare_notes(None, self.sheets, self.site, date(2026, 11, 12), None, lambda s: None)
             first = len(ai_notes.read_rows(self.sheets, RID))
             our_work.prepare_notes(None, self.sheets, self.site, date(2026, 11, 12), None, lambda s: None)
