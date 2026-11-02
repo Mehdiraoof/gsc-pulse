@@ -468,10 +468,10 @@ class RulesInTheFileTests(Base):
         self.assertEqual([r[content.STATUS] for r in rows], ["Later"])
 
     def test_duplicate_urls_are_flagged(self):
-        self.add_row("Articles", **{content.KEY: "twin", content.URL: f"{ROOT}/Article/A/", content.STATUS: "Later"})
+        self.add_row("Articles", **{content.KEY: "twin", content.URL: f"{ROOT}/Article/Garden-Shoes/", content.STATUS: "Later"})
         self.run_it(force=True)
         self.assertIn("Duplicate URL", self.find("Articles", A)["Alerts"])
-        self.assertIn("Duplicate URL", self.find("Articles", f"{ROOT}/Article/A/")["Alerts"])
+        self.assertIn("Duplicate URL", self.find("Articles", f"{ROOT}/Article/Garden-Shoes/")["Alerts"])
 
     def test_impact_since_update(self):
         serial = lambda d: (d - date(1899, 12, 30)).days

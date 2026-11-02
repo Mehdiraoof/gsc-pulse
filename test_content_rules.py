@@ -266,7 +266,7 @@ class KeywordTests(base.Base):
         r = self.find("Articles", old_url)
         self.assertEqual(r[content.KEY], "old search")                       # the brand search is skipped
         self.assertEqual(r["Notes/Checklist"], "")
-        self.assertEqual(result.keywords, {"searches": 4, "title": 0, "empty": 0, "review": 1})   # the three pages of the site, too; the home page fits no search
+        self.assertEqual(result.keywords, {"searches": 4, "title": 0, "empty": 0, "review": 0})   # the three pages of the site, too
 
     def test_without_searches_the_title_is_used_and_the_note_says_so_once(self):
         probe = probes({self.NEW: Probe(200, "", "A Quiet Post")})

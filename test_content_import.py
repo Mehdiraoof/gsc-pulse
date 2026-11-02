@@ -429,7 +429,7 @@ class MatchingTests(base.Base):
             self.assertEqual(e.kind, "possible")
             topic = self.topic("Articles", "garden hose")
             self.assertEqual(topic[content.STATUS], "Researched")
-            expected = f"No fitting page, Possible match: {self.P1} | {self.P2}"
+            expected = f"No fitting page, Possible match: {self.P1} | {self.P2} | {A}"
             self.assertEqual(topic["Alerts"], expected)
             self.assertNotEqual(self.find("Articles", self.P1)[content.KEY], "garden hose")
             self.run_import(reader, force=True)                              # the pointer survives the next refresh
@@ -494,7 +494,7 @@ class MatchingTests(base.Base):
         self.assertEqual((removed[content.STATUS], removed["Alerts"], removed["Score"]),
                          ("Removed", f"{ci.REPAIR_REASON} ({self.W1})", ""))
         topic = self.topic("Articles", "garden hose")                        # a possible match is only listed
-        self.assertEqual(topic["Alerts"], f"No fitting page, Possible match: {self.P1} | {self.P2}")
+        self.assertEqual(topic["Alerts"], f"No fitting page, Possible match: {self.P1} | {self.P2} | {A}")
         self.assertNotEqual(self.find("Articles", self.P1)[content.KEY], "garden hose")
         how = [ci.KIND_TEXT[e.kind] for e in report.entries]
         self.assertIn("Repair: merged by URL words", how)
