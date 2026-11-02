@@ -90,7 +90,12 @@ def items_for(drive, sheets, site, today: date, queries=None, log=print) -> list
     if final is None:
         return items
     wi.evaluate(items, table, final, redirects, queries)
-    log(f"  work: {len(items)} items, {sum(1 for i in items if i.impact and i.impact.status == wi.GOOD)} with a clear gain")
+    counts = {}
+    for i in items:
+        key = f"{i.kind} {i.impact.status if i.impact else 'unmeasured'}"
+        counts[key] = counts.get(key, 0) + 1
+    log(f"  work: {len(items)} items ({', '.join(f'{n} {k}' for k, n in sorted(counts.items()))}), "
+        f"{len(wi.for_client(items, today))} for the client deck, {len(wi.for_owner(items, today))} for the weekly deck")
     return items
 
 
