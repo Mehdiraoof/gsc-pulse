@@ -31,6 +31,10 @@ on:
         description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested); probe: which AI models the key may use; rehearsal-prepare / rehearsal: a rehearsal on a copy of a real dashboard"
         required: false
         default: ""
+      email_test_summary:
+        description: "With create_content_test: send ONE summary email to the owner at the end (otherwise a test sends nothing; the result is in the run log)"
+        required: false
+        default: ""
       ai_model:
         description: "Optional, for the content tests: the Gemini model to use first (each model has its own daily limit)"
         required: false
@@ -121,6 +125,7 @@ jobs:
           CREATE_CONTENT_LIMIT: ${{ inputs.create_content_limit }}
           REHEARSAL_SITE: ${{ inputs.rehearsal_site }}
           AI_MODEL: ${{ inputs.ai_model }}
+          EMAIL_TEST_SUMMARY: ${{ inputs.email_test_summary }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BUILD_TEST_SITE: ${{ inputs.build_test_site }}
           RESET_TEST_SITE: ${{ inputs.reset_test_site }}

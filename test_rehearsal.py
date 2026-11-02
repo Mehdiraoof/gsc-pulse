@@ -147,5 +147,50 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual([r["Intent"] for r in out], ["x", "", ""])
 
 
+class NoScheduledAiTests(unittest.TestCase):
+    """The AI content step runs only when asked for; a test never emails by itself."""
+
+    def read(self, name):
+        with open(name, encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_only_schedule_is_the_weekly_sync_and_it_has_no_content_test(self):
+        import re
+        workflow = self.read(".github/workflows/gsc_pulse.yml")
+        self.assertEqual(len(re.findall(r"^\s*-?\s*cron:", workflow, re.MULTILINE)), 1)
+        self.assertEqual(len(re.findall(r"^\s*schedule:", workflow, re.MULTILINE)), 1)
+        for name in ("create_content_test", "email_test_summary", "rehearsal_site", "ai_model"):
+            block = re.search(rf"^      {name}:.*?default: \"(.*?)\"", workflow, re.MULTILINE | re.DOTALL)
+            self.assertIsNotNone(block, name)
+            self.assertEqual(block.group(1), "", name)                 # empty unless someone types a value
+        self.assertNotIn("create_content_test:", self.read(".github/workflows/tests.yml"))
+
+    def test_content_creation_is_called_only_from_the_two_test_commands(self):
+        import ast
+        tree = ast.parse(self.read("gsc_pulse.py"))
+        callers = {}
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for node in ast.walk(fn):
+                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id in ("content_create", "rehearsal", "ai_client")
+                            and node.func.attr in ("run", "prepare", "make_client")):
+                        callers.setdefault(fn.name, set()).add(f"{node.func.value.id}.{node.func.attr}")
+        self.assertEqual(set(callers), {"create_content_test", "rehearsal_command", "probe_ai"}, callers)
+
+    def test_the_test_commands_send_nothing_except_the_one_asked_for_summary(self):
+        import ast
+        tree = ast.parse(self.read("gsc_pulse.py"))
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef) and fn.name in ("create_content_test", "rehearsal_command", "probe_ai"):
+                for node in ast.walk(fn):
+                    if isinstance(node, ast.Call):
+                        name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+                        self.assertNotIn(name, ("notify_owner", "notify_owner_or_raise", "send", "send_message"), fn.name)
+        source = self.read("gsc_pulse.py")
+        self.assertIn('"EMAIL_TEST_SUMMARY"', source)                # the one summary is behind its own switch
+
+
 if __name__ == "__main__":
     unittest.main()

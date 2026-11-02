@@ -734,6 +734,21 @@ def probe_ai():
             working = name
 
 
+def send_test_summary(title: str, lines: list, ok: bool):
+    """A test never emails by itself: the result is in the run log. Only when the run was started with
+    email_test_summary is ONE summary email sent to the owner (counts and rule names, no documents)."""
+    if os.environ.get("EMAIL_TEST_SUMMARY", "").strip().lower() not in ("1", "true", "yes"):
+        print("  no email sent (start the run with email_test_summary to get one summary email)")
+        return
+    smtp = mailer.settings_from_env(os.environ)
+    if smtp is None:
+        print("  no summary email: no SMTP settings")
+        return
+    notify_owner(smtp, f"Content test summary · {title} · {'passed' if ok else 'failed'}",
+                 "\n".join([title, ""] + lines + [""]))
+    print("  one summary email sent")
+
+
 def rehearsal_command(kind: str, site_name: str, site_list: list):
     """Content creation tried on a copy of a real site's dashboard (rehearsal.py). `prepare` makes the copy (the real
     file is only read); `run` writes the briefs, marks the briefed rows Draft, writes the drafts and tests them.
@@ -759,11 +774,8 @@ def rehearsal_command(kind: str, site_name: str, site_list: list):
     print(f"  rehearsal: {total.text()}")
     print(f"  rehearsal: models that answered: {ai.by_model}, {ai.calls} requests in all, search tool "
           f"{'on' if ai.search_ok else 'off (no quota for it on this key)'}")
-    mail = content_create.email_text("Rehearsal copy", total)
-    smtp = mailer.settings_from_env(os.environ)
-    if mail:
-        notify_owner(smtp, *mail)
     print(f"  rehearsal checklist: {report.text()}")
+    send_test_summary("Rehearsal copy", [f"Result: {total.text()}", f"Checklist: {report.text()}"], report.ok)
     if not report.ok:
         raise GscPulseError(f"rehearsal: {len(report.failures)} checks failed")
     print("  ✅  The rehearsal documents passed the checker")
@@ -796,7 +808,6 @@ def create_content_test(mode: str, limit: int = 0):
             mail = content_create.email_text(cfg.label, results[name])
             if mail:
                 emails.append((name, *mail))
-                notify_owner(smtp, *mail)
         return results, emails
 
     before = content_accept.snapshot(clients.sheets, world)
@@ -813,6 +824,8 @@ def create_content_test(mode: str, limit: int = 0):
     for name, r in results.items():
         print(f"  {name}: {r.text()}, {r.font_rewrites} documents written again for their font")
     print(f"  checklist: {report.text()}")
+    send_test_summary("Fake test sites", [f"{n}: {r.text()}" for n, r in results.items()]
+                      + [f"Checklist: {report.text()}"], report.ok)
     if not report.ok:
         raise GscPulseError(f"content creation test: {len(report.failures)} checks failed")
     print("  ✅  The checklist passed on the fake test site")
