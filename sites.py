@@ -378,7 +378,8 @@ def _parse_content(value, where: str) -> "ContentConfig":
         raise SitesConfigError(f"{at}: 'min_gap_impressions_90d' must be a number, 1 or more")
     cfg.min_gap_impressions_90d = gap
     tabs = value.get("tabs")
-    page_type_tabs = value.get("page_type_tabs", tabs is None)       # no tab list: the page types make the tabs
+    # no tab list, or a skip list / tab names written: the page types make the tabs
+    page_type_tabs = value.get("page_type_tabs", tabs is None or "skip_types" in value or "tab_names" in value)
     if not isinstance(page_type_tabs, bool):
         raise SitesConfigError(f"{at}: 'page_type_tabs' must be true or false")
     if tabs is None and page_type_tabs:
@@ -509,6 +510,8 @@ def resolve_content_tabs(site) -> None:
         t.lang_folders = folders
     if not cfg.page_type_tabs:
         return
+    if not cfg.tabs and not site.page_types:
+        raise SitesConfigError(f"SITES_JSON site '{site.name}', content: needs 'tabs' or the site's 'page_types'")
     skip = {s.lower() for s in cfg.skip_types}
     known = {t["name"].lower() for t in site.page_types} | {site.other_label.lower()}
     cfg.notes += [f"skip_types names a page type the site does not have ({len(skip - known)})"] if skip - known else []
