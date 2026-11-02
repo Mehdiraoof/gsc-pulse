@@ -2,6 +2,7 @@
 worked out by hand (the numbers in the comments are the hand calculation)."""
 
 import io
+import types
 import unittest
 from datetime import date, timedelta
 from unittest import mock
@@ -354,12 +355,84 @@ def T_of(lang):
 
 class WhoSeesWhatTests(unittest.TestCase):
 
-    def test_the_client_gets_the_good_and_the_fresh_positive_best_first_and_never_a_hidden_or_failed_item(self):
+    def test_the_client_gets_every_item_of_the_month_results_first_best_first_and_never_a_hidden_one(self):
         shown = wi.for_client(all_items(), TODAY)
-        # the updated page gained 140 clicks, the new page 168, the fresh schema work 20
-        self.assertEqual([(i.kind, i.day) for i in shown], [(wi.NEW, D(10, 5)), (wi.UPDATED, D(10, 12)), (wi.MANUAL, D(10, 25))])
-        self.assertNotIn("Old address redirected", [i.what for i in shown])                        # it did not help
+        # the new page gained 168 clicks, the updated page 140, the fresh schema work 20; then what has no result yet
+        self.assertEqual([(i.kind, i.day, i.numbers) for i in shown],
+                         [(wi.NEW, D(10, 5), True), (wi.UPDATED, D(10, 12), True), (wi.MANUAL, D(10, 25), True),
+                          (wi.MANUAL, D(10, 10), False)])
+        self.assertIn("Old address redirected", [i.what for i in shown])                           # no gain: still shown
         self.assertNotIn("Internal links", [i.what for i in shown])                                # "Show to client" = No
+
+    def test_an_item_without_a_gain_or_with_a_fall_shows_what_was_done_and_the_date_and_no_number(self):
+        T = T_of("en")
+        fell = wi.WorkItem(wi.UPDATED, D(10, 8), scope=u("/article/fell"), title="Fell page")
+        fell.impact = wi.Impact(28, wi.Totals(200, 4000, 5.0), wi.Totals(90, 3000, 7.0), 1000, 1100, wi.FLAT, False)
+        none = wi.WorkItem(wi.MANUAL, D(10, 9), what="Schema added to the guides")                  # nothing to measure
+        shown = wi.for_client([fell, none], TODAY)
+        self.assertEqual([i.numbers for i in shown], [False, False])
+        rows = [work_view.client_row(i, T, "en") for i in shown]
+        self.assertEqual([r["what"] for r in rows], ["Schema added to the guides", "Updated page: Fell page"])   # manual first
+        for r in rows:
+            self.assertEqual((r["clicks"], r["position"], r["versus"]), ("", "", ""))
+            self.assertTrue(r["date"])
+        self.assertNotIn("-", "".join(r["clicks"] + r["position"] + r["versus"] for r in rows))
+        prs = Presentation(io.BytesIO(client_deck.build_monthly(
+            fx.monthly_report(), fx.Cfg("en"), deck_runner.TEMPLATE_DIR, None, None, work=shown)))
+        (slide,) = [s for s in prs.slides if any(sh.has_text_frame and sh.text_frame.text.startswith("Our work and its results")
+                                                 for sh in s.shapes)]
+        text = "\n".join(deck_texts(types.SimpleNamespace(slides=[slide])))
+        self.assertIn("Updated page: Fell page", text)
+        self.assertIn("Schema added to the guides", text)
+        for number in ("200", "90", "5.0", "7.0", "-55%", "→"):
+            self.assertNotIn(number, text, number)
+
+    def test_a_result_that_comes_later_shows_up_once_with_its_numbers(self):
+        T = T_of("en")
+        earlier = measured(wi.UPDATED, D(9, 20), u("/article/updated"), title="Garden tools")        # September, good now
+        flat_earlier = wi.WorkItem(wi.UPDATED, D(9, 22), scope=u("/article/flat"), title="Flat page")
+        flat_earlier.impact = wi.Impact(28, wi.Totals(100, 900, 6.0), wi.Totals(101, 910, 6.0), 1000, 1000, wi.FLAT, False)
+        too_old = measured(wi.UPDATED, D(7, 20), u("/article/updated"), title="Too old")
+        items = [earlier, flat_earlier, too_old] + all_items()
+        shown = wi.for_client(items, TODAY)
+        later = [i for i in shown if i.day == D(9, 20)]
+        self.assertEqual([(i.title, i.numbers) for i in later], [("Garden tools", True)])
+        self.assertNotIn("Flat page", [i.title for i in shown])                  # an earlier item without a result stays out
+        self.assertNotIn("Too old", [i.title for i in shown])                    # beyond the last 90 days
+        row = work_view.client_row(later[0], T, "en")
+        self.assertNotEqual(row["clicks"], "")
+        # once: the id is remembered when the deck goes out, and the next deck leaves it out
+        again = wi.for_client(items, TODAY, shown={wi.item_id(earlier)})
+        self.assertNotIn(D(9, 20), [i.day for i in again])
+        self.assertEqual(len(again), len(shown) - 1)
+        # the items of the month itself are in the deck whatever was remembered (a rebuilt deck is the same deck)
+        self.assertEqual(len(wi.for_client(all_items(), TODAY, shown={wi.item_id(i) for i in all_items()})), 4)
+        self.assertEqual(wi.item_id(earlier), wi.item_id(measured(wi.UPDATED, D(9, 20), u("/article/updated"), title="x")))
+
+    def test_the_manual_lines_are_never_dropped_and_the_extra_automatic_ones_become_one_line(self):
+        T = T_of("en")
+        manual = [wi.WorkItem(wi.MANUAL, D(10, 1 + i % 20), what=f"Manual line {i}") for i in range(3)]
+        auto = []
+        for i in range(20):
+            it = wi.WorkItem(wi.UPDATED, D(10, 2 + i % 20), scope=u(f"/article/p{i}"), title=f"p{i}")
+            it.impact = wi.Impact(28, wi.Totals(100, 900, 6.0), wi.Totals(100, 900, 6.0), 1000, 1000, wi.FLAT, False)
+            auto.append(it)
+        rows = wi.for_client(auto + manual, TODAY)
+        self.assertEqual(len(rows), wi.MAX_CLIENT_ITEMS * wi.MAX_CLIENT_SLIDES)
+        self.assertEqual([r.what for r in rows[:3]], [f"Manual line {i}" for i in range(3)])      # all of them, first
+        group = rows[-1]
+        self.assertEqual((group.kind, group.count), (wi.GROUP, 20 - 12))                           # 12 automatic fit, 8 grouped
+        self.assertEqual(len([r for r in rows if r.kind == wi.UPDATED]), 12)
+        pages = work_view.client_pages(rows, T, "en", "Intro")
+        self.assertEqual([len(p["rows"]) for p in pages], [8, 8])                                  # two slides at most
+        self.assertEqual(pages[-1]["rows"][-1]["what"], "8 other pages added or updated")
+        fa = work_view.client_pages(rows, T_of("fa"), "fa", "Intro")
+        self.assertIn("صفحه دیگر", fa[-1]["rows"][-1]["what"])   # the Persian line
+        # many manual lines: none is dropped, whatever the number
+        many = [wi.WorkItem(wi.MANUAL, D(10, 1 + i % 25), what=f"Line {i}") for i in range(20)]
+        kept = wi.for_client(many + auto, TODAY)
+        self.assertEqual(len([r for r in kept if r.kind == wi.MANUAL]), 20)
+        self.assertFalse([r for r in kept if r.kind == wi.UPDATED])
 
     def test_the_owner_sees_everything_of_the_last_90_days_including_what_did_not_help(self):
         shown = wi.for_owner(all_items(), TODAY)
@@ -369,13 +442,14 @@ class WhoSeesWhatTests(unittest.TestCase):
         self.assertNotIn("Too old", [i.what for i in wi.for_owner([old], TODAY)])
         self.assertEqual(wi.for_client([old], TODAY), [])
 
-    def test_at_most_eight_and_two_slides_from_six(self):
+    def test_up_to_eight_rows_on_a_slide_and_two_slides_at_most(self):
         many = [measured(wi.UPDATED, D(10, 12), u("/article/updated"), title=f"p{i}") for i in range(11)]
-        self.assertEqual(len(wi.for_client(many, TODAY)), wi.MAX_CLIENT_ITEMS)
+        rows = wi.for_client(many, TODAY)
+        self.assertEqual(len(rows), 11)
         T = T_of("en")
-        self.assertEqual(len(work_view.client_pages(many[:5], T, "en", "Intro")), 1)
-        pages = work_view.client_pages(many[:8], T, "en", "Intro")
-        self.assertEqual([len(p["rows"]) for p in pages], [4, 4])
+        self.assertEqual(len(work_view.client_pages(rows[:8], T, "en", "Intro")), 1)
+        pages = work_view.client_pages(rows[:9], T, "en", "Intro")
+        self.assertEqual([len(p["rows"]) for p in pages], [5, 4])
         self.assertEqual([p["intro"] for p in pages], ["Intro", ""])
         self.assertTrue(pages[1]["title"].endswith("(2/2)"))
         self.assertEqual(work_view.client_pages([], T, "en", "Intro"), [])
@@ -424,7 +498,8 @@ class SlideTests(unittest.TestCase):
         self.assertIn("8.0 → 6.0", text)                       # average position
         self.assertIn("+50% · site +6%", text)                 # the page against the rest of the site
         self.assertIn("new → 168", text)
-        for hidden in ("Internal links", "Old address redirected", "Mehdi fills", "PulseO", "Claude"):
+        self.assertIn("Old address redirected", text)               # no gain yet: shown, with the date and no numbers
+        for hidden in ("Internal links", "Mehdi fills", "PulseO", "Claude"):
             self.assertNotIn(hidden, text, hidden)
 
     def test_a_fixed_intro_when_nothing_was_written_and_no_slide_without_items(self):
@@ -544,8 +619,9 @@ class FlowTests(tcr.Base):
         self.site.history_sheet_id = ""
         items = our_work.items_for(self.drive, self.fs, self.site, TODAY, None, lambda s: None)
         self.assertEqual([i.kind for i in items], [wi.MANUAL])
-        self.assertIsNone(items[0].impact)                               # no history: nothing to measure, nothing is shown
-        self.assertEqual(wi.for_client(items, TODAY), [])
+        self.assertIsNone(items[0].impact)                               # no history: nothing to measure
+        (row,) = wi.for_client(items, TODAY)
+        self.assertEqual((row.kind, row.numbers), (wi.MANUAL, False))    # still shown, with no numbers
         self.assertEqual(our_work.items_for(None, self.fs, self.site, TODAY, None, lambda s: None)[0].kind, wi.MANUAL)
 
 

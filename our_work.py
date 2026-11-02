@@ -13,6 +13,7 @@ import re
 from datetime import date, timedelta
 
 import ai_notes
+import state as reports_state
 import client_data as cd
 import client_slides
 import client_i18n
@@ -105,7 +106,8 @@ def facts_text(items: list, T: dict, lang: str, short=lambda s: s) -> str:
     lines = []
     for it in items:
         r = work_view.client_row(it, T, lang, short)
-        lines.append(f"- {r['what']} ({r['date']}): clicks {r['clicks']}; average position {r['position'] or 'n/a'}; {r['versus']}")
+        lines.append(f"- {r['what']} ({r['date']}): clicks {r['clicks']}; average position {r['position'] or 'n/a'}; {r['versus']}"
+                     if r["clicks"] else f"- {r['what']}" + (f" ({r['date']})" if r["date"] else "") + " (no result to report yet)")
     return "\n".join(lines) or "- (no items)"
 
 
@@ -153,7 +155,8 @@ def prepare_notes(drive, sheets, site, today: date, queries=None, log=print) -> 
     if cfg.monthly:
         rep = dd.load_monthly(sheets, site.reports_sheet_id, site)
         if rep is not None:
-            items = wi.for_client(items_for(drive, sheets, site, today, queries, log), today)
+            items = wi.for_client(items_for(drive, sheets, site, today, queries, log), today, rep.period,
+                                  shown_ids(sheets, site))
             if items:
                 T = {**i18n.table(lang), **client_i18n.table(lang)}
                 wanted.append(ai_notes.Slot("monthly", rep.period, ai_notes.OUR_WORK_INTRO,
@@ -180,6 +183,20 @@ def extras_for(drive, sheets, site, today: date, gsc=None, log=print):
         if "items" not in cache:
             cache["items"] = items_for(drive, sheets, site, today, queries, log)
         texts, waiting = ai_notes.texts_for(sheets, site.reports_sheet_id, kind, report.period)
-        work = wi.for_client(cache["items"], today) if kind == "monthly" else wi.for_owner(cache["items"], today)
-        return {"texts": texts, "waiting": waiting, "work": work}
+        work = (wi.for_client(cache["items"], today, report.period, shown_ids(sheets, site)) if kind == "monthly"
+                else wi.for_owner(cache["items"], today))
+        return {"texts": texts, "waiting": waiting, "work": work,
+                "shown": [wi.item_id(it) for it in work if kind == "monthly" and it.numbers and it.kind != wi.GROUP]}
     return extras
+
+
+
+
+
+def shown_ids(sheets, site) -> set:
+    """The ids of the work items already shown to the client with their numbers (kept in the State tab of the
+    Reports sheet, written when the monthly deck went out), so a later result is shown once and never again."""
+    if not site.reports_sheet_id:
+        return set()
+    return {k[len(wi.SHOWN_PREFIX):] for k in reports_state.read_state(sheets, site.reports_sheet_id)
+            if k.startswith(wi.SHOWN_PREFIX)}

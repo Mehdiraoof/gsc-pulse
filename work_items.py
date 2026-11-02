@@ -31,7 +31,7 @@ Nothing here calls an AI, and nothing here writes the Reports sheet.
 import fnmatch
 import re
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import content
@@ -47,7 +47,10 @@ EARLY_DAYS = 21              # fewer days of "after" data: early results
 MIN_DAYS = 7                 # fewer: nothing to say yet
 LOOKBACK_CLIENT = 120        # days back a change may be dated for the client deck
 LOOKBACK_WEEKLY = 90
-MAX_CLIENT_ITEMS = 8
+MAX_CLIENT_ITEMS = 8              # rows on one client slide
+MAX_CLIENT_SLIDES = 2
+LOOKBACK_LATER = 90               # days back an item of an earlier month is checked for a result that came later
+SHOWN_PREFIX = "work_shown|"       # State tab keys of the items already shown to the client with their numbers
 MIN_GAIN_CLICKS = 5          # a result needs at least this many more clicks ...
 MIN_GAIN_PCT = 0.10          # ... and at least this much growth (when there was something before)
 MIN_NEW_CLICKS = 5           # a new page counts once it has this many clicks
@@ -55,7 +58,7 @@ POSITION_GAIN = 1.0          # or a better average position by this much, withou
 MERGE_DAYS = 3               # events of one page this close are one piece of work
 BASELINE_NEW_AFTER = 14      # at the first run: a page first seen this long after the history began is new
 
-NEW, UPDATED, MANUAL = "new", "updated", "manual"
+NEW, UPDATED, MANUAL, GROUP = "new", "updated", "manual", "group"
 GOOD, EARLY, FLAT, NODATA = "good", "early", "flat", "nodata"
 
 
@@ -112,6 +115,8 @@ class WorkItem:
     show: bool = True                 # "Show to client"
     impact: Impact = None
     pages: list = field(default_factory=list)       # the page keys the numbers cover (for the tests and the log)
+    numbers: bool = False             # client deck: the row shows its before and after (a clear gain), else only what was done
+    count: int = 0                    # kind `group`: how many other automatic items this one line stands for
 
 
 # --------------------------------------------------------------------------- #
@@ -358,14 +363,65 @@ def evaluate(items: list, table: PageDays, final: date, redirects: dict, queries
 # Who sees what
 # --------------------------------------------------------------------------- #
 
-def for_client(items: list, today: date) -> list:
-    """The items of the client deck: shown to the client, dated within LOOKBACK_CLIENT days, with a clear gain
-    (or fresh and positive), best result first, at most MAX_CLIENT_ITEMS. What did not help is left out."""
-    shown = [it for it in items
-             if it.show and it.impact and 0 <= (today - it.day).days <= LOOKBACK_CLIENT
-             and ((it.impact.status == GOOD) or (it.impact.status == EARLY and it.impact.positive))]
-    shown.sort(key=lambda it: (-it.impact.gain, it.day, it.scope))
-    return shown[:MAX_CLIENT_ITEMS]
+def item_id(it: WorkItem) -> str:
+    """What names a piece of work for good: its kind, day and page (a manual line also its words)."""
+    key = f"{it.kind}|{it.day.isoformat()}|{content.url_key(it.scope) if str(it.scope).startswith('http') else it.scope}"
+    return key + (f"|{content.norm(it.what)[:60]}" if it.kind == MANUAL else "")
+
+
+def month_bounds(period: str, today: date) -> tuple:
+    """(first, last day) of the month a monthly deck reports on: `period` (YYYY-MM), else the month before today."""
+    if re.fullmatch(r"\d{4}-\d{2}", str(period or "")):
+        first = date(int(period[:4]), int(period[5:7]), 1)
+    else:
+        first = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+    return first, (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+
+def _shows_numbers(it: WorkItem) -> bool:
+    return bool(it.impact and (it.impact.status == GOOD or (it.impact.status == EARLY and it.impact.positive)))
+
+
+def for_client(items: list, today: date, period: str = "", shown=()) -> list:
+    """
+    The rows of the client's "Our work and its results" slide. We always show what we have done:
+      * every item dated in the month of the deck (`period`), manual and automatic, unless "Show to client" is No;
+        one with a clear gain (or fresh and positive) shows its numbers, any other (no gain, a fall, too early,
+        nothing to measure) shows only what was done and the date, never a number;
+      * an item of the last LOOKBACK_LATER days from an EARLIER month shows up again, with its numbers, in the first
+        deck where it has a clear gain, once: `shown` holds the ids of the items already shown with numbers.
+    Order: the ones with numbers first, best first; then the others, the owner's manual lines before the automatic
+    ones. At most MAX_CLIENT_ITEMS rows on a slide and MAX_CLIENT_SLIDES slides: if there are more, the automatic
+    items without numbers are grouped into one line ("12 other pages updated"), then the weakest automatic ones with
+    numbers; the manual lines are never dropped. The items returned are copies: the input is not changed.
+    """
+    first, last = month_bounds(period, today)
+    seen = set(shown)
+    rows = []
+    for it in items:
+        if not it.show:
+            continue
+        if first <= it.day <= last:
+            rows.append(replace(it, numbers=_shows_numbers(it)))
+        elif (today - timedelta(days=LOOKBACK_LATER) <= it.day < first and it.impact
+              and it.impact.status == GOOD and item_id(it) not in seen):
+            rows.append(replace(it, numbers=True))
+    with_numbers = sorted((r for r in rows if r.numbers), key=lambda r: (-r.impact.gain, r.day, r.scope))
+    without = sorted((r for r in rows if not r.numbers), key=lambda r: (r.kind != MANUAL, r.day, r.scope))
+    out = with_numbers + without
+    cap = MAX_CLIENT_ITEMS * MAX_CLIENT_SLIDES
+    if len(out) <= cap:
+        return out
+    over = len(out) - cap + 1                                  # one row is taken by the group line
+    plain_auto = [r for r in without if r.kind != MANUAL]
+    auto_numbers = [r for r in with_numbers if r.kind != MANUAL]
+    drop = (plain_auto[::-1] + auto_numbers[::-1])[:over]      # the last plain automatic ones first, then the weakest
+    if not drop:
+        return out                                             # only manual lines: none of them is ever dropped
+    gone = {id(r) for r in drop}
+    kept = [r for r in out if id(r) not in gone]
+    kept.append(WorkItem(GROUP, today, count=len(drop), numbers=False))
+    return kept
 
 
 def for_owner(items: list, today: date) -> list:

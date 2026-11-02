@@ -30,9 +30,11 @@ import i18n
 import mailer
 import summary
 import tabs
+import work_items as wi
 from state import STATE_HEADER, STATE_TAB, read_state, write_state   # noqa: F401  (re-exported)
 
 STATE_KEY = {"monthly": "monthly_deck_sent", "weekly": "weekly_deck_sent"}
+SYNC_KEY = {"monthly": "monthly_deck_synced", "weekly": "weekly_deck_synced"}     # the period whose sync has finished
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 
 
@@ -108,7 +110,7 @@ def file_title(report: dd.Report, cfg, lang: str, period: str) -> str:
 def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, log=print,
               scrub=lambda s: s, template_dir: str = TEMPLATE_DIR, send=mailer.send,
               post=summary._post, fetch_logo=decks.fetch_logo, mark_only: bool = False,
-              test: bool = False, extras=None) -> DeckResult:
+              test: bool = False, extras=None, gate: str = "") -> DeckResult:
     cfg = site.deck
     wanted = {"monthly", "weekly"} if rebuild is True else set(rebuild or ())     # decks to build whatever the state says
     result = DeckResult()
@@ -139,6 +141,20 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             log(f"decks: {kind} already sent for the latest period")
             result.skipped.append(kind)
             continue
+        if gate and kind not in wanted and not test:
+            # a scheduled deck check: the deck waits for this period's sync, and the first check also for the texts
+            if state.get(SYNC_KEY[kind], (0, ""))[1] != report.period:
+                log(f"decks: {kind}: the sync for {report.period} has not finished; nothing is sent "
+                    f"(the next check after the sync sends it)")
+                result.skipped.append(kind)
+                continue
+            if gate == "first":
+                _, waiting = ai_notes.texts_for(sheets, reports_id, kind, report.period)
+                if waiting:
+                    log(f"decks: {kind}: first check: still waiting for {', '.join(waiting)}; nothing is sent "
+                        f"(the second check sends with what is ready)")
+                    result.skipped.append(kind)
+                    continue
         try:
             ai, extra = None, {}
             if extras is not None:                             # texts written by the owner's own plan (AI Notes)
@@ -167,6 +183,11 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             if test:
                 subject = "[Test] " + subject
             message = mailer.build_message(smtp.user, to, subject, body, filename, payload, bcc=bcc)
+            if (not test and kind not in wanted
+                    and read_state(sheets, reports_id).get(STATE_KEY[kind], (0, ""))[1] == report.period):
+                log(f"decks: {kind} was sent by another run while this one was building it; not sent again")
+                result.skipped.append(kind)
+                continue
             send(smtp, message)
         except Exception as e:                           # noqa: BLE001  one deck never blocks the other
             result.failed.append(kind)
@@ -174,6 +195,8 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             continue
         if not test:                                     # a test copy never changes what counts as sent
             write_state(sheets, reports_id, state, STATE_KEY[kind], report.period)
+            for work_id in extra.get("shown", []) if kind == "monthly" else []:      # shown with numbers: never again
+                write_state(sheets, reports_id, state, wi.SHOWN_PREFIX + work_id, report.period)
         result.sent.append(kind)
         count = len(to) + len(bcc)
         slides = len(Presentation(io.BytesIO(payload)).slides)
@@ -196,3 +219,16 @@ def pending_texts(sheets, reports_id: str, site) -> list:
         _, waiting = ai_notes.texts_for(sheets, reports_id, kind, report.period)
         out += [f"{kind}:{slot}" for slot in waiting]
     return out
+
+
+def mark_synced(sheets, reports_id: str, site):
+    """The sync of this site has finished for the periods of its latest weekly and monthly reports (the AI Notes rows
+    are written): a scheduled deck check may now send those decks. Written by the sync run, last."""
+    cfg = site.deck
+    state = read_state(sheets, reports_id)
+    for kind in ("monthly", "weekly"):
+        if not getattr(cfg, kind):
+            continue
+        report = (dd.load_monthly if kind == "monthly" else dd.load_weekly)(sheets, reports_id, site)
+        if report is not None and state.get(SYNC_KEY[kind], (0, ""))[1] != report.period:
+            write_state(sheets, reports_id, state, SYNC_KEY[kind], report.period)

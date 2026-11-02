@@ -268,8 +268,9 @@ def slide_work(ctx, c, d):
     rows = [[Cell(r["what"], "text"), Cell(r["date"], "num"), Cell(r["clicks"], "num"),
              Cell(r["position"], "num"), Cell(r["versus"], "change", GREEN if r["tone"] == "green" else BROWN, True)]
             for r in d["rows"]]
-    decks.add_table(slide, ctx, mirror_x(ctx, LEFT, WIDTH), top, [4.9, 1.2, 1.9, 1.9, 2.23], d["header"], rows,
-                    row_height=0.62, size=13, text_cols=(0,))
+    tall = len(rows) <= 5                          # up to eight rows fit under the intro with a lower row
+    decks.add_table(slide, ctx, mirror_x(ctx, LEFT, WIDTH), top if tall else top - 0.1, [4.9, 1.2, 1.9, 1.9, 2.23],
+                    d["header"], rows, row_height=0.62 if tall else 0.5, size=13 if tall else 12, text_cols=(0,))
 
 
 def slide_trend(ctx, c, d):

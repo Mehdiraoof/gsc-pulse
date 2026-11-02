@@ -562,6 +562,8 @@ def sync_work(run: SiteRun, today: date):
     our_work.scan_site(run.drive, run.sheets, site, today)
     if handoff_on():
         our_work.prepare_notes(run.drive, run.sheets, site, today, our_work.gsc_queries(run.gsc, site))
+        deck_runner.mark_synced(run.sheets, site.reports_sheet_id, site)       # last: the deck checks may now send this period
+        print("  decks: the sync has finished for the latest periods; the deck checks may send them")
     else:
         our_work.wi.ensure_our_work_tab(run.sheets, site.reports_sheet_id)
     print()
@@ -594,6 +596,7 @@ def wait_for_texts(runs: list, minutes: int, sleep=time.sleep, clock=time.monoto
 
 
 def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False, test=False, build=False,
+               gate: str = "",
                mail_off: str = ""):
     """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed. With the
     handoff on the sync run does not send them: the second run (build) does, with the texts that are ready.
@@ -624,7 +627,7 @@ def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_onl
             our_work.scan_site(run.drive, sheets_service, site, today)
         extras = our_work.extras_for(run.drive, sheets_service, site, today, run.gsc)
     result = deck_runner.run_decks(sheets_service, site.reports_sheet_id, site, smtp, os.environ,
-                                   rebuild_decks, print, scrub, mark_only=mark_only, test=test, extras=extras)
+                                   rebuild_decks, print, scrub, mark_only=mark_only, test=test, extras=extras, gate=gate)
     run.decks_text = result.text()
     if result.failed:
         raise GscPulseError(f"deck delivery failed: {', '.join(result.failed)}")
@@ -1154,15 +1157,21 @@ def main():
 
     # ---- The second run: build and send the decks of every site, with the texts that are ready -----
     if os.environ.get("DECK_PHASE", "").strip().lower() == "build":
-        wait_for_texts([r for r in enabled if r.status != "failed"],
-                       int(re.sub(r"\D", "", os.environ.get("WAIT_FOR_TEXTS_MINUTES", "")) or 0))
+        check_round = os.environ.get("DECK_CHECK", "").strip().lower()      # first | second (scheduled) | "" (by hand)
+        if check_round not in ("first", "second"):
+            check_round = ""
+        print(f"  deck check: {check_round or 'by hand'}")
+        if not check_round:                      # a scheduled check never waits: it sends what is ready, when it runs
+            wait_for_texts([r for r in enabled if r.status != "failed"],
+                           int(re.sub(r"\D", "", os.environ.get("WAIT_FOR_TEXTS_MINUTES", "")) or 0))
         for r in enabled:
             if r.status == "failed":
                 continue
             try:
                 sync_decks(r.sheets, r, smtp, deck_rebuild_for(r, rebuild_decks, rebuild_deck_site, rebuild_deck_kind),
                            test=test_deck and bool(rebuild_deck_site) and r.name.lower() == rebuild_deck_site,
-                           build=True, mail_off="" if policy.decks(r.name) else mail_policy.NOT_SENT)
+                           build=True, gate=check_round,
+                           mail_off="" if policy.decks(r.name) else mail_policy.NOT_SENT)
             except Exception as e:
                 r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
                 fail_site(r, e)

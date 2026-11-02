@@ -2,7 +2,10 @@ name: PulseO weekly sync
 
 on:
   schedule:
-    - cron: "0 4 * * 1"   # every Monday 04:00 UTC (07:00 Istanbul)
+    - cron: "17 3 * * 1"    # the SYNC: Monday 03:17 UTC (06:17 Istanbul); GitHub may start it hours late
+    - cron: "13 14 * * 1"   # deck check 1: Monday about 14:13 UTC (17:13 Istanbul): sends only what is complete
+    - cron: "13 17 * * 1"   # deck check 2: Monday about 17:13 UTC (20:13 Istanbul): sends with the texts that are ready
+    - cron: "13 14 * * 2"   # catch-up: Tuesday 14:13 UTC: delivers a deck whose sync finished after check 2
   workflow_dispatch:       # adds a "Run workflow" button for manual runs
     inputs:
       discover_site:
@@ -119,7 +122,7 @@ concurrency:
 
 jobs:
   sync:
-    if: ${{ inputs.deck_phase != 'build' }}
+    if: ${{ inputs.deck_phase != 'build' && (github.event_name != 'schedule' || github.event.schedule == '17 3 * * 1') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60     # a first refresh of a big dashboard (thousands of pages to check) takes about 25 minutes
     steps:
@@ -188,15 +191,15 @@ jobs:
             git push
           fi
 
-  # The second run: builds the weekly and monthly decks and emails them. Only with the handoff switched on
-  # (repository variable AI_HANDOFF = on): after the sync of every scheduled run, or by hand with deck_phase = build.
-  # It waits (up to 4 hours) for the texts the owner's Claude plan writes into the AI Notes tab, and builds without
-  # the ones still missing.
+  # The deck checks (scheduled runs of their own, Monday and the Tuesday catch-up): build the weekly and monthly decks
+  # and email them, with the texts the owner's Claude plan wrote into the AI Notes tab. Only with the handoff on
+  # (repository variable AI_HANDOFF = on), or by hand with deck_phase = build. Nothing waits for the clock: a check
+  # sends a deck only if this period's sync has finished (the first check also only if every text is ready); the
+  # second check and the catch-up send with whatever is ready. A deck is sent once (the sent state decides).
   build:
-    needs: sync
-    if: ${{ always() && (inputs.deck_phase == 'build' || (github.event_name == 'schedule' && vars.AI_HANDOFF == 'on')) }}
+    if: ${{ inputs.deck_phase == 'build' || (github.event_name == 'schedule' && github.event.schedule != '17 3 * * 1' && vars.AI_HANDOFF == 'on') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -221,7 +224,9 @@ jobs:
           AI_HANDOFF: on
           SEND_EMAILS: ${{ inputs.send_emails }}
           DECK_PHASE: build
-          WAIT_FOR_TEXTS_MINUTES: ${{ github.event_name == 'schedule' && '240' || inputs.wait_minutes }}
+          WAIT_FOR_TEXTS_MINUTES: ${{ inputs.wait_minutes }}
+          # which scheduled check this is: the first sends only complete decks, the others send with what is ready
+          DECK_CHECK: ${{ github.event_name == 'schedule' && (github.event.schedule == '13 14 * * 1' && 'first' || 'second') || '' }}
           REBUILD_DECKS: ${{ inputs.rebuild_decks }}
           REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
           REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
