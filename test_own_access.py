@@ -5,6 +5,7 @@ credentials or network are needed.
 """
 
 import contextlib
+import copy
 import io
 import json
 import os
@@ -70,6 +71,16 @@ class FakeDrive:
                 self.files_[fid]["content"] = media_body.getbytes(0, media_body.size())
             if body["mimeType"] == provision.SHEET:
                 self.sheets.add_book(fid)
+            return {"id": fid}
+        return Req(run)
+
+    def copy(self, fileId, body, fields=None):
+        def run():
+            self.n += 1
+            fid = f"DRIVE-{self.n}"
+            self.files_[fid] = {"name": body["name"], "mimeType": self.files_[fileId]["mimeType"],
+                                "parents": body.get("parents", []), "trashed": False}
+            self.sheets.books[fid] = copy.deepcopy(self.sheets.books[fileId])
             return {"id": fid}
         return Req(run)
 

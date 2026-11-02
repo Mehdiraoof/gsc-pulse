@@ -82,6 +82,10 @@ on:
         description: "Refresh the content dashboard of this one site now (a name from SITES_JSON), even if it was refreshed this month"
         required: false
         default: ""
+      content_copy_site:
+        description: "Content dashboard test on a COPY: one forced refresh of this site's dashboard copy (a name from SITES_JSON) with the settings in the variable CONTENT_COPY_OVERRIDES. The real dashboard is only read, nothing is emailed"
+        required: false
+        default: ""
       mark_decks_site:
         description: "For a site that just got new Reports sheets: mark its latest decks as already sent, email nothing (a name from SITES_JSON)"
         required: false
@@ -150,6 +154,8 @@ jobs:
           CLEANUP_GONE_SINCE: ${{ inputs.cleanup_gone_since }}
           MARK_DECKS_SITE: ${{ inputs.mark_decks_site }}
           REBUILD_CONTENT_SITE: ${{ inputs.rebuild_content_site }}
+          CONTENT_COPY_SITE: ${{ inputs.content_copy_site }}
+          CONTENT_COPY_OVERRIDES: ${{ vars.CONTENT_COPY_OVERRIDES }}
           REBUILD_VIEWS: ${{ inputs.rebuild_views }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}

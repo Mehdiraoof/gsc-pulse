@@ -309,5 +309,57 @@ class OverTheLimitTests(FakeSiteBase):
         self.assertIn("NO TAB", body)
 
 
+class OverridesTests(unittest.TestCase):
+
+    RAW = json.dumps([{"name": "site-x", "site_url": "sc-domain:example.test", "sheet_id": "S",
+                       "page_types": [{"name": "Article", "regex": "/a/"}, {"name": "Program", "regex": "/p"}],
+                       "content": {"enabled": True, "tabs": EXPLICIT}}])
+
+    def test_the_content_block_is_merged_and_a_type_is_split_in_its_place(self):
+        patch = {"content": {"skip_types": ["Other"]},
+                 "split": {"Program": [{"name": "Videos", "regex": "/v/"}, {"name": "Programs", "regex": "/p/"}]}}
+        out = json.loads(sites.apply_overrides(self.RAW, "SITE-X", patch))[0]
+        self.assertEqual([t["name"] for t in out["page_types"]], ["Article", "Videos", "Programs"])
+        self.assertEqual(out["content"]["skip_types"], ["Other"])
+        self.assertEqual(out["content"]["tabs"], EXPLICIT)
+        self.assertEqual(json.loads(self.RAW)[0]["page_types"][1]["name"], "Program")        # the original text is not touched
+
+    def test_a_site_that_is_not_there_is_refused(self):
+        with self.assertRaises(sites.SitesConfigError):
+            sites.apply_overrides(self.RAW, "site-y", {})
+
+
+class CopyTestTests(FakeSiteBase):
+    """A refresh with the new settings on a copy of a dashboard made the old way: the real file is not touched."""
+
+    def test_the_copy_gets_the_new_tabs_and_the_real_file_stays_as_it_was(self):
+        import content_copy_test as cct
+        self.site = site_with(LEGACY)
+        self.run_it()
+        real = self.file_id
+        keep = {name: [r[:] for r in tab.data] for name, tab in self.fs.books[real].items()}
+        new = site_with(KALAMEH_LIKE)
+
+        def refresh(site):
+            content_run.run_content(self.drive, self.fs, site, "REP", tcr.fetch, tcr.FINAL, DAY2, notify=None,
+                                    log=self.logs.append, force=True, http_get=lambda url: (200, "[]"),
+                                    sleep=lambda s: None)
+
+        out = []
+        lines = cct.run(self.drive, self.fs, self.site, new, real, refresh, "Example", log=out.append)
+        self.assertEqual({name: tab.data for name, tab in self.fs.books[real].items()}, keep)      # the real file: read only
+        text = "\n".join(lines)
+        self.assertIn("lost 0, owner columns changed 0", text)
+        self.assertIn("language tabs: 0", text)
+        self.assertIn("tab Songs: 2 rows", text)
+        self.assertIn("1 of them in another language", text)
+        (copy_id,) = [i for i, f in self.drive.files_.items() if f["name"].startswith("[Copy test]")]
+        self.assertNotEqual(copy_id, real)
+        self.assertEqual(list(self.fs.books[copy_id])[:6], ["Articles", "Landing Pages", "Songs", "Video", "Program", "Guide"])
+        self.assertEqual(self.sent, [])                                                           # nothing is emailed
+        self.assertFalse(any(copy_id in line or real in line for line in out))                    # no file id in the log
+        self.assertTrue(any("old idea rows" in line for line in lines))
+
+
 if __name__ == "__main__":
     unittest.main()

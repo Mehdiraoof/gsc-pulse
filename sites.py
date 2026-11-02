@@ -814,6 +814,25 @@ def merge_sites_json(base: str, extra: str) -> str:
     return json.dumps(entries)
 
 
+def apply_overrides(raw: str, name: str, patch: dict) -> str:
+    """SITES_JSON text with settings under test applied to one site (for a test on a copy, never written anywhere):
+    patch["content"] is merged into the site's content block, and patch["split"] {type name: [{name, regex}, ...]}
+    replaces a page type by those types."""
+    data = _json_list(raw, "SITES_JSON")
+    entry = next((e for e in data if isinstance(e, dict) and str(e.get("name", "")).strip().lower() == name.strip().lower()),
+                 None)
+    if entry is None:
+        raise SitesConfigError("the site to test is not in SITES_JSON")
+    entry["content"] = {**(entry.get("content") or {}), **(patch.get("content") or {})}
+    split = patch.get("split") or {}
+    if split:
+        types = []
+        for t in entry.get("page_types") or []:
+            types += split[t.get("name")] if t.get("name") in split else [t]
+        entry["page_types"] = types
+    return json.dumps(data)
+
+
 def load_sites(sites_json, site_url, sheet_id, history_sheet_id, force_single=False,
                sites_json_extra=None) -> list:
     """

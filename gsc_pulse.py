@@ -47,6 +47,7 @@ except ImportError:
 import ai_client
 import auth
 import content_accept
+import content_copy_test
 import content_create
 import content_import
 import content_run
@@ -847,6 +848,38 @@ def rehearsal_command(kind: str, site_name: str, site_list: list):
     print("  ✅  The rehearsal documents passed the checker")
 
 
+def content_copy_command(site_name: str, runs: list):
+    """One forced refresh of a site's content dashboard on a COPY of it, with settings under test (the repository
+    variable CONTENT_COPY_OVERRIDES, see content_copy_test.py). The real dashboard is only read and nothing is
+    emailed. The log holds counts and tab names only."""
+    run = next((r for r in runs if r.name.lower() == site_name and r.status != "failed" and r.drive is not None), None)
+    if run is None or not run.site.content.enabled:
+        raise GscPulseError("copy test: that site is not available for a content copy test")
+    try:
+        patch = json.loads(os.environ.get("CONTENT_COPY_OVERRIDES", "").strip() or "{}")
+        extra = os.environ.get("SITES_JSON_EXTRA", "")
+        base = os.environ.get("SITES_JSON", "")
+        text = sites.merge_sites_json(base, extra) if extra.strip() else base
+        test_site = next(s for s in sites.parse_sites_json(sites.apply_overrides(text, run.name, patch))
+                         if s.name == run.site.name)
+    except (ValueError, sites.SitesConfigError, StopIteration) as e:
+        raise GscPulseError(f"copy test: the settings under test are not usable ({type(e).__name__})") from None
+    for attr in ("sheet_id", "history_sheet_id", "reports_sheet_id"):
+        setattr(test_site, attr, getattr(run.site, attr))
+    _SENSITIVE.extend(test_site.sensitive_values())
+    source = rehearsal.source_dashboard_id(run.drive, run.sheets, run.site)
+
+    def refresh(site):
+        sync_content(run.gsc, SiteRun(site, gsc=run.gsc, sheets=run.sheets, drive=run.drive), None, force=True)
+
+    try:
+        content_copy_test.run(run.drive, run.sheets, run.site, test_site, source, refresh,
+                              run.site.deck.site_label or run.name)
+    except content_copy_test.CopyTestError as e:
+        raise GscPulseError(f"copy test: {e}") from None
+    print("  ✅  The refresh on the copy kept every row and every column of yours")
+
+
 def create_content_test(mode: str, limit: int = 0):
     """Content creation on the fake test site and nowhere else: makes the fake world, runs the briefs and/or
     the drafts on its three sites with the real AI, then tests the "done" checklist (content_accept.py).
@@ -1059,6 +1092,12 @@ def main():
             raise GscPulseError("page type discovery: the site could not be reached")
         discover_page_types(run.gsc, run.sheets, discover_site, start_date, end_date)
         print(f"  ✅  Done — updated at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        return
+
+    # ---- A refresh of the content dashboard on a copy of it: its own command, nothing else runs -----------------
+    copy_site = os.environ.get("CONTENT_COPY_SITE", "").strip().lower()
+    if copy_site:
+        content_copy_command(copy_site, enabled)
         return
 
     # ---- The second run: build and send the decks of every site, with the texts that are ready -----
