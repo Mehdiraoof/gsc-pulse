@@ -448,6 +448,9 @@ def check_dashboard(test, fs, file_id, tab_names, urls_before=(), allow=()):
         order = sorted(range(len(rows)), key=lambda i: (score(rows[i]) is None, -(score(rows[i]) or 0)))
         settled_tail = [content.is_settled(rows[i]) for i in order]
         test.assertEqual(settled_tail, sorted(settled_tail), "settled rows sort below the live ones")
+        if fs.sorting:                                                  # the sheet itself, as the service orders it
+            here = [content.is_settled(r) for r in rows]
+            test.assertEqual(here, sorted(here), f"{name}: the rows of gone pages are at the bottom of the tab")
     test.assertTrue({content.url_key(u) for u in urls_before} <= present, "no row was lost")
     rules = [req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
              for book, req in fs.requests if book == file_id and "addConditionalFormatRule" in req]
@@ -469,6 +472,7 @@ class CleanupTests(base.Base):
 
     def setUp(self):
         super().setUp()
+        self.fs.sorting = True
         self.run_it()
         self.legacy = [
             {"Published URL": self.GONE, "Primary Keyword": "old gone", "Reason": "Page returns 404", "Date": "2026-10-01",

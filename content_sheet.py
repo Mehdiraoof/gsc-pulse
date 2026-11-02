@@ -476,14 +476,43 @@ def write_columns(sheets, file_id: str, tab: str, header: list, first_row: int, 
     tabs.patch_cells(sheets, file_id, updates)
 
 
-def sort_by_score(sheets, file_id: str, sid: int, header: list, rows: int):
-    """Sorts the data rows of a tab by Score, highest first; whole rows move together."""
+def sort_by_score(sheets, file_id: str, sid: int, header: list, rows: int, tab: str = ""):
+    """Sorts the data rows of a tab by Score, highest first; whole rows move together. Rows of pages that are gone
+    (Removed, Redirected) end below every other row: a sort does not put empty scores last in every case, so after
+    it the blocks of those rows that are not yet at the bottom are moved there."""
     c = col_of(header, content.SCORE)
     if c is None or rows < 2:
         return
     history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
         {"sortRange": {"range": _range(sid, r1=1, r2=rows + 1, c1=0, c2=len(header)),
                        "sortSpecs": [{"dimensionIndex": c, "sortOrder": "DESCENDING"}]}}]}))
+    s = col_of(header, content.STATUS)
+    if s is None or not tab:
+        return
+    col = letters(s)
+    resp = history._read(sheets.spreadsheets().values().get(
+        spreadsheetId=file_id, range=f"'{tab}'!{col}2:{col}{rows + 1}"))
+    flags = [bool((r[0] if r else "") and str(r[0]).strip().lower() in content.SETTLED_STATUSES)
+             for r in (resp.get("values") or [])]
+    flags += [False] * (rows - len(flags))
+    moves = []
+    while True:
+        live_after = [i for i in range(len(flags)) if not flags[i]]
+        if not live_after:
+            break
+        last_live = live_after[-1]
+        start = next((i for i in range(last_live) if flags[i]), None)      # first settled row above a live row
+        if start is None:
+            break
+        end = start
+        while end < len(flags) and flags[end]:
+            end += 1
+        moves.append({"moveDimension": {
+            "source": {"sheetId": sid, "dimension": "ROWS", "startIndex": 1 + start, "endIndex": 1 + end},
+            "destinationIndex": 1 + len(flags)}})
+        flags = flags[:start] + flags[end:] + flags[start:end]
+    if moves:
+        history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": moves}))
 
 
 def read_header(sheets, file_id: str, tab: str) -> list:

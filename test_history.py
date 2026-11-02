@@ -150,7 +150,8 @@ class FakeSheets:
         self.fail_append_call = None        # raise on the Nth append call
         self.fail_state_update_once = False # raise on first State update that has a date
         self.locale = "en_US"
-        self.requests = []                  # (book id, request) of every batchUpdate request
+        self.sorting = False                # True: sortRange and moveDimension really reorder the rows
+        self.requests = []               # (book id, request) of every batchUpdate request
         self.value_calls = []               # (book id, valueInputOption, tab titles at that moment, [(range, values)])
         self.error_cells = {}               # (tab, "B7") -> error a formula cell shows when read back
 
@@ -290,6 +291,35 @@ class FakeSheets:
                                 if rg["startIndex"] < len(t.data):
                                     del t.data[rg["startIndex"]]
                                 t.row_count -= 1
+                    replies.append({})
+                elif "sortRange" in req and self.sorting:
+                    sr = req["sortRange"]
+                    rg = sr["range"]
+                    t = next(t for t in book.values() if t.sheet_id == rg["sheetId"])
+                    a, b = rg["startRowIndex"], rg["endRowIndex"]
+                    c1, c2 = rg["startColumnIndex"], rg["endColumnIndex"]
+                    while len(t.data) < b:
+                        t.data.append([])
+                    for row in t.data[a:b]:
+                        row.extend([""] * (c2 - len(row)))
+                    block = t.data[a:b]
+                    for spec in reversed(sr["sortSpecs"]):
+                        k, desc = spec["dimensionIndex"], spec["sortOrder"] == "DESCENDING"
+                        # the worst case seen on the real service: a cell with nothing in it comes first when descending
+                        block.sort(key=lambda r: (r[k] == "", r[k] if isinstance(r[k], (int, float)) else 0), reverse=desc)
+                    t.data[a:b] = block
+                    replies.append({})
+                elif "moveDimension" in req and self.sorting:
+                    mv = req["moveDimension"]
+                    src = mv["source"]
+                    t = next(t for t in book.values() if t.sheet_id == src["sheetId"])
+                    a, b, dest = src["startIndex"], src["endIndex"], mv["destinationIndex"]
+                    while len(t.data) < max(b, dest):
+                        t.data.append([])
+                    moved = t.data[a:b]
+                    rest = t.data[:a] + t.data[b:]
+                    at = dest - (b - a) if dest > a else dest
+                    t.data[:] = rest[:at] + moved + rest[at:]
                     replies.append({})
                 elif "deleteSheet" in req:
                     sid = req["deleteSheet"]["sheetId"]

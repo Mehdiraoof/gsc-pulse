@@ -1000,7 +1000,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 if url:                                    # never added again by the history or the sitemap
                     state.set("removed", content.url_key(url), kind, today)
                     state.delete("gone", content.url_key(url))
-        cs.sort_by_score(sheets, file_id, sid, header, len(recs))
+        cs.sort_by_score(sheets, file_id, sid, header, len(recs), t.name)
         result.rows[t.name] = len(recs)
         for rec in recs:
             vals = rec.get("vals")
