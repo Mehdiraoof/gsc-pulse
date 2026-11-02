@@ -296,6 +296,21 @@ def _split(cell) -> list:
     return [x.strip() for x in str(cell or "").split(",") if x.strip()]
 
 
+def primary_metrics(ctx: Context, stats, kw: str) -> tuple:
+    """(impressions, position) of the row's Primary Keyword, whatever keyword that is: on this page when the
+    page has the search, else across the site's searches, else empty."""
+    if not kw:
+        return "", ""
+    if stats is not None:
+        impr, pos = content.keyword_metrics(stats, kw)
+        if impr != "":
+            return impr, pos
+    top = ctx.data.qnorm.get(content.norm(kw))
+    if top and top[1]:
+        return _num(top[1]), (_num(top[2], 1) if top[2] else "")
+    return "", ""
+
+
 def page_values(ctx: Context, row: dict, stats, had_before: bool, hint: str = "") -> dict:
     """The cells PulseO owns for a row that has a page. `stats` is None when Search Console shows
     nothing for the page: the row stays, with zeros and empty cells (never removed, status and the
@@ -324,16 +339,16 @@ def page_values(ctx: Context, row: dict, stats, had_before: bool, hint: str = ""
     series = [d.month(periods.add_months(cm, -i)).get(key, (0, 0, 0))[0] for i in range(3, -1, -1)]
 
     competing = []
+    kw_impr, kw_pos = primary_metrics(ctx, stats, kw)
     if stats is None or not stats.impressions:
         adv = content.NO_DATA if had_before else content.WAITING
         out.update({"Clicks (90d)": 0, "Impressions (90d)": 0, "CTR": "", "Avg. Position": "",
-                    "Primary KW Impr.": "", "Primary KW Pos.": "", "Ranking Queries": "",
-                    "Secondary Keywords": "", "Competing Pages": "", "Score": 0})
+                    "Primary KW Impr.": kw_impr, "Primary KW Pos.": kw_pos, "Ranking Queries": "",
+                    "Secondary Keywords": str(row.get("Secondary Keywords", "") or ""), "Competing Pages": "", "Score": 0})
         sc, impressions, position = 0, 0, 0.0
         fanouts = []
     else:
         competing = content.competing_pages(d.pairs_by_query, kw, stats.url) if kw else []
-        kw_impr, kw_pos = content.keyword_metrics(stats, kw) if kw else ("", "")
         adv = content.advice(stats.impressions, stats.position, stats.ctr)
         brand_n = sum(n for q, _, n, _ in stats.queries if content.skip_query(q, ctx.brand))
         brand_c = sum(c for q, c, _, _ in stats.queries if content.skip_query(q, ctx.brand))
@@ -346,7 +361,8 @@ def page_values(ctx: Context, row: dict, stats, had_before: bool, hint: str = ""
             "CTR": round(stats.ctr, 4), "Avg. Position": _num(stats.position, 1),
             "Primary KW Impr.": kw_impr, "Primary KW Pos.": kw_pos,
             "Ranking Queries": len(stats.queries),
-            "Secondary Keywords": ", ".join(content.secondary_keywords(stats, ctx.brand, kw)),
+            "Secondary Keywords": content.merge_secondary(
+                row.get("Secondary Keywords", ""), content.secondary_keywords(stats, ctx.brand, kw), kw),
             "Competing Pages": content.competing_text(competing), "Score": sc})
         fanouts = content.fan_outs(stats, ctx.brand)
     out.update({
@@ -527,17 +543,16 @@ def _present(rows: list) -> set:
 
 
 def _targeted(recs: list) -> set:
-    """Normalized searches the rows already target: the Primary Keyword of every row, and the
-    Secondary Keywords of a topic row. A page row's secondary list is only what the page happens to
-    rank for (the tool rewrites it every month), so it does not keep a search from being an idea."""
+    """Normalized searches the rows already target: the Primary Keyword and the Secondary Keywords of
+    every row. A value in a Secondary Keywords cell stays there for good (a refresh only adds to it), so
+    a search that was merged into a page row is a search that page already covers, not a new idea."""
     out = set()
     for rec in recs:
         eff = _effective(rec)
         k = content.norm(eff[content.KEY])
         if k:
             out.add(k)
-        if not str(rec["row"].get(content.URL, "")).strip():
-            out.update(content.norm(x) for x in _split(eff["Secondary Keywords"]))
+        out.update(content.norm(x) for x in content.split_keywords(eff["Secondary Keywords"]))
     return out
 
 

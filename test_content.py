@@ -299,6 +299,22 @@ class GapTests(unittest.TestCase):
         found = self.gaps(queries, best, exclude_terms=["sex", "\u06af\u06cc"])
         self.assertEqual({g.keyword for g in found}, {"essex hotels", "\u0632\u0646\u062f\u06af\u06cc \u062e\u0648\u0628"})
 
+    def test_merge_secondary_keeps_every_value_and_only_adds(self):
+        merge = content.merge_secondary
+        self.assertEqual(merge("", ["a", "b"], "p"), "a, b")
+        self.assertEqual(merge("x, y", ["a", "b"], "p"), "x, y, a, b")
+        self.assertEqual(merge("x, y", ["Y", "a", "p", "P"], "p"), "x, y, a")             # no repeats, never the primary
+        self.assertEqual(merge("x", ["a"], "p", limit=1), "x")                              # full: nothing is added
+        self.assertEqual(merge("x", ["a", "b", "c"], "p", limit=3), "x, a, b")
+        self.assertEqual(merge("x, y,", ["a"], "p"), "x, y, a")                             # a trailing comma is tidied
+        text = "کلمه، دیگر\nسوم"
+        self.assertEqual(merge(text, [], "p"), text)                                        # nothing to add: untouched
+        self.assertEqual(merge(text, ["a"], "p"), text + ", a")
+        self.assertEqual(content.split_keywords("a,b، c\nd"), ["a", "b", "c", "d"])
+        for old in ("", "x, y", "a, b, c, d, e, f, g, h"):                                  # nothing is ever lost
+            out = merge(old, ["q1", "q2", "q3"], "p")
+            self.assertTrue(set(content.split_keywords(old)) <= set(content.split_keywords(out)))
+
     def test_is_excluded(self):
         self.assertTrue(content.is_excluded("free Sex videos", ["sex"]))
         self.assertFalse(content.is_excluded("essex", ["sex"]))

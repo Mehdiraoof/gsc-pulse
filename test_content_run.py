@@ -262,6 +262,16 @@ class RowTests(Base):
         self.assertIn("- garden shoes: Update to reach the top 3 [Articles]", body)
 
 
+class TargetedTests(unittest.TestCase):
+
+    def test_a_search_merged_into_a_page_row_is_not_proposed_as_an_idea(self):
+        recs = [{"row": {content.KEY: "kw", content.URL: "https://example.test/article/a",
+                         "Secondary Keywords": "merged idea, ایده، old primary"}},
+                {"row": {content.KEY: "topic", content.URL: ""}}]
+        got = content_run._targeted(recs)
+        self.assertEqual(got, {content.norm(x) for x in ("kw", "merged idea", "ایده", "old primary", "topic")})
+
+
 class OwnershipTests(Base):
 
     def setUp(self):
@@ -284,6 +294,36 @@ class OwnershipTests(Base):
         self.assertEqual((r[content.FANOUTS], r[content.RECOMMENDATIONS]), ("my own questions", "add three links"))
         self.assertEqual(r["Clicks (90d)"], "30")                   # PulseO's own columns are still written
         self.assertEqual(r["Primary KW Impr."], "")                 # the metrics follow the owner's keyword
+
+    def test_a_primary_keyword_that_is_set_stays_even_when_another_search_is_bigger(self):
+        self.assertEqual(self.find("Articles", A)[content.KEY], "garden shoes")          # 600 impressions, the top search
+        self.edit("Articles", A, content.KEY, "how to plant a tree")                      # 200 impressions
+        self.run_it(force=True)
+        self.run_it(force=True, today=date(2026, 11, 3))
+        r = self.find("Articles", A)
+        self.assertEqual(r[content.KEY], "how to plant a tree")
+        self.assertEqual((r["Primary KW Impr."], r["Primary KW Pos."]), ("200", "7.0"))   # the metrics follow it
+
+    def test_the_primary_keyword_metrics_follow_the_keyword_across_the_site_when_the_page_lacks_it(self):
+        self.edit("Articles", A, content.KEY, "about us")                                  # a search of another page
+        self.run_it(force=True)
+        r = self.find("Articles", A)
+        self.assertEqual((r[content.KEY], r["Primary KW Impr."], r["Primary KW Pos."]), ("about us", "500", "2.0"))
+
+    def test_secondary_keywords_that_are_there_stay_and_the_page_searches_are_added(self):
+        self.edit("Articles", A, "Secondary Keywords", "merged idea one, old primary keyword")
+        self.run_it(force=True)
+        self.assertEqual(self.find("Articles", A)["Secondary Keywords"],
+                         "merged idea one, old primary keyword, how to plant a tree")
+        self.run_it(force=True, today=date(2026, 11, 3))                                    # a second refresh changes nothing
+        self.assertEqual(self.find("Articles", A)["Secondary Keywords"],
+                         "merged idea one, old primary keyword, how to plant a tree")
+
+    def test_a_full_secondary_cell_is_left_exactly_as_it_is(self):
+        full = "۱ ایده، " + ", ".join(f"idea {i}" for i in range(2, 9))
+        self.edit("Articles", A, "Secondary Keywords", full)
+        self.run_it(force=True)
+        self.assertEqual(self.find("Articles", A)["Secondary Keywords"], full)
 
     def test_empty_fanouts_and_recommendations_are_filled_but_never_overwritten(self):
         self.edit("Articles", A, content.FANOUTS, "")

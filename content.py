@@ -355,6 +355,35 @@ def secondary_keywords(stats: PageStats, brand_terms: list, primary: str) -> lis
     return out
 
 
+def split_keywords(cell) -> list:
+    """The values of a keyword cell (separated by a comma, an Arabic comma or a new line)."""
+    return [x.strip() for x in re.split(r"[,\n،]+", str(cell or "")) if x.strip()]
+
+
+def merge_secondary(existing, found: list, primary: str = "", limit: int = SECONDARY_COUNT) -> str:
+    """The Secondary Keywords cell after a refresh. Every value already in the cell stays, exactly as it
+    is and in its place (the owner, or whoever works in the sheet, adds merged ideas and old primary
+    keywords there); the page's own searches (`found`) are added after them, while the list holds fewer
+    than `limit` values. The primary keyword and a search already in the cell are not added again.
+    Nothing is ever taken out."""
+    old = str(existing or "")
+    have = split_keywords(old)
+    seen = {norm(x) for x in have} | {norm(primary)}
+    room = limit - len(have)
+    added = []
+    for q in found:
+        if room <= 0:
+            break
+        if norm(q) in seen:
+            continue
+        seen.add(norm(q))
+        added.append(q)
+        room -= 1
+    if not added:
+        return old
+    return ", ".join([old.rstrip(" ,،\n")] * bool(old.strip()) + added)
+
+
 def fan_outs(stats: PageStats, brand_terms: list) -> list:
     out = []
     for q, _, _, _ in nonbrand_queries(stats, brand_terms):

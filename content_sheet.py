@@ -284,9 +284,11 @@ def guide_lines(label: str, tab_list: list) -> list:
         ["Clicks, Impressions, CTR, Avg. Position", "", "Google Search results for the last 90 days."],
         ["Clicks MoM / YoY", "", "Change in clicks vs last month and vs the same month last year."],
         ["AIO Impressions", "", "How often the page appeared in Google's AI answers (AI Overviews, AI Mode)."],
-        ["Primary KW Impr. / Pos.", "", "How the primary keyword itself performs on this page."],
+        ["Primary KW Impr. / Pos.", "", "How the keyword in Primary Keyword performs: on this page, else across the site. "
+                                       "Change the keyword and they follow at the next refresh."],
         ["Ranking Queries", "", "How many different searches show this page."],
-        ["Secondary Keywords", "", "Other searches the page already appears for. Cover them in the content."],
+        ["Secondary Keywords", "", "Other searches the page appears for, and any you add yourself (merged ideas, old primary keywords). "
+                                   "A refresh only adds to this column, it never removes a value. Cover them in the content."],
         ["Query Fan-outs", "", "The follow-up questions people (and Google's AI) ask around the topic. Answer "
                                "each in a short section."],
         ["Entities", "", "People, places, books and concepts the page should name clearly."],
