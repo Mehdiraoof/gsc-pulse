@@ -353,7 +353,7 @@ class OpportunitySlideTests(unittest.TestCase):
         self.assertEqual(d["cards"][0]["sub"], "+4.8% impressions")
         self.assertEqual([c["label"] for c in d["cards"]], ["Whole site", "Guides", "Blog & other", "Shop"])
         self.assertEqual(d["cards"][3]["tone"], cd.GOOD)
-        self.assertIn("Guides grow most next month: refresh the top pages from slide 11 first.", d["bullets"])
+        self.assertIn("Guides grow most next month: refresh the top pages from slide 10 first.", d["bullets"])
         self.assertTrue(any("Update /guide/k/ before October: it grew +50% into October last year." == b
                             for b in d["bullets"]))
 
@@ -467,10 +467,10 @@ class RenderingTests(unittest.TestCase):
         text = "\n".join(texts_of(build()))
         for needle in ("HEADLINE", "This month in one line", "SEPTEMBER 2026 VS AUG AND VS SEP 2025",
                        "Scorecard", "Rankings that climbed", "What grew this month",
-                       "New searches finding Example", "Our work this month", "13-month trend",
+                       "New searches finding Example", "13-month trend",
                        "Performance by section", "Quick wins: almost on top", "Pages to update",
                        "New content ideas", "Get ready for October", "What we're watching",
-                       "Next month's focus", "Mehdi fills this slide before sending.",
+                       "Next month's focus",
                        "Example ranks higher than it has all year."):
             self.assertIn(needle, text, needle)
 
@@ -518,7 +518,7 @@ class RenderingTests(unittest.TestCase):
 
     def test_a_persian_deck_is_built_from_the_persian_template_and_texts(self):
         prs = build("fa")
-        self.assertEqual(len(prs.slides), 15)
+        self.assertEqual(len(prs.slides), 14)
         text = "\n".join(texts_of(prs))
         self.assertIn("گزارش ماهانه سئو", text)
         self.assertIn("فعلاً اقدامی لازم نیست", text)
@@ -548,7 +548,7 @@ class TextsTests(unittest.TestCase):
     def test_persian_content_is_built_too(self):
         c = client("fa")
         slides = c.slides()
-        self.assertEqual(len(slides), 14)
+        self.assertEqual(len(slides), 13)
         self.assertEqual(dict(slides)["headline"]["headline"], "Example بالاتر از تمام سال گذشته رتبه گرفته است.")
 
 
@@ -936,14 +936,14 @@ class WatchingTests(unittest.TestCase):
         d = dict(client().slides())["watch"]
         self.assertEqual(d["items"][0]["title"], "Shop")
         self.assertEqual(d["items"][0]["body"],
-                         "Down 35% on last year; the update plan on slides 10 to 12 targets this.")
+                         "Down 35% on last year; the update plan on slides 9 to 11 targets this.")
 
     def test_this_months_rise_is_mentioned_calmly(self):
         rep = report()
         rep.rows[(fx.MONTHS[-1], "Shop")]["Clicks MoM %"] = 4.2
         body = dict(cd.ClientReport(rep, "en", "Example").slides())["watch"]["items"][0]["body"]
-        self.assertEqual(body, "Down 35% on last year, but up 4% this month; the update plan on slides 10 to "
-                               "12 targets this.")
+        self.assertEqual(body, "Down 35% on last year, but up 4% this month; the update plan on slides 9 to "
+                               "11 targets this.")
 
     def test_the_plan_sentence_follows_the_slides_that_exist(self):
         c = client()

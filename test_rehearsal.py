@@ -179,6 +179,37 @@ class NoScheduledAiTests(unittest.TestCase):
                         callers.setdefault(fn.name, set()).add(f"{node.func.value.id}.{node.func.attr}")
         self.assertEqual(set(callers), {"create_content_test", "one_run", "rehearsal_command", "probe_ai"}, callers)   # one_run: inside create_content_test
 
+    def test_only_the_known_modules_can_reach_an_ai_and_the_api_address_is_nowhere_else(self):
+        import ast
+        import glob
+        importers = {}
+        for path in sorted(glob.glob("*.py")):
+            if path.startswith("test_"):
+                continue
+            for node in ast.walk(ast.parse(self.read(path))):
+                names = [a.name for a in node.names] if isinstance(node, ast.Import) else (
+                    [node.module] if isinstance(node, ast.ImportFrom) and node.module else [])
+                for name in names:
+                    if name in ("ai_client", "summary", "anthropic", "openai", "google.generativeai"):
+                        importers.setdefault(name, set()).add(path[:-3])
+        # the content creation (a manual test command), the old summary path (off unless ALLOW_API_AI), the main script
+        self.assertEqual(importers, {"ai_client": {"content_create", "gsc_pulse"}, "summary": {"deck_runner"}})
+        holders = [p for p in glob.glob("*.py") if not p.startswith("test_")
+                   and ("generativelanguage.googleapis.com" in self.read(p) or "api.anthropic.com" in self.read(p))]
+        self.assertEqual(sorted(holders), ["ai_client.py", "summary.py"])
+
+    def test_the_old_api_summary_is_off_unless_it_is_allowed_by_name(self):
+        import summary
+        calls = []
+        post = lambda *a, **k: calls.append(1) or b"{}"                    # noqa: E731
+        for env in ({"ANTHROPIC_API_KEY": "k"}, {"ANTHROPIC_API_KEY": "k", "ALLOW_API_AI": ""},
+                    {"ANTHROPIC_API_KEY": "k", "ALLOW_API_AI": "no"}, {"ALLOW_API_AI": "1"}):
+            self.assertIsNone(summary.request_summary("x", "en", env, post))
+        self.assertEqual(calls, [])
+        workflow = self.read(".github/workflows/gsc_pulse.yml")
+        self.assertNotIn("ANTHROPIC_API_KEY", workflow)                    # the key is not even in the run
+        self.assertNotIn("ALLOW_API_AI", workflow)
+
     def test_the_test_commands_send_nothing_except_the_one_asked_for_summary(self):
         import ast
         tree = ast.parse(self.read("gsc_pulse.py"))

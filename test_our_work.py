@@ -9,6 +9,12 @@ from unittest import mock
 from pptx import Presentation
 
 import ai_notes
+import client_fixtures as fx
+import deck_fixtures as dfx
+import client_i18n
+import deck_runner
+import decks
+import re
 import client_data as cd
 import client_deck
 import content
@@ -236,6 +242,234 @@ class ScanTests(unittest.TestCase):
                           (D(10, 12), "Whole site", "Schema added", False),
                           (D(10, 14), "/x", "Done", True)])           # an empty "Show to client" means yes
         self.assertEqual(wi.read_manual(fs, "NOBOOK"), [])
+
+
+# --------------------------------------------------------------------------- #
+# The AI Notes tab
+# --------------------------------------------------------------------------- #
+
+class AiNotesTests(unittest.TestCase):
+
+    def setUp(self):
+        self.fs = FakeSheets()
+        self.fs.add_book("R")
+
+    def slot(self, text="input", period="2026-10"):
+        return ai_notes.Slot("monthly", period, ai_notes.OUR_WORK_INTRO, text, "fa")
+
+    def rows(self):
+        return ai_notes.read_rows(self.fs, "R")
+
+    def test_a_row_per_slot_waiting_and_a_second_run_adds_nothing(self):
+        self.assertEqual(ai_notes.prepare(self.fs, "R", [self.slot()], TODAY, lambda s: None), {"added": 1, "refreshed": 0})
+        (row,) = self.rows()
+        self.assertEqual((row["Report"], row["Period"], row["Slot"], row["Status"], row["Text"], row["Language"],
+                          row["Created"]), ("monthly", "2026-10", "our_work_intro", "waiting", "", "fa", "2026-11-12"))
+        self.assertEqual(ai_notes.prepare(self.fs, "R", [self.slot()], TODAY, lambda s: None), {"added": 0, "refreshed": 0})
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_the_input_of_a_waiting_row_is_refreshed_but_a_ready_row_and_the_text_are_left_alone(self):
+        ai_notes.prepare(self.fs, "R", [self.slot("old")], TODAY, lambda s: None)
+        self.assertEqual(ai_notes.prepare(self.fs, "R", [self.slot("new")], TODAY, lambda s: None)["refreshed"], 1)
+        self.assertEqual(self.rows()[0]["Input"], "new")
+        tab = self.fs.books["R"][ai_notes.TAB]
+        tab.data[1][ai_notes.COL["Text"]] = "Written by the task."
+        tab.data[1][ai_notes.COL["Status"]] = "ready"
+        before = [list(r) for r in tab.data]
+        self.assertEqual(ai_notes.prepare(self.fs, "R", [self.slot("newer")], TODAY, lambda s: None)["refreshed"], 0)
+        self.assertEqual(tab.data, before)                                           # nothing changed, text included
+
+    def test_the_text_and_status_columns_are_never_patched_by_the_tool(self):
+        writes = []
+        real = ai_notes.tabs.patch_cells
+
+        def spy(sheets, book, updates):
+            writes.extend(updates)
+            return real(sheets, book, updates)
+
+        with mock.patch.object(ai_notes.tabs, "patch_cells", spy):
+            ai_notes.prepare(self.fs, "R", [self.slot("a")], TODAY, lambda s: None)
+            ai_notes.prepare(self.fs, "R", [self.slot("b")], TODAY, lambda s: None)
+        self.assertTrue(writes)
+        for cell, _ in writes:
+            self.assertEqual(cell.split("!")[1][0], "D", cell)                     # only the Input column
+
+    def test_old_rows_stay_and_only_ready_rows_with_a_text_are_used(self):
+        ai_notes.prepare(self.fs, "R", [self.slot(period="2026-09"), self.slot(period="2026-10"),
+                                        ai_notes.Slot("weekly", "2026-W43", ai_notes.WEEKLY_SUMMARY, "x", "en")],
+                         TODAY, lambda s: None)
+        tab = self.fs.books["R"][ai_notes.TAB]
+        tab.data[1][ai_notes.COL["Text"]], tab.data[1][ai_notes.COL["Status"]] = "September text", "ready"
+        tab.data[2][ai_notes.COL["Status"]] = "ready"                                   # ready but no text yet
+        ai_notes.prepare(self.fs, "R", [self.slot(period="2026-10")], TODAY, lambda s: None)
+        self.assertEqual(len(self.rows()), 3)
+        self.assertEqual(ai_notes.texts_for(self.fs, "R", "monthly", "2026-09"), ({"our_work_intro": "September text"}, []))
+        self.assertEqual(ai_notes.texts_for(self.fs, "R", "monthly", "2026-10"), ({}, ["our_work_intro"]))
+        self.assertEqual(ai_notes.texts_for(self.fs, "R", "weekly", "2026-W99"), ({}, []))
+
+    def test_what_the_task_is_told_holds_the_numbers_and_forbids_names(self):
+        text = ai_notes.our_work_intro_input("Example", "October 2026", "fa", "- New page: x (5 Oct): clicks new -> 168")
+        self.assertIn("Persian", text)
+        self.assertIn("clicks new -> 168", text)
+        self.assertIn("never mention a tool", text.lower().replace("\n", " "))
+        weekly = ai_notes.weekly_summary_input("Clicks: 325", "Example", "Week 41", "en")
+        self.assertIn("Clicks: 325", weekly)
+        self.assertIn("Next steps:", weekly)
+
+    def test_the_weekly_summary_is_read_from_lines_or_from_json(self):
+        lines = "Summary\n- Clicks fell 10%.\n- Impressions fell too.\n\nNext steps:\n- Check indexing.\n- Update the page."
+        self.assertEqual(ai_notes.parse_weekly_summary(lines),
+                         (["Clicks fell 10%.", "Impressions fell too."], ["Check indexing.", "Update the page."]))
+        self.assertEqual(ai_notes.parse_weekly_summary('{"bullets": ["a"], "next_steps": ["b"]}'), (["a"], ["b"]))
+        persian = "- کلیک کم شد.\nگام‌های بعدی:\n- بررسی"
+        self.assertEqual(ai_notes.parse_weekly_summary(persian), (["کلیک کم شد."], ["بررسی"]))
+        self.assertIsNone(ai_notes.parse_weekly_summary("no bullets here"))
+        self.assertIsNone(ai_notes.parse_weekly_summary(""))
+
+
+# --------------------------------------------------------------------------- #
+# What is shown to whom (checklist 8)
+# --------------------------------------------------------------------------- #
+
+MOVED = {content.url_key(u("/article/moved")): {content.url_key(u("/article/old-url"))}}
+
+
+def measured(kind, day, scope, what="", title="", show=True):
+    it = wi.WorkItem(kind, day, scope=scope, what=what, title=title, show=show)
+    wi.measure(it, table(), FINAL, MOVED)
+    return it
+
+
+def all_items():
+    return [measured(wi.NEW, D(10, 5), u("/article/new"), title="Blue shoes guide"),
+            measured(wi.UPDATED, D(10, 12), u("/article/updated"), title="Garden tools"),
+            measured(wi.MANUAL, D(10, 10), u("/article/moved"), what="Old address redirected"),       # no gain
+            measured(wi.MANUAL, D(10, 25), u("/article/updated"), what="Schema added"),               # fresh, positive
+            measured(wi.MANUAL, D(10, 12), "/article/*", what="Internal links", show=False)]          # not for the client
+
+
+def T_of(lang):
+    return {**i18n.table(lang), **client_i18n.table(lang)}
+
+
+class WhoSeesWhatTests(unittest.TestCase):
+
+    def test_the_client_gets_the_good_and_the_fresh_positive_best_first_and_never_a_hidden_or_failed_item(self):
+        shown = wi.for_client(all_items(), TODAY)
+        # the updated page gained 140 clicks, the new page 168, the fresh schema work 20
+        self.assertEqual([(i.kind, i.day) for i in shown], [(wi.NEW, D(10, 5)), (wi.UPDATED, D(10, 12)), (wi.MANUAL, D(10, 25))])
+        self.assertNotIn("Old address redirected", [i.what for i in shown])                        # it did not help
+        self.assertNotIn("Internal links", [i.what for i in shown])                                # "Show to client" = No
+
+    def test_the_owner_sees_everything_of_the_last_90_days_including_what_did_not_help(self):
+        shown = wi.for_owner(all_items(), TODAY)
+        self.assertEqual({i.what or i.title for i in shown},
+                         {"Blue shoes guide", "Garden tools", "Old address redirected", "Schema added", "Internal links"})
+        old = measured(wi.MANUAL, D(7, 1), u("/article/updated"), what="Too old")
+        self.assertNotIn("Too old", [i.what for i in wi.for_owner([old], TODAY)])
+        self.assertEqual(wi.for_client([old], TODAY), [])
+
+    def test_at_most_eight_and_two_slides_from_six(self):
+        many = [measured(wi.UPDATED, D(10, 12), u("/article/updated"), title=f"p{i}") for i in range(11)]
+        self.assertEqual(len(wi.for_client(many, TODAY)), wi.MAX_CLIENT_ITEMS)
+        T = T_of("en")
+        self.assertEqual(len(work_view.client_pages(many[:5], T, "en", "Intro")), 1)
+        pages = work_view.client_pages(many[:8], T, "en", "Intro")
+        self.assertEqual([len(p["rows"]) for p in pages], [4, 4])
+        self.assertEqual([p["intro"] for p in pages], ["Intro", ""])
+        self.assertTrue(pages[1]["title"].endswith("(2/2)"))
+        self.assertEqual(work_view.client_pages([], T, "en", "Intro"), [])
+
+
+# --------------------------------------------------------------------------- #
+# The slide in the decks (checklist 9, 10)
+# --------------------------------------------------------------------------- #
+
+def deck_texts(prs):
+    out = []
+    for slide in prs.slides:
+        for shp in slide.shapes:
+            if shp.has_text_frame:
+                out.append(shp.text_frame.text)
+            if getattr(shp, "has_table", False) and shp.has_table:
+                for row in shp.table.rows:
+                    out += [c.text_frame.text for c in row.cells]
+    return out
+
+
+class SlideTests(unittest.TestCase):
+
+    def build(self, lang, items, intro=""):
+        data = client_deck.build_monthly(fx.monthly_report(), fx.Cfg(lang), deck_runner.TEMPLATE_DIR, None, None,
+                                         work=items, work_intro=intro)
+        return Presentation(io.BytesIO(data))
+
+    def work_slides(self, prs, title):
+        return [s for s in prs.slides if any(sh.has_text_frame and sh.text_frame.text.startswith(title) for sh in s.shapes)]
+
+    def test_the_english_slide(self):
+        items = wi.for_client(all_items(), TODAY)
+        prs = self.build("en", items, intro="This month we refreshed three pages.")
+        (slide,) = self.work_slides(prs, "Our work and its results")
+        mine = "\n".join(sh.text_frame.text for sh in slide.shapes if sh.has_text_frame) + "\n" + "\n".join(
+            c.text_frame.text for sh in slide.shapes if getattr(sh, "has_table", False) and sh.has_table
+            for row in sh.table.rows for c in row.cells)
+        text = "\n".join(deck_texts(prs))
+        self.assertIsNone(re.search(r"(?<![A-Za-z])AI(?![A-Za-z])", mine))        # no "AI" on the slide itself
+        self.assertIn("This month we refreshed three pages.", text)
+        self.assertIn("Updated page: Garden tools", text)
+        self.assertIn("New page: Blue shoes guide", text)
+        self.assertIn("Schema added (early results)", text)
+        self.assertIn("280 → 420", text)                       # clicks before to after (the updated page, by hand)
+        self.assertIn("8.0 → 6.0", text)                       # average position
+        self.assertIn("+50% · site +6%", text)                 # the page against the rest of the site
+        self.assertIn("new → 168", text)
+        for hidden in ("Internal links", "Old address redirected", "Mehdi fills", "PulseO", "Claude"):
+            self.assertNotIn(hidden, text, hidden)
+
+    def test_a_fixed_intro_when_nothing_was_written_and_no_slide_without_items(self):
+        items = wi.for_client(all_items(), TODAY)[:1]
+        text = "\n".join(deck_texts(self.build("en", items)))
+        self.assertIn("Here is what we did this period and what it achieved.", text)
+        nothing = "\n".join(deck_texts(self.build("en", [])))
+        self.assertNotIn("Our work and its results", nothing)
+        self.assertNotIn("Mehdi fills this slide", nothing)
+
+    def test_the_persian_slide_is_persian_and_right_to_left(self):
+        items = wi.for_client(all_items(), TODAY)
+        title = "کارهای ما و نتیجه آن‌ها"
+        prs = self.build("fa", items, intro="این ماه سه صفحه را به‌روز کردیم.")
+        (slide,) = self.work_slides(prs, title)
+        text = "\n".join(deck_texts(prs))
+        self.assertIn("صفحه جدید:", text)                                  # New page:
+        self.assertIn("به‌روزرسانی صفحه:", text)        # Updated page:
+        self.assertIn("نتیجه اولیه", text)                         # early results
+        self.assertIn("280 ← 420", text)                        # the arrow points from before to after, right to left
+        table_xml = [sh._element.xml for sh in slide.shapes if getattr(sh, "has_table", False) and sh.has_table][0]
+        self.assertIn('rtl="1"', table_xml)
+        self.assertNotIn("Our work and its results", text)
+
+    def test_persian_digits_when_the_switch_is_on(self):
+        T = T_of("fa")
+        item = wi.for_client(all_items(), TODAY)[1]                    # the updated page: 280 to 420, on 12 Oct
+        with mock.patch.object(i18n, "PERSIAN_DIGITS", True):
+            row = work_view.client_row(item, T, "fa")
+        self.assertEqual(row["clicks"], "۲۸۰ ← ۴۲۰")
+        self.assertEqual(row["date"], "۱۲ " + T["months_short"][9])
+        self.assertEqual(work_view.client_row(item, T, "fa")["clicks"], "280 ← 420")
+
+    def test_the_owner_weekly_section(self):
+        cfg = fx.Cfg("en")
+        data = decks.build_deck(dfx.weekly_report(), cfg, deck_runner.TEMPLATE_DIR, None, None,
+                                work=wi.for_owner(all_items(), TODAY), handoff=True)
+        text = "\n".join(deck_texts(Presentation(io.BytesIO(data))))
+        self.assertIn("Changes in progress", text)
+        self.assertIn("Old address redirected", text)                # what did not help is here
+        self.assertIn("no clear gain", text)
+        self.assertIn("not shown to the client", text)               # "Show to client" = No
+        self.assertNotIn("Summary not generated automatically", text)  # handoff, no text: no summary slide at all
+        without = decks.build_deck(dfx.weekly_report(), cfg, deck_runner.TEMPLATE_DIR, None, None, work=[], handoff=True)
+        self.assertNotIn("Changes in progress", "\n".join(deck_texts(Presentation(io.BytesIO(without)))))
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import smtplib
+import types
 import sys
 import unittest
 from datetime import date, timedelta
@@ -17,9 +18,15 @@ from unittest import mock
 
 from pptx import Presentation
 
+import ai_client
+import ai_notes
+import deck_data as dd
 import deck_runner
 import gsc_pulse
 import mailer
+import our_work
+import test_our_work as tow
+import work_items as wi
 import reports
 import sites
 import summary
@@ -723,6 +730,155 @@ class NamingAndPrivacyTests(unittest.TestCase):
         for name in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "REBUILD_DECKS"):
             self.assertIn(name, text)
         self.assertIn("rebuild_decks:", text)
+
+
+class AiCalled(BaseException):
+    """Raised by anything that would reach an AI: not an Exception, so nothing can swallow it."""
+
+
+class HandoffTests(ReportsTestCase):
+    """The decks are built by a second run, from the texts in AI Notes; nothing in a real-site run calls an AI."""
+
+    SUMMARY = "- Clicks fell sharply.\n- Impressions fell too.\nNext steps:\n- Check indexing."
+
+    def setUp(self):
+        super().setUp()
+        reset_smtp()
+        self.site = site_with(deck=deck(ai_summary=True))
+        self.run_reports(self.site)
+        self.env = {"SMTP_USER": USER}
+        self.smtp = mailer.SmtpSettings("smtp.test", 587, USER, "pw")
+        self.sent = []
+
+    def run_decks(self, extras=None, env=None, rebuild=False):
+        self.logs.clear()
+        return deck_runner.run_decks(self.sheets, RID, self.site, self.smtp, self.env if env is None else env,
+                                     rebuild=rebuild, log=self.logs.append, send=lambda s, m: self.sent.append(m),
+                                     fetch_logo=lambda url: None, extras=extras)
+
+    def extras(self, texts=None, waiting=()):
+        today = date(2026, 11, 12)
+
+        def extras(kind, report):
+            items = tow.all_items()
+            return {"texts": dict(texts or {}), "waiting": list(waiting),
+                    "work": wi.for_client(items, today) if kind == "monthly" else wi.for_owner(items, today)}
+        return extras
+
+    def decks_text(self):
+        return [tow.deck_texts(Presentation(io.BytesIO(list(m.iter_attachments())[0].get_content()))) for m in self.sent]
+
+    def test_with_every_slot_ready_the_decks_show_the_texts(self):
+        ready = {ai_notes.WEEKLY_SUMMARY: self.SUMMARY, ai_notes.OUR_WORK_INTRO: "A short intro written for this month."}
+        self.run_decks(self.extras(ready))
+        monthly, weekly = ["\n".join(t) for t in self.decks_text()]
+        self.assertIn("Our work and its results", monthly)
+        self.assertIn("A short intro written for this month.", monthly)
+        self.assertIn("Clicks fell sharply.", weekly)
+        self.assertIn("Check indexing.", weekly)
+        self.assertIn("Changes in progress", weekly)
+
+    def test_with_a_slot_waiting_the_deck_is_built_without_it_and_shows_no_placeholder(self):
+        ready = {ai_notes.WEEKLY_SUMMARY: self.SUMMARY, ai_notes.OUR_WORK_INTRO: "Intro."}
+        self.run_decks(self.extras(ready))
+        with_text = [len(Presentation(io.BytesIO(list(m.iter_attachments())[0].get_content())).slides) for m in self.sent]
+        self.sent.clear()
+        result = self.run_decks(self.extras({}, waiting=[ai_notes.WEEKLY_SUMMARY, ai_notes.OUR_WORK_INTRO]), rebuild=True)
+        self.assertEqual((result.sent, result.failed), (["monthly", "weekly"], []))
+        without = [len(Presentation(io.BytesIO(list(m.iter_attachments())[0].get_content())).slides) for m in self.sent]
+        self.assertEqual(without[0], with_text[0])                       # the monthly deck: only the intro sentence differs
+        self.assertEqual(without[1], with_text[1] - 1)                   # the weekly deck: no summary slide at all
+        monthly, weekly = ["\n".join(t) for t in self.decks_text()]
+        self.assertIn("Here is what we did this period and what it achieved.", monthly)
+        for placeholder in ("Summary not generated automatically", "To get a written summary", "Mehdi fills",
+                            "Recommended next steps", "waiting"):
+            self.assertNotIn(placeholder, monthly + weekly, placeholder)
+        self.assertTrue(any("no text yet for weekly_summary, our_work_intro" in line for line in self.logs))
+
+    def test_no_ai_is_called_by_a_real_site_run_in_any_way(self):
+        def boom(*a, **k):
+            raise AiCalled()
+
+        env = {"SMTP_USER": USER, "ANTHROPIC_API_KEY": "key", "GEMINI_API_KEY": "key"}
+        with mock.patch("urllib.request.urlopen", boom), mock.patch.object(summary, "_post", boom), \
+                mock.patch.object(ai_client.Gemini, "generate", boom), mock.patch.object(ai_client.Anthropic, "generate", boom):
+            self.run_decks(self.extras({ai_notes.WEEKLY_SUMMARY: self.SUMMARY}), env=env)       # the new way
+            self.sent.clear()
+            self.run_decks(None, env=env, rebuild=True)                                          # the old way, key present
+            self.assertEqual(len(self.sent), 2)
+            self.assertIsNone(summary.request_summary("x", "en", env, boom))                     # off unless ALLOW_API_AI
+            self.assertTrue(any("no summary text" in line for line in self.logs))
+
+    def test_the_monthly_deck_does_not_wait_for_ai_overviews(self):
+        self.run_decks(self.extras({}))
+        self.assertEqual(len(self.sent), 2)                               # no AIO export in the folder: the report goes out
+
+    def run_sync_decks(self, handoff, **kw):
+        run = gsc_pulse.SiteRun(self.site)
+        with mock.patch.object(deck_runner, "run_decks", return_value=deck_runner.DeckResult()) as m, \
+                mock.patch.dict(os.environ, {"AI_HANDOFF": "on" if handoff else ""}):
+            gsc_pulse.sync_decks(self.sheets, run, self.smtp, **kw)
+        return run, m
+
+    def test_the_sync_run_no_longer_sends_the_decks_when_the_handoff_is_on(self):
+        run, m = self.run_sync_decks(True)
+        m.assert_not_called()
+        self.assertIn("held", run.decks_text)
+        run, m = self.run_sync_decks(True, build=True)
+        self.assertIsNotNone(m.call_args.kwargs["extras"])                 # the second run builds with the texts
+        run, m = self.run_sync_decks(False)
+        self.assertIsNone(m.call_args.kwargs["extras"])                    # the switch is off: as before
+        run, m = self.run_sync_decks(True, rebuild_decks={"monthly"})
+        self.assertIsNotNone(m.call_args.kwargs["extras"])                 # a rebuild asked for by hand still sends
+
+    def test_the_second_run_waits_for_the_texts_and_then_builds_without_the_missing_ones(self):
+        runs = [types.SimpleNamespace(name="site-1", site=self.site, sheets=self.sheets, status="pending")]
+        clock = [0]
+        slept = []
+
+        def sleep(s):
+            clock[0] += s
+            slept.append(s)
+
+        answers = [["monthly:our_work_intro"], ["monthly:our_work_intro"], []]
+        with mock.patch.object(deck_runner, "pending_texts", side_effect=lambda *a: answers.pop(0)):
+            self.assertEqual(gsc_pulse.wait_for_texts(runs, 60, sleep, lambda: clock[0]), [])
+        self.assertEqual(slept, [300, 300])
+        clock[0], slept[:] = 0, []
+        with mock.patch.object(deck_runner, "pending_texts", return_value=["weekly:weekly_summary"]):
+            self.assertEqual(gsc_pulse.wait_for_texts(runs, 10, sleep, lambda: clock[0]), ["site-1:weekly:weekly_summary"])
+        self.assertEqual(slept, [300, 300])                                # at most the minutes asked for
+        with mock.patch.object(deck_runner, "pending_texts", return_value=["x"]):
+            self.assertEqual(len(gsc_pulse.wait_for_texts(runs, 0, sleep, lambda: clock[0])), 1)   # 0 minutes: no waiting
+
+    def test_what_a_deck_still_waits_for_is_read_from_the_tab(self):
+        monthly, weekly = dd.load_monthly(self.sheets, RID, self.site), dd.load_weekly(self.sheets, RID, self.site)
+        ai_notes.prepare(self.sheets, RID, [ai_notes.Slot("monthly", monthly.period, ai_notes.OUR_WORK_INTRO, "x", "en"),
+                                            ai_notes.Slot("weekly", weekly.period, ai_notes.WEEKLY_SUMMARY, "y", "en")],
+                         date(2026, 11, 12), lambda s: None)
+        self.assertEqual(deck_runner.pending_texts(self.sheets, RID, self.site),
+                         ["monthly:our_work_intro", "weekly:weekly_summary"])
+        tab = self.sheets.books[RID][ai_notes.TAB]
+        tab.data[1][ai_notes.COL["Text"]], tab.data[1][ai_notes.COL["Status"]] = "Intro.", "ready"
+        self.assertEqual(deck_runner.pending_texts(self.sheets, RID, self.site), ["weekly:weekly_summary"])
+        self.run_decks(self.extras({}))                                   # both decks went out: nothing is waited for
+        self.assertEqual(deck_runner.pending_texts(self.sheets, RID, self.site), [])
+
+    def test_the_sync_run_writes_the_rows_the_task_needs(self):
+        items = tow.all_items()
+        with mock.patch.object(our_work, "items_for", return_value=items):
+            our_work.prepare_notes(None, self.sheets, self.site, date(2026, 11, 12), None, lambda s: None)
+            first = len(ai_notes.read_rows(self.sheets, RID))
+            our_work.prepare_notes(None, self.sheets, self.site, date(2026, 11, 12), None, lambda s: None)
+        rows = ai_notes.read_rows(self.sheets, RID)
+        self.assertEqual((first, len(rows)), (2, 2))                       # a second run adds nothing
+        self.assertEqual({(r["Report"], r["Slot"], r["Status"]) for r in rows},
+                         {("weekly", "weekly_summary", "waiting"), ("monthly", "our_work_intro", "waiting")})
+        monthly = [r for r in rows if r["Slot"] == "our_work_intro"][0]
+        self.assertIn("Updated page: Garden tools", monthly["Input"])      # the facts the writer works from
+        self.assertIn("280 → 420", monthly["Input"])
+        titles, _ = reports.history.grid_info(self.sheets, RID)
+        self.assertIn(wi.OUR_WORK_TAB, titles)                             # the manual tab exists for Mehdi and Claude
 
 
 if __name__ == "__main__":
