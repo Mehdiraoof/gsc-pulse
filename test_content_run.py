@@ -268,8 +268,10 @@ class TargetedTests(unittest.TestCase):
         recs = [{"row": {content.KEY: "kw", content.URL: "https://example.test/article/a",
                          "Secondary Keywords": "merged idea, ایده، old primary"}},
                 {"row": {content.KEY: "topic", content.URL: ""}}]
+        recs[0]["vals"] = {"Secondary Keywords": "merged idea, old primary, fresh from this refresh"}
         got = content_run._targeted(recs)
         self.assertEqual(got, {content.norm(x) for x in ("kw", "merged idea", "ایده", "old primary", "topic")})
+        self.assertNotIn("fresh from this refresh", got)                  # what this refresh adds is not "already covered"
 
 
 class OwnershipTests(Base):

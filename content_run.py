@@ -543,16 +543,20 @@ def _present(rows: list) -> set:
 
 
 def _targeted(recs: list) -> set:
-    """Normalized searches the rows already target: the Primary Keyword and the Secondary Keywords of
-    every row. A value in a Secondary Keywords cell stays there for good (a refresh only adds to it), so
-    a search that was merged into a page row is a search that page already covers, not a new idea."""
+    """Normalized searches the rows already target: the Primary Keyword of every row, the Secondary
+    Keywords of a topic row, and the Secondary Keywords a page row already had before this refresh. Those
+    stay in the cell for good (a refresh only adds to it), so a search merged into a page row is a search
+    that page already covers, not a new idea. What this refresh itself adds from the page's own searches
+    does not count: a search far down a page about something else is still an idea."""
     out = set()
     for rec in recs:
         eff = _effective(rec)
         k = content.norm(eff[content.KEY])
         if k:
             out.add(k)
-        out.update(content.norm(x) for x in content.split_keywords(eff["Secondary Keywords"]))
+        has_page = bool(str(rec["row"].get(content.URL, "")).strip())
+        cell = rec["row"].get("Secondary Keywords", "") if has_page else eff["Secondary Keywords"]
+        out.update(content.norm(x) for x in content.split_keywords(cell))
     return out
 
 
