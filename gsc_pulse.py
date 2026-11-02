@@ -54,6 +54,7 @@ import fake_site
 import rehearsal
 import deck_runner
 import our_work
+import mail_policy
 import mailer
 import page_discovery
 import provision
@@ -588,15 +589,21 @@ def wait_for_texts(runs: list, minutes: int, sleep=time.sleep, clock=time.monoto
         sleep(max(1, min(300, deadline - clock())))
 
 
-def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False, test=False, build=False):
+def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False, test=False, build=False,
+               mail_off: str = ""):
     """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed. With the
-    handoff on the sync run does not send them: the second run (build) does, with the texts that are ready."""
+    handoff on the sync run does not send them: the second run (build) does, with the texts that are ready.
+    `mail_off` (a reason) means this run may not send email: nothing is built, nothing is marked as sent."""
     site = run.site
     if not site.deck.enabled:
         return
     site_header(run, "Decks")
     if not site.reports_sheet_id:
         print("decks: off (no reports sheet)\n")
+        return
+    if mail_off and not mark_only:
+        run.decks_text = mail_off
+        print(f"decks: {mail_off}\n")
         return
     if smtp is None:
         run.decks_text = "off (no SMTP settings)"
@@ -988,6 +995,8 @@ def main():
     smtp = mailer.settings_from_env(os.environ)
     if smtp:
         _SENSITIVE.extend(smtp.sensitive_values())
+    policy = mail_policy.Policy(os.environ)         # only the scheduled run emails by itself; a manual run only if asked
+    owner_smtp = smtp if policy.owner_mail() else None
     for key_name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
         if os.environ.get(key_name):
             _SENSITIVE.append(os.environ[key_name].strip())
@@ -1021,6 +1030,8 @@ def main():
     print("  └─────────────────────────────────────────────┘")
     print(f"  Sites  : {len(enabled)} enabled, {len(runs) - len(enabled)} disabled")
     print(f"  Period : {start_date}  →  {end_date}  ({days} days)")
+    if policy.banner():
+        print(f"  {policy.banner()}")
     print()
     for r in runs:
         if r.status == "disabled":
@@ -1040,7 +1051,7 @@ def main():
             r.gsc, r.sheets = gsc_service, sheets_service
     if me_runs:
         print("  Using your own Google account for the sites marked \"me\"")
-        connect_me(me_runs, smtp)
+        connect_me(me_runs, owner_smtp)
     print("  ✓  Connected to Google APIs\n")
     if discover_site:
         run = targets[0]
@@ -1060,7 +1071,7 @@ def main():
             try:
                 sync_decks(r.sheets, r, smtp, deck_rebuild_for(r, rebuild_decks, rebuild_deck_site, rebuild_deck_kind),
                            test=test_deck and bool(rebuild_deck_site) and r.name.lower() == rebuild_deck_site,
-                           build=True)
+                           build=True, mail_off="" if policy.decks(r.name) else mail_policy.NOT_SENT)
             except Exception as e:
                 r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
                 fail_site(r, e)
@@ -1110,7 +1121,7 @@ def main():
         if not r.v1_done or r.status == "failed" and r.reports_result is None:
             continue
         try:
-            sync_content(r.gsc, r, smtp,
+            sync_content(r.gsc, r, owner_smtp,
                          force=bool(rebuild_content_site) and r.name.lower() == rebuild_content_site,
                          cleanup_gone_since=(cleanup_gone_since if r.name.lower() == cleanup_gone_site else ""))
         except Exception as e:
@@ -1125,7 +1136,8 @@ def main():
             sync_decks(r.sheets, r, smtp, deck_rebuild_for(r, rebuild_decks, rebuild_deck_site,
                                                           rebuild_deck_kind),
                        mark_only=bool(mark_decks_site) and r.name.lower() == mark_decks_site,
-                       test=test_deck and bool(rebuild_deck_site) and r.name.lower() == rebuild_deck_site)
+                       test=test_deck and bool(rebuild_deck_site) and r.name.lower() == rebuild_deck_site,
+                       mail_off="" if policy.decks(r.name) else mail_policy.NOT_SENT)
         except Exception as e:
             r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
             fail_site(r, e)

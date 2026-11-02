@@ -91,6 +91,11 @@ on:
         required: false
         type: boolean
         default: false
+      send_emails:
+        description: "A run started by hand sends NO email unless asked. On: the emails of a scheduled run (due decks, notes to the owner). The deck inputs above ask for their own decks only"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # only used by the keep-alive step below
@@ -135,6 +140,7 @@ jobs:
           REHEARSAL_SITE: ${{ inputs.rehearsal_site }}
           AI_MODEL: ${{ inputs.ai_model }}
           EMAIL_TEST_SUMMARY: ${{ inputs.email_test_summary }}
+          SEND_EMAILS: ${{ inputs.send_emails }}
           AI_HANDOFF: ${{ vars.AI_HANDOFF }}
           # the key exists in the run only when a content test is asked for: a real-site run cannot call the AI
           GEMINI_API_KEY: ${{ inputs.create_content_test != '' && secrets.GEMINI_API_KEY || '' }}
@@ -196,6 +202,7 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           AI_HANDOFF: on
+          SEND_EMAILS: ${{ inputs.send_emails }}
           DECK_PHASE: build
           WAIT_FOR_TEXTS_MINUTES: ${{ github.event_name == 'schedule' && '240' || inputs.wait_minutes }}
           REBUILD_DECKS: ${{ inputs.rebuild_decks }}
