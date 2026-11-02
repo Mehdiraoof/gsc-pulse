@@ -453,12 +453,13 @@ class RulesInTheFileTests(Base):
         self.assertEqual((topics[0][content.STATUS], topics[0][content.TODO]), ("Inboxed", "Write"))
         self.assertEqual(topics[0]["Impressions (90d)"], "0")
 
-    def test_the_owners_own_gone_status_is_kept_and_shown(self):
+    def test_the_owners_own_gone_status_is_kept_and_the_row_is_left_as_it_is(self):
+        before = self.find("Articles", B)
         self.edit("Articles", B, content.STATUS, "Gone")
         self.run_it(force=True)
         b = self.find("Articles", B)
-        self.assertEqual(b[content.STATUS], "Gone")
-        self.assertIn("Gone", b["Alerts"])
+        self.assertEqual(b[content.STATUS], "Gone")                        # like Removed and Redirected: no more updates
+        self.assertEqual((b["Alerts"], b["Score"], b["Clicks (90d)"]), (before["Alerts"], before["Score"], before["Clicks (90d)"]))
 
     def test_a_topic_set_to_later_is_not_proposed_a_second_time(self):
         self.edit_topic("best bread recipes", content.STATUS, "Later")

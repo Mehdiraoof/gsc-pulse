@@ -222,7 +222,8 @@ class SourceTests(base.Base):
         self.run_it(probe=gone)
         self.run_it(force=True, today=DAY2, probe=gone)
         self.run_it(force=True, today=DAY3, probe=gone, history_pages=lambda: [B], sitemap=lambda: ([B], True))
-        self.assertNotIn(B, self.urls())
+        rows = [r for r in self.table("Articles")[1] if r[content.URL] == B]
+        self.assertEqual([r[content.STATUS] for r in rows], ["Removed"])     # one row, still marked: no second row
 
     def test_an_address_with_and_without_a_half_space_or_tatweel_gets_a_row_each(self):
         zw, tat = f"{ROOT}/article/{ZWNJ_WORD}", f"{ROOT}/article/{TATWEEL_WORD}"
@@ -441,7 +442,10 @@ def check_dashboard(test, fs, file_id, tab_names, urls_before=(), allow=()):
                 test.assertEqual(r.get("Score", ""), "", "a settled row has no score")
                 if r[content.STATUS] == "Redirected":
                     test.assertRegex(str(r["Alerts"]), r"https?://", "the new address is in Alerts")
-        order = sorted(range(len(rows)), key=lambda i: (rows[i].get("Score", "") == "", -(rows[i].get("Score") or 0)))
+        def score(r):
+            s = str(r.get("Score", "")).strip()
+            return None if s == "" else float(s)
+        order = sorted(range(len(rows)), key=lambda i: (score(rows[i]) is None, -(score(rows[i]) or 0)))
         settled_tail = [content.is_settled(rows[i]) for i in order]
         test.assertEqual(settled_tail, sorted(settled_tail), "settled rows sort below the live ones")
     test.assertTrue({content.url_key(u) for u in urls_before} <= present, "no row was lost")

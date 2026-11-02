@@ -484,7 +484,7 @@ class MatchingTests(base.Base):
         (spec, report), = result.repairs
         self.assertEqual([e.kind for e in report.entries], ["r-words", "r-possible"])
         self.assertEqual(result.imports, [])                                 # the old sheet is not read again
-        self.assertIsNone(self.topic("Articles", "plant care guide"))
+        self.assertEqual(self.topic("Articles", "plant care guide")[content.STATUS], "Removed")   # the old row stays, marked
         page = self.find("Articles", self.W1)
         self.assertEqual((page[content.KEY], page[content.STATUS], page[content.TODO]),
                          ("plant care guide", "Briefed", "Write"))
@@ -520,7 +520,8 @@ class MatchingTests(base.Base):
         reader = self.reader(rows=[self.old("indoor plant care guide", url=self.W1, status="Briefed"),
                                    self.old("plant care guide", "Researched")])
         with pages, pairs:
-            self.run_import(reader)                                          # row 2 took W1 by address
+            first = self.run_import(reader)                                  # row 2 took W1 by address
+            self.legacy_log(first.imports[0][1], first.imports[0][0])        # an old version wrote this tab; the repair reads it
             self.site = base.make_site(import_from=IMPORT, repair_imports=True)
             result = self.run_import(reader, force=True)
         (spec, report), = result.repairs
