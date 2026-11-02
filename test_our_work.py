@@ -537,7 +537,7 @@ class FlowTests(tcr.Base):
                            lambda s: None)
         found = our_work.scan_site(self.drive, self.fs, self.site, D(10, 13), sitemap_get, lambda s: None)
         items = our_work.wi.auto_items(our_work.load_content(self.fs, self.file_id, self.site)[0], D(10, 13), 120)
-        self.assertEqual(found, 2)
+        self.assertEqual(found, 1)                                      # the history already showed the new page at the first scan
         self.assertEqual(sorted((i.kind, i.day) for i in items), [(wi.NEW, D(10, 5)), (wi.UPDATED, D(10, 12))])
 
     def test_a_site_without_a_content_dashboard_or_history_still_gets_its_manual_items(self):

@@ -1143,9 +1143,8 @@ def main():
             continue
         try:
             sync_work(r, date.today())
-        except Exception as e:
-            fail_site(r, e)
-            print()
+        except Exception as e:                  # noqa: BLE001  the work list and the notes never fail a site's sync
+            print(f"  work: skipped ({scrub(describe_error(e))})\n")
 
     # ---- Phase 3: Meta tab of every site -----------------------------------
     for r in enabled:
