@@ -150,11 +150,11 @@ def tab_requests(sid: int) -> list:
 
 
 def conditional_rules(sid: int) -> list:
-    """Priority colours; A:D green for Write, amber for Brief, struck through when Gone."""
+    """Priority colours; A:D green for Write, amber for Brief; the whole row grey when the page is gone."""
     header = content.HEADERS
     pc = header.index(content.PRIORITY)
     sc, tc = letters(header.index(content.STATUS)), letters(header.index(content.TODO))
-    rules = []
+    rules = [settled_rule(sid, header)]
 
     def add(rng, condition, fmt):
         rules.append({"addConditionalFormatRule": {"index": len(rules), "rule": {
@@ -273,7 +273,9 @@ def guide_lines(label: str, tab_list: list) -> list:
         ["Column", "", "Meaning"],
         ["Primary Keyword", "", "The main search query this page should rank for."],
         ["Published URL", "", "The live page. Empty = a new topic that has no page yet."],
-        ["Status", "", "Inboxed → Briefed → Ordered → Drafted → Published. Later = parked. Gone = redirected or removed."],
+        ["Status", "", "Inboxed → Briefed → Ordered → Drafted → Published. Later = parked. Removed = the page is gone. "
+                       "Redirected = the page now redirects (the new address is in Alerts). Both stay in their tab, "
+                       "grey, at the bottom."],
         ["To Do", "", "Brief = prepare a brief · Write = new page · Update = improve content · Rewrite = start "
                       "over around the right keyword · Optimization = title, meta and intro · Merge = combine "
                       "with a competing page · Redirect = 301 to another page · Keep = no action · Prune = "
@@ -302,8 +304,8 @@ def guide_lines(label: str, tab_list: list) -> list:
         ["Recommendations", "", "Details for the decision: internal links to add (from page, to page, anchor "
                                 "text), what to merge or redirect, quick content fixes."],
         [],
-        ["Colors", "", "Green row = new topic to write. Light orange row = brief requested. Struck-through = "
-                       "page gone."],
+        ["Colors", "", "Green row = new topic to write. Light orange row = brief requested. Grey row = the page is "
+                       "gone (Removed or Redirected)."],
     ]
     return lines
 
@@ -392,49 +394,27 @@ def ensure_extra_tabs(sheets, file_id: str):
     tabs.patch_cells(sheets, file_id, [(f"'{n}'!A1:{letters(len(h) - 1)}1", [h]) for n, h, _, _ in wanted])
 
 
-def ensure_import_log(sheets, file_id: str):
-    """The `Import Log` tab: where each row of an old sheet went. Made when the first import runs."""
-    import content_import
-    titles, _ = history.grid_info(sheets, file_id)
-    if IMPORT_LOG in titles:
+SETTLED_GREY, SETTLED_TEXT = "#EEEEEE", "#8A8FA3"
+
+
+def settled_rule(sid: int, header: list) -> dict:
+    """A conditional format that greys the whole row of a page that is gone (Status Removed, Redirected or Gone).
+    It follows the Status of the row, so it stays right when rows are sorted or moved."""
+    sc = letters(col_of(header, content.STATUS))
+    formula = f'=OR(${sc}2="Removed",${sc}2="Redirected",${sc}2="Gone")'
+    return {"addConditionalFormatRule": {"index": 0, "rule": {
+        "ranges": [_range(sid, r1=1, c1=0, c2=len(header))],
+        "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": formula}]},
+                        "format": {"backgroundColor": rgb(SETTLED_GREY),
+                                   "textFormat": {"foregroundColor": rgb(SETTLED_TEXT)}}}}}}
+
+
+def ensure_settled_format(sheets, file_id: str, sid: int, header: list):
+    """Adds the grey rule to a tab that was made before it existed (the caller does it once per tab)."""
+    if col_of(header, content.STATUS) is None:
         return
-    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
-        {"addSheet": {"properties": {"title": IMPORT_LOG}}}]}))
-    sid = made["replies"][0]["addSheet"]["properties"]["sheetId"]
-    header = content_import.LOG_HEADER
-    history._write(sheets.spreadsheets().batchUpdate(
-        spreadsheetId=file_id, body={"requests": small_tab_requests(sid, header, None, True)}))
-    tabs.patch_cells(sheets, file_id, [(f"'{IMPORT_LOG}'!A1:{letters(len(header) - 1)}1", [header])])
-
-
-def removed_header(import_columns: list) -> list:
-    """Header of the `Removed Pages` tab: the lead columns, then the owner's columns."""
-    return REMOVED_LEAD + [c for c in import_columns if c not in REMOVED_LEAD]
-
-
-def ensure_removed_pages(sheets, file_id: str, header: list):
-    """The `Removed Pages` tab: rows taken out of a tab (the page is gone or redirected, or an old
-    row was merged into its page). Made when the first row goes."""
-    titles, _ = history.grid_info(sheets, file_id)
-    if REMOVED in titles:
-        return
-    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
-        {"addSheet": {"properties": {"title": REMOVED}}}]}))
-    sid = made["replies"][0]["addSheet"]["properties"]["sheetId"]
-    history._write(sheets.spreadsheets().batchUpdate(
-        spreadsheetId=file_id, body={"requests": small_tab_requests(sid, header, None, True)}))
-    tabs.patch_cells(sheets, file_id, [(f"'{REMOVED}'!A1:{letters(len(header) - 1)}1", [header])])
-
-
-def delete_rows(sheets, file_id: str, sid: int, indexes: list):
-    """Deletes data rows of a tab by 0-based row index (the header is row 0). The one place a
-    row of a tab is taken out; the caller has written it to `Removed Pages` first."""
-    wanted = sorted(set(indexes), reverse=True)          # from the bottom up: the others keep their place
-    for i in range(0, len(wanted), 100):
-        history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
-            {"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS",
-                                           "startIndex": r, "endIndex": r + 1}}}
-            for r in wanted[i:i + 100]]}))
+    history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
+        settled_rule(sid, header)]}))
 
 
 def sheet_info(sheets, file_id: str) -> dict:
@@ -504,3 +484,9 @@ def sort_by_score(sheets, file_id: str, sid: int, header: list, rows: int):
     history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
         {"sortRange": {"range": _range(sid, r1=1, r2=rows + 1, c1=0, c2=len(header)),
                        "sortSpecs": [{"dimensionIndex": c, "sortOrder": "DESCENDING"}]}}]}))
+
+
+def read_header(sheets, file_id: str, tab: str) -> list:
+    """The header row of a tab (cells as text)."""
+    resp = history._read(sheets.spreadsheets().values().get(spreadsheetId=file_id, range=f"'{tab}'!A1:AZ1"))
+    return [str(c) for c in (resp.get("values") or [[]])[0]]

@@ -256,7 +256,7 @@ class Index:
         for rec in recs:
             row = rec["row"]
             url = str(row.get(content.URL, "")).strip()
-            if rec.get("remove"):           # a row that is going away is nobody's page
+            if rec.get("remove") or rec.get("settled"):      # a row that is gone is nobody's page
                 continue
             if url:
                 self.by_url.setdefault(content.url_key(url), rec)

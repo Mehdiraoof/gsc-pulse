@@ -157,7 +157,7 @@ def link_candidates(items: list, item: Item, n: int = CANDIDATES) -> list:
     topic = content.topic_words(item.keyword)
     scored = []
     for other in items:
-        if not other.url or other.key == item.key or other.get(content.STATUS).lower() == "gone":
+        if not other.url or other.key == item.key or other.get(content.STATUS).lower() in content.SETTLED_STATUSES:
             continue
         words = content.topic_words(other.keyword) | content.topic_words(content.slug_of(other.url))
         scored.append((-len(topic & words), other.sheet_row, other.keyword or content.slug_of(other.url), other.url))

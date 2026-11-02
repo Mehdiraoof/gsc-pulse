@@ -56,7 +56,16 @@ FILL_IF_EMPTY = [FANOUTS, RECOMMENDATIONS]
 # written when the row is created, never again
 ON_CREATE = [KEY, URL, STATUS, TODO, "Intent", "Keyword Type", "Content Type", SLUG]
 
-STATUSES = ["Inboxed", "Briefed", "Ordered", "Drafted", "Published", "Later", "Gone"]
+STATUSES = ["Inboxed", "Briefed", "Ordered", "Drafted", "Published", "Later", "Removed", "Redirected"]
+STATUS_REMOVED, STATUS_REDIRECTED = "Removed", "Redirected"
+SETTLED_STATUSES = {"removed", "redirected", "gone"}       # a page that is gone: its row stays, greyed, at the bottom
+
+
+def is_settled(row: dict) -> bool:
+    """True for a row whose page is gone (Removed), moved (Redirected), or marked Gone by hand."""
+    return str(row.get(STATUS, "")).strip().lower() in SETTLED_STATUSES
+
+
 TODOS = ["Brief", "Write", "Draft", "Review", "Update", "Rewrite", "Optimization", "Merge", "Redirect", "Keep", "Prune"]
 PRIORITIES = ["Urgent", "High", "Moderate", "Low"]
 INTENTS = ["Informational", "Commercial", "Navigational", "Transactional"]

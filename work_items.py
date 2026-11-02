@@ -30,6 +30,7 @@ Nothing here calls an AI, and nothing here writes the Reports sheet.
 
 import fnmatch
 import re
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -271,17 +272,20 @@ class PageDays:
         return Totals(clicks, impressions, round(weighted / impressions, 2) if impressions else None)
 
 
-def redirect_map(state, removed_rows: list = None) -> dict:
+def redirect_map(state, rows: list = None) -> dict:
     """{target page key: {keys of the pages that redirect to it}} from the content state (pages found
-    redirecting) and from the Removed Pages tab (rows with a "Moved To")."""
+    redirecting) and from the dashboard rows with Status Redirected (the new address is in Alerts)."""
     out = {}
     for r in state.rows:
         if r[0] == "gone" and str(r[2]).startswith("redirect|"):
             out.setdefault(content.url_key(r[2].split("|", 1)[1]), set()).add(content.url_key(r[1]))
-    for r in removed_rows or []:
-        src, dst = str(r.get(content.URL, "")).strip(), str(r.get("Moved To", "")).strip()
-        if src and dst:
-            out.setdefault(content.url_key(dst), set()).add(content.url_key(src))
+    for r in rows or []:
+        if str(r.get(content.STATUS, "")).strip().lower() != "redirected":
+            continue
+        src = str(r.get(content.URL, "")).strip()
+        found = re.search(r"https?://\S+", str(r.get("Alerts", "")))
+        if src and found:
+            out.setdefault(content.url_key(found.group(0).rstrip(".,;)")), set()).add(content.url_key(src))
     return out
 
 

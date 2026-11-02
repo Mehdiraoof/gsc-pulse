@@ -514,7 +514,7 @@ class FlowTests(tcr.Base):
     def test_the_first_scan_uses_the_history_and_the_items_are_measured(self):
         found = our_work.scan_site(self.drive, self.fs, self.site, TODAY, sitemap_get, lambda s: None)
         self.assertEqual(found, 2)                                       # the new page and the updated page
-        state, _, _ = our_work.load_content(self.fs, self.file_id, self.site)
+        state, _ = our_work.load_content(self.fs, self.file_id, self.site)
         key_old, key_new = content.url_key(u("/article/old-url")), content.url_key(u("/article/moved"))
         state.set("gone", key_old, "redirect|" + key_new, TODAY)          # the redirect map the content refresh keeps
         state.save(self.fs, self.file_id)

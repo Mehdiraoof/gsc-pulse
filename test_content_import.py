@@ -238,18 +238,26 @@ class MatchingTests(base.Base):
         self.assertEqual(len(self.table("Articles")[1]), rows)
         self.assertEqual(self.reads.count("Articles"), 1)
 
-    def test_the_import_log_says_where_each_row_went(self):
+    def legacy_log(self, report, spec):
+        """An Import Log tab as an older version made it: the repair of an old import reads it if it is there."""
+        self.fs.spreadsheets().batchUpdate(spreadsheetId=self.file_id, body={"requests": [
+            {"addSheet": {"properties": {"title": cs.IMPORT_LOG}}}]}).execute()
+        values = [ci.LOG_HEADER] + ci.log_rows(spec, report)
+        cs.tabs.patch_cells(self.fs, self.file_id, [(f"'{cs.IMPORT_LOG}'!A1:{cs.letters(len(ci.LOG_HEADER) - 1)}{len(values)}", values)])
+
+    def test_the_report_says_where_each_row_went_and_no_import_log_tab_is_made(self):
         pages, pairs = with_c()
         with pages, pairs:
-            self.run_import()
-        header, log = self.table(cs.IMPORT_LOG)
-        self.assertEqual(header, ci.LOG_HEADER)
-        by_row = {int(r["Source row"]): r["Matched by"] for r in log}
+            result = self.run_import()
+        (spec, report), = result.imports
+        by_row = {e.src_row: ci.KIND_TEXT[e.kind] for e in report.entries}
         self.assertEqual(by_row[2], "URL")
         self.assertEqual(by_row[3], "Slug")
         self.assertEqual(by_row[4], "Keyword")
         self.assertTrue(by_row[5].startswith("No match"))
         self.assertTrue(by_row[10].startswith("Skipped"))
+        self.assertNotIn(cs.IMPORT_LOG, self.fs.books[self.file_id])
+        self.assertNotIn(cs.REMOVED, self.fs.books[self.file_id])
 
     ROOT_A = "https://example.test/article/"
     ZWNJ_WORD = "می‌خواهم"            # می‌خواهم (half space)
@@ -348,7 +356,8 @@ class MatchingTests(base.Base):
             result = self.run_import()
         _, body = content_run.owner_email(result, "Example", "link")
         self.assertIn("Old sheet imported into Articles", body)
-        self.assertIn("Import Log", body)
+        self.assertNotIn("Import Log", body)
+        self.assertIn("Notes and Alerts", body)
 
     # ---- the words of the URL slug (step 4) and the "possible match" (step 5) ---------------
 
@@ -385,7 +394,7 @@ class MatchingTests(base.Base):
         self.assertEqual(self.find("Articles", self.W2)[content.STATUS], "Researched")
         self.assertIsNone(self.topic("Articles", "plant care guide"))        # no second row for it
         self.assertIn("2 by URL words", report.text())
-        by_row = {int(r["Source row"]): r["Matched by"] for r in self.table(cs.IMPORT_LOG)[1]}
+        by_row = {e.src_row: ci.KIND_TEXT[e.kind] for e in report.entries}
         self.assertEqual(by_row, {2: "URL words", 3: "URL words"})
 
     def test_filler_words_and_the_half_space_do_not_matter_in_persian(self):
@@ -425,9 +434,9 @@ class MatchingTests(base.Base):
             self.assertNotEqual(self.find("Articles", self.P1)[content.KEY], "garden hose")
             self.run_import(reader, force=True)                              # the pointer survives the next refresh
             self.assertEqual(self.topic("Articles", "garden hose")["Alerts"], expected)
-        log = {int(r["Source row"]): r for r in self.table(cs.IMPORT_LOG)[1]}
-        self.assertTrue(log[2]["Matched by"].startswith("Possible match"))
-        self.assertIn(self.P1, log[2]["Page"])
+        entries = {e.src_row: e for e in result.imports[0][1].entries}
+        self.assertEqual(entries[2].kind, "possible")
+        self.assertIn(self.P1, entries[2].page)
         self.assertEqual(result.imports[0][1].text().count("1 with a possible match"), 1)
 
     def test_a_weaker_fit_is_only_a_possible_match(self):
@@ -465,7 +474,8 @@ class MatchingTests(base.Base):
         rows = [self.old("plant care guide", "Briefed", "Write", pillar="Plants", cluster="Care", note="keep me"),
                 self.old("garden hose", "Researched")]
         reader = self.reader(rows=rows)
-        self.run_import(reader)                                              # no fitting page yet: both become topics
+        first = self.run_import(reader)                                      # no fitting page yet: both become topics
+        self.legacy_log(first.imports[0][1], first.imports[0][0])            # an old version wrote this tab; the repair reads it
         self.assertIsNotNone(self.topic("Articles", "plant care guide"))
         self.assertIsNotNone(self.topic("Articles", "garden hose"))
         self.site = base.make_site(import_from=IMPORT, repair_imports=True)  # the pages are in the sitemap now
@@ -479,20 +489,22 @@ class MatchingTests(base.Base):
         self.assertEqual((page[content.KEY], page[content.STATUS], page[content.TODO]),
                          ("plant care guide", "Briefed", "Write"))
         self.assertEqual(page["Notes/Checklist"], "Pillar: Plants · Cluster: Care\nkeep me")
-        (removed,) = self.table(cs.REMOVED)[1]                               # nothing is lost: the old row is kept
-        self.assertEqual((removed["Primary Keyword"], removed["Reason"], removed["Moved To"]),
-                         ("plant care guide", ci.REPAIR_REASON, self.W1))
+        (removed,) = [r for r in self.table("Articles")[1]                    # nothing is lost: the old row stays, marked
+                      if r[content.KEY] == "plant care guide" and not r[content.URL]]
+        self.assertEqual((removed[content.STATUS], removed["Alerts"], removed["Score"]),
+                         ("Removed", f"{ci.REPAIR_REASON} ({self.W1})", ""))
         topic = self.topic("Articles", "garden hose")                        # a possible match is only listed
         self.assertEqual(topic["Alerts"], f"No fitting page, Possible match: {self.P1} | {self.P2}")
         self.assertNotEqual(self.find("Articles", self.P1)[content.KEY], "garden hose")
-        how = [r["Matched by"] for r in self.table(cs.IMPORT_LOG)[1]]
+        how = [ci.KIND_TEXT[e.kind] for e in report.entries]
         self.assertIn("Repair: merged by URL words", how)
         self.assertIn("Repair: possible match, not merged", how)
         self.assertIn("repair of Articles", result.text())
         self.assertEqual(result.removed, {"merged": 1})
         again = self.run_import(reader, force=True, sitemap=sitemap)         # once only
         self.assertEqual(again.repairs, [])
-        self.assertEqual(len(self.table(cs.REMOVED)[1]), 1)
+        self.assertEqual(sum(1 for r in self.table("Articles")[1] if r[content.STATUS] == "Removed"), 1)
+        self.assertNotIn(cs.REMOVED, self.fs.books[self.file_id])
         self.assertEqual(self.topic("Articles", "garden hose")["Alerts"], topic["Alerts"])
 
     def test_the_repair_only_runs_when_the_config_asks_for_it(self):

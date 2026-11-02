@@ -12,7 +12,8 @@ Once a month (after the monthly report), or on demand, this module
      cell of the owner alone (content.py has the rules),
   5. looks at every page once (site_check.py): a page that is gone (404, 410) or has moved
      (301, 302, 307, 308) is warned about in the Alerts and, if the next refresh finds the same,
-     moves to `Removed Pages`. This is the only reason a page row ever leaves a tab,
+     is marked Removed (gone) or Redirected (moved, the new address in Alerts): the row stays in its tab, grey,
+     below the others. No row ever leaves a tab and no Removed Pages or Import Log tab is made,
   6. gives every empty Primary Keyword a value (searches of the page, then its title),
   7. sorts each tab by Score, and
   8. once a week, asks Google Autocomplete around the owner's seeds (autocomplete.py).
@@ -476,7 +477,7 @@ def hand_over(rec: dict, target: str, cfg, work: dict, by_key: dict, ctx: Contex
         by_key[key] = dest
         result.added["redirect"] += 1
         result.new_pages += 1
-    if dest is rec or dest.get("remove"):
+    if dest is rec or dest.get("remove") or dest.get("settled"):
         return
     src, vals = rec["row"], {}
     for col in content_import.TARGETS.values():
@@ -503,7 +504,8 @@ def fill_keywords(ctx: Context, work: dict, result: ContentResult):
         for rec in recs:
             row = rec["row"]
             url = str(row.get(content.URL, "")).strip()
-            if not url or rec["blank"] or rec.get("remove") or str(row.get(content.KEY, "")).strip():
+            if (not url or rec["blank"] or rec.get("remove") or rec.get("settled")
+                    or str(row.get(content.KEY, "")).strip()):
                 continue
             stats = rec.get("stats") or ctx.data.stats.get(content.url_key(url))
             keyword = content.primary_keyword(stats, ctx.brand) if stats else ""
@@ -568,51 +570,68 @@ def _effective(rec: dict) -> dict:
     return {content.KEY: kw, "Secondary Keywords": sec}
 
 
-def removed_row(columns: list, row: dict, rec: dict, today: date) -> list:
-    """One row of `Removed Pages`: everything the owner's row held, why it went and where it moved."""
-    lead = {"Published URL": row.get(content.URL, ""), "Primary Keyword": row.get(content.KEY, ""),
-            "Reason": rec["remove"], "Date": today.isoformat(), "Moved To": rec.get("moved_to", "")}
-    out = []
-    for c in columns:
-        v = lead[c] if c in lead else row.get(c, "")
-        if c in content_import.DATE_COLUMNS and isinstance(v, (int, float)) and not isinstance(v, bool):
-            d = content.parse_date(v)
-            v = d.isoformat() if d else v
-        out.append(v)
-    return out
+def settle_text(rec: dict) -> tuple:
+    """(Status, Alerts) of a row whose page is gone: Redirected with the new address, or Removed with the reason."""
+    if rec.get("remove_kind") == "redirect":
+        target = rec.get("moved_to") or ""
+        return content.STATUS_REDIRECTED, (content.REDIRECT_ALERT.format(target=target) if target else rec["remove"])
+    reason = rec["remove"]
+    if rec.get("moved_to"):                                  # merged into the row of this page
+        reason = f"{reason} ({rec['moved_to']})"
+    return content.STATUS_REMOVED, reason
 
 
-def take_out(sheets, file_id: str, tab: str, sid: int, removing: list, state: State, result: ContentResult,
-             today: date, log) -> int:
-    """Copies the rows that go to `Removed Pages`, then deletes them from the tab. `removing`:
-    [(index of the row among the tab's data rows, record)]. A row is only taken out when the file
-    still shows the same page (or topic) at that place. Returns how many went."""
-    _, rows_now = cs.table_of(cs.read_all(sheets, file_id, tab))
-    ok = []
-    for i, rec in removing:
-        now = rows_now[i] if i < len(rows_now) else None
-        mine = rec["row"]
-        url = str(mine.get(content.URL, "")).strip()
-        same = now is not None and (str(now.get(content.URL, "")).strip() == url if url else
-                                    str(now.get(content.KEY, "")).strip() == str(mine.get(content.KEY, "")).strip())
-        if same:
-            ok.append((i, rec, now))
-    if len(ok) < len(removing):
-        log("  content: some rows were not removed because the tab had changed; they are tried next time")
-    if not ok:
+def migrate_removed_pages(sheets, file_id: str, cfg, state: State, today: date, log=print) -> int:
+    """Once per file: the rows of an old `Removed Pages` tab go back into their own tabs, marked Removed or
+    Redirected (the new address in Alerts), without a Score, greyed by the tab's rule and at the bottom; then
+    the tab is deleted. Nothing is deleted before every row is written and read back. Returns how many rows moved."""
+    info = cs.sheet_info(sheets, file_id)
+    if cs.REMOVED not in info:
         return 0
-    columns = cs.removed_header(list(content_import.TARGETS.values()))
-    cs.ensure_removed_pages(sheets, file_id, columns)
-    tabs.append(sheets, file_id, cs.REMOVED, [removed_row(columns, now, rec, today) for _, rec, now in ok], log)
-    cs.delete_rows(sheets, file_id, sid, [i + 1 for i, _, _ in ok])
-    for _, rec, now in ok:
-        kind = rec.get("remove_kind", "gone")
-        result.removed[kind] = result.removed.get(kind, 0) + 1
-        url = str(now.get(content.URL, "")).strip()
-        if url:                                    # never added again by the history or the sitemap
-            state.set("removed", content.url_key(url), kind, today)
-            state.delete("gone", content.url_key(url))
-    return len(ok)
+    _, old = cs.table_of(cs.read_all(sheets, file_id, cs.REMOVED))
+    tables = {t.name: cs.table_of(cs.read_all(sheets, file_id, t.name)) for t in cfg.tabs if t.name in info}
+    if not tables:
+        log("  content: Removed Pages kept (no tab to move its rows to)")
+        return 0
+    first = next(t.name for t in cfg.tabs if t.name in tables)
+    plan = {name: [] for name in tables}
+    have = {name: {content.url_key(r.get(content.URL)) for r in rows if str(r.get(content.URL, "")).strip()
+                   and content.is_settled(r)} for name, (_, rows) in tables.items()}
+    for r in old:
+        url = str(r.get("Published URL", "")).strip()
+        if not url and not str(r.get("Primary Keyword", "")).strip():
+            continue
+        tab = cfg.tab_of(url) if url else None
+        name = tab.name if tab is not None and tab.name in tables else first
+        if url and content.url_key(url) in have[name]:
+            continue                                         # a copy of an earlier, interrupted move is already there
+        reason, moved = str(r.get("Reason", "")).strip(), str(r.get("Moved To", "")).strip()
+        redirected = reason.lower().startswith("redirects to") or (bool(moved) and "merged" not in reason.lower())
+        if redirected:
+            status, alert = content.STATUS_REDIRECTED, content.REDIRECT_ALERT.format(target=moved) if moved else reason
+        else:
+            status, alert = content.STATUS_REMOVED, f"{reason} ({moved})" if moved and reason else (reason or "Removed")
+        row = {c: v for c, v in r.items() if c not in cs.REMOVED_LEAD}
+        row.update({content.URL: url, content.KEY: r.get("Primary Keyword", ""), content.STATUS: status,
+                    "Alerts": alert, "Score": ""})
+        plan[name].append(row)
+    moved_total = 0
+    for name, rows in plan.items():
+        if not rows:
+            continue
+        header, before = tables[name]
+        tabs.append(sheets, file_id, name, [[row.get(h, "") for h in header] for row in rows], log)
+        _, after = cs.table_of(cs.read_all(sheets, file_id, name))
+        if len(after) < len(before) + len(rows):
+            raise ContentError("some rows of Removed Pages could not be written back; the tab was kept")
+        moved_total += len(rows)
+        for row in rows:
+            if row.get(content.URL):
+                state.set("removed", content.url_key(row[content.URL]), "gone", today)
+        cs.refresh_dropdowns(sheets, file_id, info[name][0], header)
+    tabs.delete_tabs(sheets, file_id, [info[cs.REMOVED][0]])
+    log(f"  content: {moved_total} rows of Removed Pages are back in their tabs, marked Removed or Redirected; the tab is gone")
+    return moved_total
 
 
 def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: ContentResult,
@@ -652,7 +671,8 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
         if t.name not in tables:
             continue
         header, rows, _, _ = tables[t.name]
-        recs = [{"row": r, "new": False, "topic": not str(r.get(content.URL, "")).strip()
+        recs = [{"row": r, "new": False, "settled": content.is_settled(r),
+                 "topic": not str(r.get(content.URL, "")).strip()
                  and bool(str(r.get(content.KEY, "")).strip()),
                  "blank": not str(r.get(content.URL, "")).strip() and not str(r.get(content.KEY, "")).strip()}
                 for r in rows]
@@ -714,7 +734,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 by_key.setdefault(content.url_key(url), rec)
     if ctx.probe is not None:
         addresses = [str(rec["row"].get(content.URL, "")).strip() for recs in work.values() for rec in recs
-                     if str(rec["row"].get(content.URL, "")).strip()]
+                     if str(rec["row"].get(content.URL, "")).strip() and not rec.get("settled")]
         probes = site_check.check_all(addresses, ctx.probe)
         moves = []
         protected = set()                              # addresses an old sheet brought in: never cleaned up
@@ -724,7 +744,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
         for recs in work.values():
             for rec in recs:
                 url = str(rec["row"].get(content.URL, "")).strip()
-                if not url:
+                if not url or rec.get("settled"):          # a page already marked gone is not looked at again
                     continue
                 probe = probes.get(url, site_check.Probe(0))
                 kind, target = site_check.classify(probe, url)
@@ -784,8 +804,8 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             continue
         for rec in work[t.name]:
             row = rec["row"]
-            if rec["blank"] or (rec.get("remove") and rec["topic"]):
-                continue
+            if rec["blank"] or rec.get("remove") or rec.get("settled"):
+                continue                                 # a row that is gone keeps its cells as they are
             if rec["topic"]:                             # a new topic that has no page yet
                 rec["vals"] = topic_values(ctx, row, possible=state.get("possible", content.row_key(row)))
                 keep_owner_priority(state, row, rec["vals"], today)
@@ -826,7 +846,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 duplicate=content.dup_key(str(row.get(content.URL, ""))) in dups,
                 decay=content.decaying(vals["_series"]), position=vals["_position"],
                 impressions=vals["_impressions"], no_data=no_data,
-                gone=str(row.get(content.STATUS, "")).strip() == "Gone",
+                gone=content.is_settled(row),
                 check=rec.get("check", ""), possible=state.get("possible", content.row_key(row)))
             keep_owner_priority(state, row, vals, today)
             rec["vals"] = vals
@@ -847,7 +867,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 rec["fill_keyword"] = rec["vals"]["_keyword"]
 
     # ---- ideas marked Add become topic rows, then content gaps --------------------
-    live = [rec for recs in work.values() for rec in recs if not rec.get("remove")]
+    live = [rec for recs in work.values() for rec in recs if not rec.get("remove") and not rec.get("settled")]
     present = _targeted(live)
     gap_tab = next((t for t in cfg.tabs if t.gaps and t.name in work), None)
     already = state.keys({"gap", "dismissed", "idea"})
@@ -927,6 +947,11 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
         n_old = len(rows)
         extra = len(recs) - n_old
         cs.extend_rows(sheets, file_id, sid, grid_rows, len(recs) + 2)
+        for rec in recs[:n_old]:                          # a page found gone or moved twice: the row stays, marked
+            if rec.get("remove") and not rec.get("settled"):
+                rec["settle"] = settle_text(rec)
+                rec["row"]["Score"] = ""                   # no score, so it sorts below every live row
+                rec["row"]["Alerts"] = rec["settle"][1]
         columns = {name: [] for name in content.OWNED_MONTHLY + content.FILL_IF_EMPTY}
         for rec in recs:
             vals = rec.get("vals")
@@ -960,14 +985,23 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             if rec.get("fill_keyword") and cs.col_of(header, content.KEY) is not None:
                 updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, content.KEY))}{2 + i}",
                                 [[rec["fill_keyword"]]]))
+            if rec.get("settle") and cs.col_of(header, content.STATUS) is not None:
+                updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, content.STATUS))}{2 + i}",
+                                [[rec["settle"][0]]]))
         for i in range(0, len(updates), PATCH_CHUNK):
             tabs.patch_cells(sheets, file_id, updates[i:i + PATCH_CHUNK])
-        # the only rows that ever leave a tab: a page that is gone or moved (found twice in a row),
-        # and an old row merged into its page by the repair; they are copied to Removed Pages first
-        removing = [(i, rec) for i, rec in enumerate(recs[:n_old]) if rec.get("remove")]
-        gone = take_out(sheets, file_id, t.name, sid, removing, state, result, today, log) if removing else 0
-        cs.sort_by_score(sheets, file_id, sid, header, len(recs) - gone)
-        result.rows[t.name] = len(recs) - gone
+        # no row ever leaves a tab: a page that is gone or moved (found twice in a row), or an old row merged
+        # into its page by the repair, keeps its row, marked Removed or Redirected, greyed, below the others
+        for rec in recs[:n_old]:
+            if rec.get("settle"):
+                kind = rec.get("remove_kind", "gone")
+                result.removed[kind] = result.removed.get(kind, 0) + 1
+                url = str(rec["row"].get(content.URL, "")).strip()
+                if url:                                    # never added again by the history or the sitemap
+                    state.set("removed", content.url_key(url), kind, today)
+                    state.delete("gone", content.url_key(url))
+        cs.sort_by_score(sheets, file_id, sid, header, len(recs))
+        result.rows[t.name] = len(recs)
         for rec in recs:
             vals = rec.get("vals")
             if vals and not rec.get("remove") and vals.get("Priority") == "Urgent":
@@ -977,14 +1011,9 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
     result.urgent = [(k, a, t) for _, k, a, t in urgent[:TOP_URGENT]]
     result.refreshed = True
 
-    # ---- an import or a repair is done: a log for the owner, and never again ---------
+    # ---- an import is done: remembered, never again (no log tab is made: each row's Notes and Alerts say what happened) --
     for spec, key, report in done_imports:
-        cs.ensure_import_log(sheets, file_id)
-        tabs.append(sheets, file_id, cs.IMPORT_LOG, content_import.log_rows(spec, report), log)
         state.set("import", key, ctx.today.isoformat(), ctx.today)
-    for spec, report in repairs:
-        cs.ensure_import_log(sheets, file_id)
-        tabs.append(sheets, file_id, cs.IMPORT_LOG, content_import.log_rows(spec, report), log)
 
 
 # --------------------------------------------------------------------------- #
@@ -1085,6 +1114,16 @@ def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today:
         if cs.refresh_guide(sheets, file_id, label, cfg.tabs):         # the Guide is the tool's text: kept current
             log("  content: the Guide tab was brought up to date")
     state = State(cs.read_all(sheets, file_id, cs.STATE, 4))
+    # a page that is gone keeps its row, greyed (a rule on the tab, added once to a tab made before it existed) ...
+    if not state.get("format", "settled"):
+        if not created:
+            for t in cfg.tabs:
+                if t.name in info:
+                    header = cs.read_header(sheets, file_id, t.name)
+                    cs.ensure_settled_format(sheets, file_id, info[t.name][0], header)
+        state.set("format", "settled", "v1", today)
+    # ... and the rows of an old Removed Pages tab go back where they came from, once
+    migrate_removed_pages(sheets, file_id, cfg, state, today, log)
 
     cm = last_complete_month(final)
     month = periods.month_label(cm)
@@ -1121,15 +1160,15 @@ def owner_email(result: ContentResult, label: str, link: str) -> tuple:
         lines.append("Page status check: " + ", ".join(f"{k} {n}" for k, n in sorted(result.checked.items())))
     if result.warned or result.removed:
         lines.append(f"Pages warned (gone or moved, removed next time if still so): {result.warned}")
-        lines += [f"Rows moved to Removed Pages ({k}): {n}" for k, n in sorted(result.removed.items())]
+        lines += [f"Rows marked Removed or Redirected ({k}): {n}" for k, n in sorted(result.removed.items())]
     if any(result.keywords.values()):
         lines.append("Empty Primary Keywords filled from " + ", ".join(
             f"{k}: {n}" for k, n in result.keywords.items()))
     for spec, report in result.imports:
         lines += ["", f"Old sheet imported into {spec.target_tab}: {report.text()}.",
-                  "Where each old row went is listed in the Import Log tab."]
+                  "What happened to each old row is in that row's Notes and Alerts."]
     for spec, report in result.repairs:
-        lines += ["", f"{report.text()}.", "The rows are listed in the Import Log tab."]
+        lines += ["", f"{report.text()}.", "What happened to each row is in its Notes and Alerts."]
     lines += [f"Not imported: {p}" for p in result.import_problems]
     if result.urgent:
         lines += ["", "Top urgent rows:"]

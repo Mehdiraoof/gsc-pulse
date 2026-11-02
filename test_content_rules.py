@@ -32,7 +32,7 @@ def probes(table):
 
 
 class RemovalTests(base.Base):
-    """The only reason a page row leaves a tab: gone or moved, found twice in a row."""
+    """A page found gone or moved twice in a row is marked Removed or Redirected; its row stays in its tab."""
 
     def urls(self, tab="Articles"):
         return {r[content.URL] for r in self.table(tab)[1] if r[content.URL]}
@@ -46,16 +46,14 @@ class RemovalTests(base.Base):
                          (1, 2, 1, {}))
         second = self.run_it(force=True, today=DAY2, probe=gone)
         self.assertEqual(second.removed, {"gone": 1})
-        self.assertNotIn(B, self.urls())
-        header, rows = self.table(cs.REMOVED)
-        self.assertEqual(header[:5], cs.REMOVED_LEAD)
-        (r,) = rows
-        self.assertEqual((r["Published URL"], r["Primary Keyword"], r["Reason"], r["Date"], r["Moved To"]),
-                         (B, "tiny question", "Page returns 404", "2026-10-28", ""))
-        self.assertEqual((r[content.STATUS], r[content.TODO]), ("Published", "Keep"))
+        r = self.find("Articles", B)                                       # the row stays, marked, without a score
+        self.assertEqual((r["Primary Keyword"], r[content.STATUS], r["Alerts"], r["Score"], r[content.TODO]),
+                         ("tiny question", "Removed", "Page returns 404", "", "Keep"))
+        self.assertNotIn(cs.REMOVED, self.fs.books[self.file_id])          # no Removed Pages tab, ever
         self.run_it(force=True, today=DAY3, probe=gone)
-        self.assertNotIn(B, self.urls())                                   # Search Console still lists it
-        self.assertEqual(len(self.table(cs.REMOVED)[1]), 1)
+        self.assertEqual([x[content.STATUS] for x in self.table("Articles")[1] if x[content.URL] == B],
+                         ["Removed"])                                      # Search Console still lists it: no second row
+        self.assertNotIn(cs.REMOVED, self.fs.books[self.file_id])
         for name, tab in self.fs.books[self.file_id].items():
             self.assertNotIn("pulse", json.dumps(tab.data, ensure_ascii=False).lower(), name)
 
@@ -95,15 +93,13 @@ class RemovalTests(base.Base):
         self.edit("Articles", B, "Notes/Checklist", "call author")
         second = self.run_it(force=True, today=DAY2, probe=moved)
         self.assertEqual(second.removed, {"redirect": 1})
-        self.assertNotIn(B, self.urls())
+        b = self.find("Articles", B)                                        # the old row stays, marked, with the new address
+        self.assertEqual((b[content.STATUS], b["Alerts"], b["PIC"], b["Score"]), ("Redirected", f"Redirects to {A}", "Sara", ""))
         a = self.find("Articles", A)
         self.assertEqual(a["PIC"], "Sara")                                  # the target had none
         self.assertEqual(a[content.KEY], "garden shoes")                    # ... and keeps the keyword it has
         self.assertEqual(a[content.TODO], "Update")
         self.assertEqual(a["Notes/Checklist"], f"Moved here from {B} (that page redirects here): call author")
-        (r,) = self.table(cs.REMOVED)[1]
-        self.assertEqual((r["Published URL"], r["Reason"], r["Moved To"], r["PIC"]),
-                         (B, f"Redirects to {A}", A, "Sara"))
 
     def test_a_redirect_to_a_page_without_a_row_makes_the_row(self):
         target = f"{ROOT}/article/new-home"
@@ -114,15 +110,15 @@ class RemovalTests(base.Base):
         new = self.find("Articles", target)
         self.assertEqual(new[content.KEY], "tiny question")                 # the target had no keyword
         self.assertIn("Moved here from", new["Notes/Checklist"])
-        self.assertNotIn(B, self.urls())
+        self.assertEqual(self.find("Articles", B)[content.STATUS], "Redirected")
 
-    def test_a_redirect_to_a_page_that_is_in_no_tab_only_moves_the_row_out(self):
+    def test_a_redirect_to_a_page_that_is_in_no_tab_only_marks_the_row(self):
         moved = probes({B: Probe(302, HOME)})
         self.run_it(probe=moved)
         second = self.run_it(force=True, today=DAY2, probe=moved)
         self.assertEqual(second.removed, {"redirect": 1})
-        (r,) = self.table(cs.REMOVED)[1]
-        self.assertEqual((r["Reason"], r["Moved To"]), (f"Redirects to {HOME}", ""))
+        r = self.find("Articles", B)
+        self.assertEqual((r[content.STATUS], r["Alerts"]), ("Redirected", f"Redirects to {HOME}"))
         self.assertNotIn(HOME, self.urls() | self.urls("Landing Pages"))
 
     def test_a_redirect_to_the_same_page_is_no_move(self):
@@ -138,7 +134,8 @@ class RemovalTests(base.Base):
         second = self.run_it(force=True, today=DAY2, probe=nothing)
         self.assertEqual(second.removed, {"gone": 3})
         self.assertIsNotNone(self.topic("Articles", "best bread recipes"))   # ideas stay
-        self.assertEqual(len(self.table(cs.REMOVED)[1]), 3)
+        rows = self.table("Articles")[1] + self.table("Landing Pages")[1]
+        self.assertEqual(sum(1 for r in rows if r[content.STATUS] == "Removed"), 3)
 
     def test_no_check_means_no_change(self):
         self.run_it()
@@ -198,11 +195,11 @@ class SourceTests(base.Base):
         gone = probes({old: Probe(404), mine: Probe(404)})
         self.run_it(force=True, probe=gone)                                  # the first warning, on TODAY
         result = self.run_it(force=True, today=DAY2, probe=gone, cleanup_gone_since="2026-10-27")
-        reasons = {r["Published URL"]: r["Reason"] for r in self.table(cs.REMOVED)[1]}
-        self.assertEqual(reasons[old], "Already gone when found")
-        self.assertEqual(reasons[mine], "Page returns 404")                  # a row with work in it keeps the normal rule
+        rows = {r["Published URL"]: r for r in self.table("Articles")[1]}
+        self.assertEqual(rows[old]["Alerts"], "Already gone when found")
+        self.assertEqual(rows[mine]["Alerts"], "Page returns 404")           # a row with work in it keeps the normal rule
+        self.assertEqual((rows[old][content.STATUS], rows[mine][content.STATUS]), ("Removed", "Removed"))
         self.assertEqual(result.removed, {"found gone": 1, "gone": 1})
-        self.assertNotIn(old, self.urls())
     def test_a_sitemap_that_cannot_be_read_changes_nothing(self):
         self.run_it()
         before = self.urls()
@@ -414,3 +411,143 @@ class DropdownTests(base.Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------- #
+# The tab clean-up: no Removed Pages tab, no Import Log tab; gone pages stay, marked, grey, at the bottom
+# --------------------------------------------------------------------------- #
+
+import content_import as ci
+import tabs as tabs_mod
+
+
+def check_dashboard(test, fs, file_id, tab_names, urls_before=(), allow=()):
+    """The checker for the clean-up. Every tab: no Removed Pages or Import Log tab (unless allowed), every row that was
+    there is still there, a row of a page that is gone is Removed or Redirected with a reason (and the new address for
+    Redirected), has no Score (so a sort by Score puts it below every live row), and the grey rule exists."""
+    titles = list(fs.books[file_id])
+    for banned in (cs.REMOVED, cs.IMPORT_LOG):
+        if banned not in allow:
+            test.assertNotIn(banned, titles)
+    present = set()
+    for name in tab_names:
+        header, rows = cs.table_of(cs.read_all(fs, file_id, name))
+        for r in rows:
+            if r.get(content.URL):
+                present.add(content.url_key(r[content.URL]))
+            if content.is_settled(r):
+                test.assertIn(r[content.STATUS], ("Removed", "Redirected"), r.get(content.URL))
+                test.assertTrue(str(r.get("Alerts", "")).strip(), "a settled row says why")
+                test.assertEqual(r.get("Score", ""), "", "a settled row has no score")
+                if r[content.STATUS] == "Redirected":
+                    test.assertRegex(str(r["Alerts"]), r"https?://", "the new address is in Alerts")
+        order = sorted(range(len(rows)), key=lambda i: (rows[i].get("Score", "") == "", -(rows[i].get("Score") or 0)))
+        settled_tail = [content.is_settled(rows[i]) for i in order]
+        test.assertEqual(settled_tail, sorted(settled_tail), "settled rows sort below the live ones")
+    test.assertTrue({content.url_key(u) for u in urls_before} <= present, "no row was lost")
+    rules = [req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+             for book, req in fs.requests if book == file_id and "addConditionalFormatRule" in req]
+    test.assertTrue(any('"Redirected"' in r and '"Removed"' in r for r in rules), "the grey rule exists")
+
+
+class CleanupTests(base.Base):
+
+    GONE = f"{ROOT}/article/old-gone"
+    MOVED = f"{ROOT}/article/old-moved"
+    LANDING = f"{ROOT}/old-landing"
+
+    def make_removed_tab(self, rows):
+        header = cs.REMOVED_LEAD + [c for c in ci.TARGETS.values() if c not in cs.REMOVED_LEAD]
+        self.fs.spreadsheets().batchUpdate(spreadsheetId=self.file_id, body={"requests": [
+            {"addSheet": {"properties": {"title": cs.REMOVED}}}]}).execute()
+        values = [header] + [[r.get(h, "") for h in header] for r in rows]
+        tabs_mod.patch_cells(self.fs, self.file_id, [(f"'{cs.REMOVED}'!A1:{cs.letters(len(header) - 1)}{len(values)}", values)])
+
+    def setUp(self):
+        super().setUp()
+        self.run_it()
+        self.legacy = [
+            {"Published URL": self.GONE, "Primary Keyword": "old gone", "Reason": "Page returns 404", "Date": "2026-10-01",
+             "Moved To": "", "Status": "Published", "To Do": "Keep", "PIC": "Sara", "Notes/Checklist": "call the author"},
+            {"Published URL": self.MOVED, "Primary Keyword": "old moved", "Reason": f"Redirects to {A}", "Date": "2026-10-02",
+             "Moved To": A, "Status": "Published", "To Do": "Keep"},
+            {"Published URL": "", "Primary Keyword": "old topic", "Reason": ci.REPAIR_REASON, "Date": "2026-10-03",
+             "Moved To": A, "Status": "Researched"},
+            {"Published URL": self.LANDING, "Primary Keyword": "old landing", "Reason": "Page returns 410", "Date": "2026-10-04",
+             "Moved To": "", "Status": "Published"}]
+        self.make_removed_tab(self.legacy)
+        self.live = [r[content.URL] for r in self.table("Articles")[1] + self.table("Landing Pages")[1] if r[content.URL]]
+
+    def rows(self):
+        return self.table("Articles")[1], self.table("Landing Pages")[1]
+
+    def test_the_old_rows_come_back_to_their_own_tabs_marked_and_the_tab_is_deleted(self):
+        before = self.rows()
+        self.run_it()                                                   # any run does it, not only the monthly refresh
+        articles, landing = self.rows()
+        self.assertEqual((len(articles) - len(before[0]), len(landing) - len(before[1])), (3, 1))
+        by_url = {r[content.URL]: r for r in articles + landing if r[content.URL]}
+        gone, moved, old_landing = by_url[self.GONE], by_url[self.MOVED], by_url[self.LANDING]
+        self.assertEqual((gone[content.STATUS], gone["Alerts"], gone["PIC"], gone["Notes/Checklist"], gone["Score"]),
+                         ("Removed", "Page returns 404", "Sara", "call the author", ""))      # nothing the owner wrote is lost
+        self.assertEqual((moved[content.STATUS], moved["Alerts"]), ("Redirected", f"Redirects to {A}"))
+        self.assertEqual((old_landing[content.STATUS], old_landing["Alerts"]), ("Removed", "Page returns 410"))
+        (topic,) = [r for r in articles if r[content.KEY] == "old topic"]
+        self.assertEqual((topic[content.STATUS], topic["Alerts"]), ("Removed", f"{ci.REPAIR_REASON} ({A})"))
+        # they are at the bottom of their tab, in the order they had
+        self.assertEqual([r[content.KEY] for r in articles[-3:]], ["old gone", "old moved", "old topic"])
+        self.assertEqual(landing[-1][content.KEY], "old landing")
+        check_dashboard(self, self.fs, self.file_id, ["Articles", "Landing Pages"], self.live + [self.GONE, self.MOVED, self.LANDING])
+
+    def test_a_second_run_changes_nothing_and_a_refresh_does_not_bring_the_tab_back(self):
+        self.run_it()
+        count = len(self.rows()[0])
+        self.run_it()
+        self.run_it(force=True, today=DAY2)
+        articles, landing = self.rows()
+        self.assertEqual(sum(1 for r in articles + landing if r[content.STATUS] in ("Removed", "Redirected")), 4)
+        self.assertEqual(len(articles), count)
+        check_dashboard(self, self.fs, self.file_id, ["Articles", "Landing Pages"], self.live + [self.GONE, self.MOVED, self.LANDING])
+        # the removed pages are not looked at again and not added again from Search Console, the history or the sitemap
+        probe = probes({self.GONE: Probe(200), self.MOVED: Probe(200)})
+        self.run_it(force=True, today=DAY3, probe=probe, history_pages=lambda: [self.GONE, self.MOVED],
+                    sitemap=lambda: ([self.GONE, self.MOVED], True))
+        urls = [r[content.URL] for r in self.rows()[0]]
+        self.assertEqual((urls.count(self.GONE), urls.count(self.MOVED)), (1, 1))
+        rows = {r[content.URL]: r for r in self.rows()[0]}
+        self.assertEqual((rows[self.GONE][content.STATUS], rows[self.MOVED][content.STATUS]), ("Removed", "Redirected"))
+
+    def test_a_move_that_was_interrupted_does_not_duplicate_rows(self):
+        self.run_it()                                                   # the move is done ...
+        self.make_removed_tab(self.legacy)                              # ... and the old tab is back (the delete never happened)
+        self.run_it()
+        urls = [r[content.URL] for r in self.rows()[0] + self.rows()[1] if r[content.URL]]
+        self.assertEqual(len(urls), len(set(urls)))
+        self.assertNotIn(cs.REMOVED, self.fs.books[self.file_id])
+
+    def test_the_grey_rule_is_in_a_new_tab_and_added_once_to_a_tab_made_before_it(self):
+        def grey_rules():
+            return [1 for book, req in self.fs.requests if book == self.file_id and "addConditionalFormatRule" in req
+                    and "Redirected" in req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]]
+        made = len(grey_rules())                                        # the tabs were created with it
+        self.assertEqual(made, 2)
+        state = content_run.State(cs.read_all(self.fs, self.file_id, cs.STATE, 4))
+        state.delete("format", "settled")                               # a dashboard from an older version has no flag
+        state.save(self.fs, self.file_id)
+        self.run_it()
+        self.run_it(force=True, today=DAY2)
+        self.assertEqual(len(grey_rules()), made + 2)
+
+    def test_a_dashboard_without_a_removed_pages_tab_is_left_alone(self):
+        self.run_it()
+        before = [t.data[:] for t in self.fs.books[self.file_id].values()]
+        self.run_it()
+        self.assertEqual(before, [t.data[:] for t in self.fs.books[self.file_id].values()])
+
+    def test_what_the_refresh_never_makes(self):
+        probe = probes({B: Probe(404)})
+        self.run_it(probe=probe, force=True, today=DAY2)
+        self.run_it(probe=probe, force=True, today=DAY3)
+        titles = list(self.fs.books[self.file_id])
+        self.assertNotIn(cs.IMPORT_LOG, titles)
+        self.assertFalse(hasattr(cs, "ensure_import_log") or hasattr(cs, "ensure_removed_pages") or hasattr(cs, "delete_rows"))

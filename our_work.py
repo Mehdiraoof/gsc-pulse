@@ -30,15 +30,14 @@ HISTORY_DAYS = wi.LOOKBACK_CLIENT + 2 * wi.WINDOW_DAYS + 7      # how far back t
 
 
 def load_content(sheets, file_id: str, site) -> tuple:
-    """(State, dashboard rows, Removed Pages rows) of a content dashboard."""
+    """(State, dashboard rows) of a content dashboard (a page that is gone keeps its row, marked)."""
     state = content_run.State(cs.read_all(sheets, file_id, cs.STATE, 4))
     info = cs.sheet_info(sheets, file_id)
     rows = []
     for t in site.content.tabs:
         if t.name in info:
             rows += cs.table_of(cs.read_all(sheets, file_id, t.name))[1]
-    removed = cs.table_of(cs.read_all(sheets, file_id, cs.REMOVED))[1] if cs.REMOVED in info else []
-    return state, rows, removed
+    return state, rows
 
 
 def scan_site(drive, sheets, site, today: date, get=site_check.default_get, log=print) -> int:
@@ -48,7 +47,7 @@ def scan_site(drive, sheets, site, today: date, get=site_check.default_get, log=
     if not file_id:
         log("  work: no content dashboard yet")
         return 0
-    state, rows, _ = load_content(sheets, file_id, site)
+    state, rows = load_content(sheets, file_id, site)
     entries, ok = site_check.read_sitemap_entries(site_check.origin_of(site.site_url), get)
     first_seen = None
     if not state.keys({"seen"}) and site.history_sheet_id:
@@ -76,11 +75,11 @@ def items_for(drive, sheets, site, today: date, queries=None, log=print) -> list
     file_id = provision.existing_content_file(drive, sheets, site) if (site.content.enabled and drive is not None) else ""
     auto, redirects = [], {}
     if file_id:
-        state, rows, removed = load_content(sheets, file_id, site)
+        state, rows = load_content(sheets, file_id, site)
         titles = {content.url_key(r.get(content.URL, "")): str(r.get(content.KEY, "")).strip()
                   for r in rows if str(r.get(content.URL, "")).strip() and str(r.get(content.KEY, "")).strip()}
         auto = wi.auto_items(state, today, wi.LOOKBACK_CLIENT, titles)
-        redirects = wi.redirect_map(state, removed)
+        redirects = wi.redirect_map(state, rows)
     items = [it for it in auto + manual if 0 <= (today - it.day).days <= wi.LOOKBACK_CLIENT]
     if not items or not site.history_sheet_id:
         return items
