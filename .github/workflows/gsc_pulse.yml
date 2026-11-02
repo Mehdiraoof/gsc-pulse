@@ -31,6 +31,14 @@ on:
         description: "Content creation on the FAKE test site only: briefs, drafts or both (then the checklist is tested); probe: which AI models the key may use; rehearsal-prepare / rehearsal: a rehearsal on a copy of a real dashboard"
         required: false
         default: ""
+      deck_phase:
+        description: "build: only build and send the decks (the second run), with the texts that are ready in AI Notes"
+        required: false
+        default: ""
+      wait_minutes:
+        description: "With deck_phase build: wait up to this many minutes for the texts that are still waiting"
+        required: false
+        default: "0"
       email_test_summary:
         description: "With create_content_test: send ONE summary email to the owner at the end (otherwise a test sends nothing; the result is in the run log)"
         required: false
@@ -93,6 +101,7 @@ concurrency:
 
 jobs:
   sync:
+    if: ${{ inputs.deck_phase != 'build' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -126,7 +135,9 @@ jobs:
           REHEARSAL_SITE: ${{ inputs.rehearsal_site }}
           AI_MODEL: ${{ inputs.ai_model }}
           EMAIL_TEST_SUMMARY: ${{ inputs.email_test_summary }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_HANDOFF: ${{ vars.AI_HANDOFF }}
+          # the key exists in the run only when a content test is asked for: a real-site run cannot call the AI
+          GEMINI_API_KEY: ${{ inputs.create_content_test != '' && secrets.GEMINI_API_KEY || '' }}
           BUILD_TEST_SITE: ${{ inputs.build_test_site }}
           RESET_TEST_SITE: ${{ inputs.reset_test_site }}
           CLEANUP_GONE_SITE: ${{ inputs.cleanup_gone_site }}
@@ -138,7 +149,6 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python gsc_pulse.py
 
       # Public repos pause scheduled runs after 60 days without activity.
@@ -154,3 +164,42 @@ jobs:
             git commit --allow-empty -m "Keep weekly schedule active"
             git push
           fi
+
+  # The second run: builds the weekly and monthly decks and emails them. Only with the handoff switched on
+  # (repository variable AI_HANDOFF = on): after the sync of every scheduled run, or by hand with deck_phase = build.
+  # It waits (up to 4 hours) for the texts the owner's Claude plan writes into the AI Notes tab, and builds without
+  # the ones still missing.
+  build:
+    needs: sync
+    if: ${{ always() && (inputs.deck_phase == 'build' || (github.event_name == 'schedule' && vars.AI_HANDOFF == 'on')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build and send the decks
+        env:
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
+          SITES_JSON: ${{ secrets.SITES_JSON }}
+          SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          AI_HANDOFF: on
+          DECK_PHASE: build
+          WAIT_FOR_TEXTS_MINUTES: ${{ github.event_name == 'schedule' && '240' || inputs.wait_minutes }}
+          REBUILD_DECKS: ${{ inputs.rebuild_decks }}
+          REBUILD_DECK_SITE: ${{ inputs.rebuild_deck_site }}
+          REBUILD_DECK_KIND: ${{ inputs.rebuild_deck_kind }}
+          TEST_DECK: ${{ inputs.test_deck }}
+        run: python gsc_pulse.py

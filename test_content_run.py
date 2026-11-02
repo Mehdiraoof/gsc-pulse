@@ -262,6 +262,39 @@ class RowTests(Base):
         self.assertIn("- garden shoes: Update to reach the top 3 [Articles]", body)
 
 
+class GuideTests(Base):
+
+    def guide(self):
+        rows = [[str(c) for c in r] + [""] * (3 - len(r)) for r in cs.tabs.read_rows(self.fs, self.file_id, cs.GUIDE, "C", first_row=1)]
+        while rows and not any(rows[-1]):
+            rows.pop()
+        return rows
+
+    def test_an_old_guide_is_brought_up_to_date_once(self):
+        self.run_it()
+        wanted = [r + [""] * (3 - len(r)) for r in cs.guide_lines("Example", self.site.content.tabs)]
+        self.assertEqual(self.guide(), wanted)
+        t = self.raw(cs.GUIDE)
+        i = next(i for i, r in enumerate(t.data) if r and r[0] == "Secondary Keywords")
+        t.data[i] = ["Secondary Keywords", "", "Other searches the page already appears for. Cover them in the content."]   # the old wording
+        t.data.append(["an old line the new guide does not have", "", ""])
+        self.logs.clear()
+        self.run_it()                                                      # not the monthly refresh: the Guide is still fixed
+        self.assertEqual(self.guide(), wanted)
+        self.assertTrue(any("Guide tab was brought up to date" in line for line in self.logs))
+        before = len(self.fs.requests)
+        self.logs.clear()
+        self.run_it()
+        self.assertFalse(any("Guide tab" in line for line in self.logs))
+        self.assertFalse(any("unmergeCells" in req for _, req in self.fs.requests[before:]))      # a current Guide is not touched
+
+    def test_the_guide_says_what_the_two_columns_do(self):
+        self.run_it()
+        text = " ".join(" ".join(r) for r in self.guide())
+        self.assertIn("never removes a value", text)
+        self.assertIn("else across the site", text)
+
+
 class TargetedTests(unittest.TestCase):
 
     def test_a_search_merged_into_a_page_row_is_not_proposed_as_an_idea(self):

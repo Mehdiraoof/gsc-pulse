@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from pptx import Presentation
 
+import ai_notes
 import client_deck
 import deck_data as dd
 import decks
@@ -107,7 +108,7 @@ def file_title(report: dd.Report, cfg, lang: str, period: str) -> str:
 def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, log=print,
               scrub=lambda s: s, template_dir: str = TEMPLATE_DIR, send=mailer.send,
               post=summary._post, fetch_logo=decks.fetch_logo, mark_only: bool = False,
-              test: bool = False) -> DeckResult:
+              test: bool = False, extras=None) -> DeckResult:
     cfg = site.deck
     wanted = {"monthly", "weekly"} if rebuild is True else set(rebuild or ())     # decks to build whatever the state says
     result = DeckResult()
@@ -139,15 +140,26 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
             result.skipped.append(kind)
             continue
         try:
-            ai = None
-            if cfg.ai_summary and kind == "weekly":            # the client deck has no summary slide
+            ai, extra = None, {}
+            if extras is not None:                             # texts written by the owner's own plan (AI Notes)
+                extra = extras(kind, report) or {}
+                texts = extra.get("texts", {})
+                if extra.get("waiting"):
+                    log(f"decks: {kind}: no text yet for {', '.join(extra['waiting'])}; built without it")
+                if kind == "weekly" and ai_notes.WEEKLY_SUMMARY in texts:
+                    ai = ai_notes.parse_weekly_summary(texts[ai_notes.WEEKLY_SUMMARY])
+            elif cfg.ai_summary and kind == "weekly":          # the old way: an API (off unless allowed)
                 ai = summary.request_summary(
                     dd.aggregated_text(report, cfg.site_label), cfg.language, env, post)
                 if ai is None:
-                    log("decks: AI summary not available, using the placeholder slide")
+                    log("decks: no summary text, using the placeholder slide")
             logo = fetch_logo(cfg.logo_url) if cfg.logo_url else None
-            payload = (client_deck.build_monthly(report, cfg, template_dir, logo, log) if kind == "monthly"
-                       else decks.build_deck(report, cfg, template_dir, ai, logo))
+            work = extra.get("work")
+            payload = (client_deck.build_monthly(report, cfg, template_dir, logo, log, work=work,
+                                                 work_intro=extra.get("texts", {}).get(ai_notes.OUR_WORK_INTRO, ""))
+                       if kind == "monthly"
+                       else decks.build_deck(report, cfg, template_dir, ai, logo, work=work,
+                                             handoff=extras is not None))
             period = decks.period_title(report, cfg.language)
             subject, body = email_text(report, cfg, cfg.language, period)
             filename = mailer.deck_filename(file_title(report, cfg, cfg.language, period))
@@ -166,3 +178,20 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
         slides = len(Presentation(io.BytesIO(payload)).slides)
         log(f"decks: {kind} deck sent ({count} recipient{'s' if count != 1 else ''}, {slides} slides)")
     return result
+
+
+def pending_texts(sheets, reports_id: str, site) -> list:
+    """The AI Notes slots still waiting for the decks this site would send now (decks already sent for their
+    period are not counted): ['monthly:our_work_intro', ...]. Empty when nothing is waited for."""
+    cfg = site.deck
+    state = read_state(sheets, reports_id)
+    out = []
+    for kind in ("monthly", "weekly"):
+        if not getattr(cfg, kind):
+            continue
+        report = (dd.load_monthly if kind == "monthly" else dd.load_weekly)(sheets, reports_id, site)
+        if report is None or state.get(STATE_KEY[kind], (0, ""))[1] == report.period:
+            continue
+        _, waiting = ai_notes.texts_for(sheets, reports_id, kind, report.period)
+        out += [f"{kind}:{slot}" for slot in waiting]
+    return out

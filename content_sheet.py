@@ -346,6 +346,29 @@ def initial_setup(sheets, file_id: str, label: str, tab_list: list):
     tabs.patch_cells(sheets, file_id, updates)
 
 
+def refresh_guide(sheets, file_id: str, label: str, tab_list: list) -> bool:
+    """Puts the current Guide text into the Guide tab of an existing dashboard (the Guide is written by the
+    tool, not the owner, so it is kept current). Returns True when the tab was rewritten. A Guide that already
+    reads as it should is not touched; a file without a Guide tab is left alone."""
+    titles, _ = history.grid_info(sheets, file_id)
+    if GUIDE not in titles:
+        return False
+    lines = guide_lines(label, tab_list)
+    rows = [r + [""] * (3 - len(r)) for r in lines]
+    current = [[str(c) for c in r] + [""] * (3 - len(r)) for r in tabs.read_rows(sheets, file_id, GUIDE, "C", first_row=1)]
+    while current and not any(current[-1]):
+        current.pop()
+    if current == rows:
+        return False
+    sid = titles[GUIDE]
+    size = max(len(rows), len(current)) + 20
+    history._write(sheets.spreadsheets().values().clear(spreadsheetId=file_id, range=f"'{GUIDE}'!A1:C{size}", body={}))
+    history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
+        {"unmergeCells": {"range": {"sheetId": sid}}}] + guide_requests(sid, lines)}))
+    tabs.patch_cells(sheets, file_id, [(f"'{GUIDE}'!A1:C{len(rows)}", rows)])
+    return True
+
+
 def ensure_extra_tabs(sheets, file_id: str):
     """Seeds, ideas and state tabs for a file that was made without them (for example by hand)."""
     titles, _ = history.grid_info(sheets, file_id)

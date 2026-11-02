@@ -24,6 +24,7 @@ import opportunities as op
 import periods
 import resolved as resolved_mod
 import tabs
+import work_view
 
 GOOD, GREY, RED = "good", "grey", "red"
 UP, DOWN = "↑", "↓"
@@ -57,8 +58,10 @@ def signed(x, decimals: int = 0) -> str:
 class ClientReport:
     """The slides of one monthly deck, as data."""
 
-    def __init__(self, rep: dd.Report, lang: str, label: str):
+    def __init__(self, rep: dd.Report, lang: str, label: str, work: list = None, work_intro: str = ""):
         self.rep, self.lang, self.label = rep, lang, label
+        self.work_items = work or []                  # measured work items for the client (work_items.for_client)
+        self.work_intro = (work_intro or "").strip()
         self.T = {**i18n.table(lang), **client_i18n.table(lang)}
         self.res = rep.resolved or resolved_mod.Resolved()
         self.cur = rep.row()
@@ -463,9 +466,12 @@ class ClientReport:
         return {"intro": T["c_new_intro"].format(site=self.label), "cards": cards}
 
     # ---- slide 7 -------------------------------------------------------------------------
-    def work(self):
+    def work_pages(self) -> list:
+        """The "Our work and its results" slide(s): one or two payloads, none when there is nothing to show
+        (no placeholder is ever drawn). The intro is the sentence written for the report, else a fixed one."""
         T = self.T
-        return {"fill": T["c_fill"], "prompts": [p.format(site=self.label) for p in T["c_prompts"]]}
+        return work_view.client_pages(self.work_items, T, self.lang, self.work_intro or T["w_intro_fixed"],
+                                      short=self.short)
 
     # ---- slide 8 -------------------------------------------------------------------------
     def trend(self):
@@ -712,9 +718,11 @@ class ClientReport:
     def slides(self) -> list:
         """[(id, payload)] in deck order; slides without data are left out."""
         self.decisions.clear()
+        pages = self.work_pages()
         base = [("headline", self.headline()), ("scorecard", self.scorecard()),
                 ("climbs", self.climbs()), ("grew", self.grew()), ("new", self.new_searches()),
-                ("work", self.work()), ("trend", self.trend()), ("sections", self.sections()),
+                ("work", pages[0] if pages else None), ("work2", pages[1] if len(pages) > 1 else None),
+                ("trend", self.trend()), ("sections", self.sections()),
                 ("wins", self.quick_wins()), ("pages", self.pages_to_update()),
                 ("ideas", self.ideas()), ("next", self.next_month_slide()),
                 ("watch", self.watching(None)), ("focus", self.focus())]

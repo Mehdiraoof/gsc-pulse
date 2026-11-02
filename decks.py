@@ -30,6 +30,7 @@ import charts
 import client_i18n
 import deck_data as dd
 import i18n
+import work_view
 
 IN = 914400
 FONT_FA = "Vazirmatn"
@@ -84,6 +85,8 @@ class Ctx:
     aggregated: str = ""
     slide_count: int = 0
     mark: bytes = None                     # the PulseO mark, taken from the template
+    work: list = None                      # measured work items (work_items), for the weekly section
+    drop_summary: bool = False             # no text for the summary slide: leave the slide out (never a placeholder)
 
     @property
     def rtl(self) -> bool:
@@ -507,6 +510,8 @@ def slide_title(ctx: Ctx):
 
 
 def slide_summary(ctx: Ctx):
+    if ctx.drop_summary and not ctx.summary:              # no text was written: no slide, and no placeholder
+        return None
     T, rep = ctx.T, ctx.report
     slide, ph = new_slide(ctx, "Summary", title=dd.title_for_clicks(rep, T))
     if ctx.summary:
@@ -875,11 +880,35 @@ def slide_weekly_gone(ctx: Ctx):
 
 
 
+def slide_weekly_work(ctx: Ctx):
+    """Weekly only (the owner's deck): every piece of work of the last 90 days with its numbers so far, the
+    ones that did not help included, so they can be learned from. Skipped when there is none."""
+    if not ctx.work:
+        return None
+    CT = client_i18n.table(ctx.lang)
+    T = {**ctx.T, **CT}
+    items = ctx.work[:work_view.OWNER_ROWS]
+    slide, ph = new_slide(ctx, "Notes", title=CT["c_wk_work"])
+    drop_placeholder(ph["body"])
+    sentence(slide, ctx, CT["c_wk_work_intro"], x=0.6, y=1.5, w=12.13)
+    colors = {"green": GREEN, "amber": AMBER, "red": RED}
+    rows = []
+    for it in items:
+        r = work_view.owner_row(it, T, ctx.lang, short=lambda s: dd.short_path(s, 40) if s.startswith("/") else s[:40])
+        rows.append([Cell(r["what"], "text"), Cell(r["date"], "num"), Cell(r["clicks"], "num"),
+                     Cell(r["position"], "num"), Cell(r["versus"], "change", colors[r["tone"]], True),
+                     Cell(r["status"], "text", colors[r["tone"]], True)])
+    add_table(slide, ctx, mirror_x(ctx, 0.6, 12.13), 2.3, [3.7, 0.9, 1.6, 1.5, 2.3, 2.13],
+              [T["w_col_work"], T["w_col_date"], T["w_col_clicks"], T["w_col_pos"], T["w_col_site"],
+               T["w_col_status"]], rows, row_height=0.42, size=11, text_cols=(0, 5))
+    return slide
+
+
 MONTHLY_SLIDES = [slide_title, slide_summary, slide_alarms, slide_scorecard, slide_trend_monthly,
                   slide_segments, slide_lost_new, slide_keyword_movers, slide_page_movers,
                   slide_yoy_pages, slide_aio, slide_about]
 WEEKLY_SLIDES = [slide_title, slide_summary, slide_alarms, slide_scorecard, slide_trend_weekly,
-                 slide_weekly_movers, slide_weekly_gone]
+                 slide_weekly_movers, slide_weekly_gone, slide_weekly_work]
 
 
 # --------------------------------------------------------------------------- #
@@ -890,7 +919,8 @@ def period_title(rep: dd.Report, lang: str) -> str:
     return dd.period_title(rep, lang)
 
 
-def build_deck(report: dd.Report, cfg, template_dir: str, summary=None, logo: bytes = None) -> bytes:
+def build_deck(report: dd.Report, cfg, template_dir: str, summary=None, logo: bytes = None, work: list = None,
+               handoff: bool = False) -> bytes:
     """The .pptx as bytes. cfg is the site's DeckConfig."""
     lang = cfg.language
     path = os.path.join(template_dir, "gsc_pulse_template_fa.pptx" if lang == "fa" else "gsc_pulse_template.pptx")
@@ -901,7 +931,8 @@ def build_deck(report: dd.Report, cfg, template_dir: str, summary=None, logo: by
               period_title=period_title(report, lang),
               accent=(cfg.accent_color or AMBER), brand=(cfg.brand_color or PERIWINKLE),
               logo=logo, summary=summary, mark=template_mark(layouts),
-              aggregated=dd.aggregated_text(report, cfg.site_label))
+              aggregated=dd.aggregated_text(report, cfg.site_label), work=work,
+              drop_summary=handoff and not summary)
     for build in (MONTHLY_SLIDES if report.kind == "monthly" else WEEKLY_SLIDES):
         build(ctx)
     core = prs.core_properties

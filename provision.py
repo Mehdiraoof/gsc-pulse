@@ -206,3 +206,14 @@ def content_file(drive, sheets, site, label: str, notify=None, log=print):
         except Exception as e:  # noqa: BLE001  the file exists; the Index lists it
             log(f"  content: could not send the 'dashboard ready' email ({type(e).__name__})")
     return file_id, True
+
+
+def existing_content_file(drive, sheets, site) -> str:
+    """The id of the site's content dashboard if there is one (configuration, else the Index); '' when there is
+    none. Unlike content_file it never makes one."""
+    if site.content.sheet_id:
+        return site.content.sheet_id
+    index_id = _open_index(drive, sheets)
+    rows = tabs.read_rows(sheets, index_id, INDEX_TAB, INDEX_LAST)
+    _, row = _row_of(rows, site.name)
+    return row[6] if len(row) > 6 else ""

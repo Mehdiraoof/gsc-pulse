@@ -47,24 +47,24 @@ def build(lang="en", **kw):
 
 class SlideSelectionTests(unittest.TestCase):
 
-    def test_a_full_deck_has_fifteen_slides_in_the_agreed_order(self):
+    def test_a_full_deck_has_fourteen_slides_in_the_agreed_order(self):
         ids = [sid for sid, _ in client().slides()]
-        self.assertEqual(ids, ["headline", "scorecard", "climbs", "grew", "new", "work", "trend",
+        self.assertEqual(ids, ["headline", "scorecard", "climbs", "grew", "new", "trend",
                                "sections", "wins", "pages", "ideas", "next", "watch", "focus"])
-        self.assertEqual(len(build().slides), 15)
+        self.assertEqual(len(build().slides), 14)                  # no work slide without work to show
 
-    def test_slides_without_data_are_left_out_but_the_work_slide_stays(self):
+    def test_slides_without_data_are_left_out(self):
         ids = [sid for sid, _ in client(segments=False, opps=False, gone=0).slides()]
-        self.assertIn("work", ids)
+        self.assertNotIn("work", ids)
         for gone in ("sections", "wins", "pages", "ideas", "focus"):
             self.assertNotIn(gone, ids)
         self.assertEqual(len(build(segments=False, opps=False, gone=0).slides), 1 + len(ids))
 
-    def test_no_data_at_all_still_gives_title_and_work_slide(self):
+    def test_no_data_at_all_still_gives_the_title_slide(self):
         rep = report(segments=False, opps=False)
         rep.keywords, rep.pages, rep.gone = [], [], []
         ids = [sid for sid, _ in cd.ClientReport(rep, "en", "Example").slides()]
-        self.assertIn("work", ids)
+        self.assertNotIn("work", ids)
         self.assertNotIn("climbs", ids)
         self.assertNotIn("grew", ids)
         self.assertNotIn("new", ids)
@@ -264,12 +264,6 @@ class ProgressSlideTests(unittest.TestCase):
         self.assertEqual([c["pill"] for c in d["cards"]], ["276 impressions", "120 impressions", "90 impressions"])
         self.assertEqual(d["cards"][0]["position"], "position 8.4")
         self.assertIn("for the first time this month", d["intro"])
-
-    def test_the_work_slide_is_a_placeholder_with_four_prompts(self):
-        d = client().work()
-        self.assertEqual(d["fill"], "Mehdi fills this slide before sending.")
-        self.assertEqual(len(d["prompts"]), 4)
-        self.assertEqual(d["prompts"][3], "Anything waiting on the Example team")
 
 
 class TrendAndSectionTests(unittest.TestCase):

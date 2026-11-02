@@ -398,3 +398,13 @@ def week_dates(monday: date, sunday: date, lang: str) -> str:
     names = table(lang)["months_short"]
     return (f"{monday.day} {names[monday.month - 1]} – "
             f"{sunday.day} {names[sunday.month - 1]} {sunday.year}")
+
+
+# Numbers keep Latin digits in the decks (see the top of this file). One switch turns Persian digits on for the
+# "our work" slides (and anything else that calls `digits`) without touching anything else.
+PERSIAN_DIGITS = False
+_FA_DIGITS = str.maketrans("0123456789", "\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9")
+
+
+def digits(text: str, lang: str) -> str:
+    return str(text).translate(_FA_DIGITS) if PERSIAN_DIGITS and lang == "fa" else str(text)

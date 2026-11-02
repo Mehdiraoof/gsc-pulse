@@ -1082,6 +1082,8 @@ def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today:
         cs.initial_setup(sheets, file_id, label, cfg.tabs)
     else:
         cs.ensure_extra_tabs(sheets, file_id)
+        if cs.refresh_guide(sheets, file_id, label, cfg.tabs):         # the Guide is the tool's text: kept current
+            log("  content: the Guide tab was brought up to date")
     state = State(cs.read_all(sheets, file_id, cs.STATE, 4))
 
     cm = last_complete_month(final)

@@ -255,18 +255,20 @@ def slide_new(ctx, c, d):
 
 
 def slide_work(ctx, c, d):
+    """Our work and its results: the intro sentence and a table, one row per piece of work with the clicks and
+    the average position before and after, next to the change of the rest of the site."""
     T = c.T
-    slide = content_slide(ctx, T["c_k_did"], T["c_t_work"])
-    box = shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, mirror_x(ctx, LEFT, WIDTH), 1.65, WIDTH, 4.7,
-                AMBER_TINT, 0.03)
-    box.line.color.rgb = rgb(AMBER)
-    box.line.width = Pt(1.5)
-    box.line.dash_style = MSO_LINE.DASH
-    text = text_box(slide, mirror_x(ctx, 1.0, WIDTH - 0.8), 1.95, WIDTH - 0.8, 4.0,
-                    [(d["fill"], {"bold": True, "color": BROWN, "size": 20})], ctx, size=20,
-                    color=SLATE, align="r" if ctx.rtl else "l")
-    para(text, ctx, [("", {"size": 12})] + [("• " + p, {"size": 20, "color": SLATE})
-                                              for p in d["prompts"]], first=False)
+    slide = content_slide(ctx, T["c_k_did"], d["title"])
+    top = 1.6
+    if d["intro"]:
+        text_box(slide, mirror_x(ctx, LEFT, WIDTH), top, WIDTH, 0.9, [d["intro"]], ctx, size=15, color=SLATE,
+                 align="r" if ctx.rtl else "l")
+        top = 2.55
+    rows = [[Cell(r["what"], "text"), Cell(r["date"], "num"), Cell(r["clicks"], "num"),
+             Cell(r["position"], "num"), Cell(r["versus"], "change", GREEN if r["tone"] == "green" else BROWN, True)]
+            for r in d["rows"]]
+    decks.add_table(slide, ctx, mirror_x(ctx, LEFT, WIDTH), top, [4.9, 1.2, 1.9, 1.9, 2.23], d["header"], rows,
+                    row_height=0.62, size=13, text_cols=(0,))
 
 
 def slide_trend(ctx, c, d):
@@ -419,7 +421,7 @@ def slide_focus(ctx, c, d):
 
 
 RENDERERS = {"headline": slide_headline, "scorecard": slide_scorecard, "climbs": slide_climbs,
-             "grew": slide_grew, "new": slide_new, "work": slide_work, "trend": slide_trend,
+             "grew": slide_grew, "new": slide_new, "work": slide_work, "work2": slide_work, "trend": slide_trend,
              "sections": slide_sections, "wins": slide_wins, "pages": slide_pages,
              "ideas": slide_ideas, "next": slide_next, "watch": slide_watch, "focus": slide_focus}
 
@@ -428,12 +430,13 @@ RENDERERS = {"headline": slide_headline, "scorecard": slide_scorecard, "climbs":
 # Building the deck
 # --------------------------------------------------------------------------- #
 
-def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None, log=None) -> bytes:
+def build_monthly(report: dd.Report, cfg, template_dir: str, logo: bytes = None, log=None, work: list = None,
+                  work_intro: str = "") -> bytes:
     """The client-ready monthly deck as .pptx bytes. cfg is the site's DeckConfig."""
     lang = cfg.language
     path = os.path.join(template_dir, "gsc_pulse_template_fa.pptx" if lang == "fa"
                         else "gsc_pulse_template.pptx")
-    c = cd.ClientReport(report, lang, cfg.site_label)
+    c = cd.ClientReport(report, lang, cfg.site_label, work, work_intro)
     prs, layouts = decks.open_template(path, c.T["c_prepared"])      # the title slide says who prepared it
     ctx = decks.Ctx(prs=prs, layouts=layouts, lang=lang, T=c.T, label=cfg.site_label, report=report,
                     report_title=c.T["monthly_report"], period_title=decks.period_title(report, lang),

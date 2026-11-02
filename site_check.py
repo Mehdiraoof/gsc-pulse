@@ -245,3 +245,54 @@ def read_sitemaps(origin: str, get=default_get) -> tuple:
         if readable:
             break
     return list(urls)[:MAX_SITEMAP_URLS], bool(readable)
+
+
+def _entries(body: bytes) -> tuple:
+    """(kind, [(address, lastmod)]) of one sitemap file. `lastmod` is 'YYYY-MM-DD' or '' when the file gives none."""
+    try:
+        root = ET.fromstring(_unpack(body))
+    except ET.ParseError:
+        return "", []
+    tag = root.tag.rsplit("}", 1)[-1].lower()
+    kind = {"sitemapindex": "index", "urlset": "urls"}.get(tag, "")
+    out = []
+    for item in root:
+        loc, last = "", ""
+        for el in item:
+            name = el.tag.rsplit("}", 1)[-1].lower()
+            if name == "loc" and el.text and el.text.strip():
+                loc = el.text.strip()
+            elif name == "lastmod" and el.text:
+                m = re.match(r"\s*(\d{4}-\d{2}-\d{2})", el.text)
+                last = m.group(1) if m else ""
+        if loc:
+            out.append((loc, last))
+    return kind, out
+
+
+def read_sitemap_entries(origin: str, get=default_get) -> tuple:
+    """({address: lastmod}, ok): like read_sitemaps, with the date each page says it was last changed
+    ('' when the sitemap does not say). `ok` is False when no sitemap could be read at all."""
+    if not origin:
+        return {}, False
+    urls, seen, readable = {}, set(), 0
+    for round_ in (sitemap_roots(origin, get), [f"{origin}/sitemap.xml"]):
+        queue = [a for a in round_ if a not in seen]
+        while queue and len(seen) < MAX_SITEMAPS and len(urls) < MAX_SITEMAP_URLS:
+            address = queue.pop(0)
+            if address in seen:
+                continue
+            seen.add(address)
+            status, body = get(address)
+            kind, entries = _entries(body) if status == 200 else ("", [])
+            if not kind:
+                continue
+            readable += 1
+            if kind == "index":
+                queue.extend(loc for loc, _ in entries)
+            else:
+                for loc, last in entries:
+                    urls.setdefault(loc, last)
+        if readable:
+            break
+    return dict(list(urls.items())[:MAX_SITEMAP_URLS]), bool(readable)

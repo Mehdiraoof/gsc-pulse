@@ -242,7 +242,7 @@ class SummaryTests(unittest.TestCase):
             seen.update(url=url, headers=headers, body=json.loads(body))
             return self.reply('{"bullets": ["Clicks fell."], "next_steps": ["Check indexing."]}')
 
-        out = summary.request_summary("Clicks: 325", "en", {"ANTHROPIC_API_KEY": "key-123"}, post)
+        out = summary.request_summary("Clicks: 325", "en", {"ANTHROPIC_API_KEY": "key-123", "ALLOW_API_AI": "1"}, post)
         self.assertEqual(out, (["Clicks fell."], ["Check indexing."]))
         self.assertEqual(seen["url"], "https://api.anthropic.com/v1/messages")
         self.assertEqual(seen["headers"]["x-api-key"], "key-123")
@@ -259,13 +259,13 @@ class SummaryTests(unittest.TestCase):
             seen.update(json.loads(body))
             return self.reply('{"bullets": ["a"], "next_steps": ["b"]}')
 
-        summary.request_summary("x", "fa", {"ANTHROPIC_API_KEY": "k", "AI_SUMMARY_MODEL": "some-model"}, post)
+        summary.request_summary("x", "fa", {"ANTHROPIC_API_KEY": "k", "AI_SUMMARY_MODEL": "some-model", "ALLOW_API_AI": "1"}, post)
         self.assertEqual(seen["model"], "some-model")
         self.assertIn("Persian", seen["messages"][0]["content"])
 
     def test_any_problem_means_none(self):
-        key = {"ANTHROPIC_API_KEY": "k"}
-        self.assertIsNone(summary.request_summary("x", "en", {}, lambda *a, **k: b""))
+        key = {"ANTHROPIC_API_KEY": "k", "ALLOW_API_AI": "1"}
+        self.assertIsNone(summary.request_summary("x", "en", {"ALLOW_API_AI": "1"}, lambda *a, **k: b""))
 
         def boom(*a, **k):
             raise OSError("network down")
@@ -513,6 +513,7 @@ class DeckRunnerTests(ReportsTestCase):
 
         site = site_with(deck=deck(ai_summary=True))
         self.env["ANTHROPIC_API_KEY"] = "key-123"
+        self.env["ALLOW_API_AI"] = "1"
         self.run_decks(site=site, post=post)
         prs = Presentation(io.BytesIO(list(self.sent[1].iter_attachments())[0].get_content()))
         text = "\n".join(sh.text_frame.text for sh in prs.slides[1].shapes if sh.has_text_frame)
@@ -528,12 +529,13 @@ class DeckRunnerTests(ReportsTestCase):
 
         site = site_with(deck=deck(ai_summary=True))
         self.env["ANTHROPIC_API_KEY"] = "key-123"
+        self.env["ALLOW_API_AI"] = "1"
         result = self.run_decks(site=site, post=post)
         self.assertEqual(result.failed, [])
         prs = Presentation(io.BytesIO(list(self.sent[1].iter_attachments())[0].get_content()))
         text = "\n".join(sh.text_frame.text for sh in prs.slides[1].shapes if sh.has_text_frame)
         self.assertIn("Summary not generated automatically", text)
-        self.assertTrue(any("AI summary not available" in l for l in self.logs))
+        self.assertTrue(any("no summary text" in l for l in self.logs))
 
     def test_ai_summary_without_a_key_uses_the_placeholder(self):
         site = site_with(deck=deck(ai_summary=True))
@@ -718,7 +720,7 @@ class NamingAndPrivacyTests(unittest.TestCase):
 
     def test_workflow_passes_the_smtp_secrets_and_the_rebuild_input(self):
         text = self.read(".github/workflows/gsc_pulse.yml")
-        for name in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "ANTHROPIC_API_KEY", "REBUILD_DECKS"):
+        for name in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "REBUILD_DECKS"):
             self.assertIn(name, text)
         self.assertIn("rebuild_decks:", text)
 

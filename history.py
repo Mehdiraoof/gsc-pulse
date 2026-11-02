@@ -494,3 +494,122 @@ def read_page_urls(sheets, history_id: str, chunk: int = READ_CHUNK) -> list:
         if not rows and not total:
             break
     return list(seen)
+
+
+# --------------------------------------------------------------------------- #
+# Reading page history for the "our work" numbers
+# --------------------------------------------------------------------------- #
+
+def _page_columns(sheets, history_id: str) -> dict:
+    header = _read(sheets.spreadsheets().values().get(spreadsheetId=history_id, range="'H Pages'!A1:F1"))
+    top = (header.get("values") or [[]])[0]
+    names = {"Date": 0, "Page": 1, "Clicks": 2, "Impressions": 3, "CTR (%)": 4, "Avg. Position": 5}
+    return {k: (top.index(k) if k in top else v) for k, v in names.items()}
+
+
+def _page_rows_total(sheets, history_id: str) -> int:
+    titles, _ = grid_info(sheets, history_id)
+    if STATE_TAB in titles:
+        total = read_state(sheets, history_id).get("H Pages", {}).get("rows", 0)
+        if total:
+            return total
+    return 0
+
+
+def _num(cell, default=0.0) -> float:
+    try:
+        return float(str(cell).replace(",", "").strip())
+    except ValueError:
+        return default
+
+
+def read_pages_since(sheets, history_id: str, since: date, chunk: int = 20000) -> list:
+    """[(date, page, clicks, impressions, position)] of every stored day from `since` on, read from the end
+    of the `H Pages` tab backwards (the tab is appended in date order) so only the recent part is read."""
+    titles, _ = grid_info(sheets, history_id)
+    if "H Pages" not in titles:
+        return []
+    col = _page_columns(sheets, history_id)
+    total = _page_rows_total(sheets, history_id)
+    out = []
+    if not total:                                   # no row count: read forward, everything
+        first = 2
+        while True:
+            try:
+                resp = _read(sheets.spreadsheets().values().get(
+                    spreadsheetId=history_id, range=f"'H Pages'!A{first}:F{first + chunk - 1}"))
+            except HttpError as e:
+                if e.resp.status == 400:
+                    break
+                raise
+            rows = resp.get("values", [])
+            out += [r for r in rows if r]
+            if len(rows) < chunk:
+                break
+            first += chunk
+        raw = out
+    else:
+        raw, last = [], total + 1
+        while last >= 2:
+            first = max(2, last - chunk + 1)
+            resp = _read(sheets.spreadsheets().values().get(
+                spreadsheetId=history_id, range=f"'H Pages'!A{first}:F{last}"))
+            rows = [r for r in resp.get("values", []) if r]
+            raw = rows + raw
+            dates = [str(r[col["Date"]]).strip() for r in rows if len(r) > col["Date"]]
+            if dates and min(dates) < since.isoformat():
+                break
+            last = first - 1
+    result = []
+    for r in raw:
+        if len(r) <= max(col["Date"], col["Page"]):
+            continue
+        d = str(r[col["Date"]]).strip()
+        if d < since.isoformat():
+            continue
+        try:
+            day = date.fromisoformat(d)
+        except ValueError:
+            continue
+        get = lambda name: r[col[name]] if len(r) > col[name] else ""      # noqa: E731
+        result.append((day, str(r[col["Page"]]).strip(), _num(get("Clicks")), _num(get("Impressions")),
+                       _num(get("Avg. Position"))))
+    return result
+
+
+def read_first_seen(sheets, history_id: str, chunk: int = READ_CHUNK) -> dict:
+    """{page: first date it has a row in the whole stored history} (reads the Date and Page columns once)."""
+    titles, _ = grid_info(sheets, history_id)
+    if "H Pages" not in titles:
+        return {}
+    col = _page_columns(sheets, history_id)
+    total = _page_rows_total(sheets, history_id)
+    out, first = {}, 2
+    d, p = chr(65 + col["Date"]), chr(65 + col["Page"])
+    lo, hi = min(d, p), max(d, p)
+    while True:
+        last = first + chunk - 1
+        if total:
+            last = min(last, total + 1)
+            if first > total + 1:
+                break
+        try:
+            resp = _read(sheets.spreadsheets().values().get(
+                spreadsheetId=history_id, range=f"'H Pages'!{lo}{first}:{hi}{last}"))
+        except HttpError as e:
+            if e.resp.status == 400:
+                break
+            raise
+        rows = resp.get("values", [])
+        di, pi = (0, ord(p) - ord(lo)) if d == lo else (ord(d) - ord(lo), 0)
+        for r in rows:
+            if len(r) > max(di, pi) and str(r[pi]).strip():
+                day, page = str(r[di]).strip(), str(r[pi]).strip()
+                if page not in out or day < out[page]:
+                    out[page] = day
+        if not total and len(rows) < chunk:
+            break
+        first = last + 1
+        if not rows and not total:
+            break
+    return out

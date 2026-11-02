@@ -57,7 +57,12 @@ def parse_summary(text: str):
 
 
 def request_summary(aggregated: str, lang: str, env, post=_post):
-    """Asks Claude for the summary. Returns (bullets, next_steps) or None on ANY problem."""
+    """Asks Claude for the summary through the API. Returns (bullets, next_steps) or None on ANY problem. The
+    API path is OFF: while the tool serves only its owner, every report text is written by the owner's own plan
+    through the AI Notes tab (ai_notes.py). It runs only with ALLOW_API_AI=1 in the environment (the future).
+    """
+    if (env.get("ALLOW_API_AI") or "").strip().lower() not in ("1", "true", "yes"):
+        return None
     key = (env.get("ANTHROPIC_API_KEY") or "").strip()
     if not key:
         return None

@@ -53,6 +53,7 @@ import content_run
 import fake_site
 import rehearsal
 import deck_runner
+import our_work
 import mailer
 import page_discovery
 import provision
@@ -540,8 +541,56 @@ def deck_rebuild_for(run: SiteRun, everything: bool, site_name: str, kind: str):
     return False
 
 
-def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False, test=False):
-    """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed."""
+def handoff_on() -> bool:
+    """AI_HANDOFF: the texts of the reports come from the owner's Claude plan through the AI Notes tab, and the
+    decks are built and emailed by a second run (DECK_PHASE=build), not by the sync run."""
+    return os.environ.get("AI_HANDOFF", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def sync_work(run: SiteRun, today: date):
+    """Phase 2b: the work of the site (new and updated pages are recorded, the manual tab is made) and, with the
+    handoff on, the rows of the AI Notes tab the next reports need. Nothing is emailed and no AI is called."""
+    site = run.site
+    if not site.deck.enabled or not site.reports_sheet_id:
+        return
+    site_header(run, "Work and AI notes")
+    our_work.scan_site(run.drive, run.sheets, site, today)
+    if handoff_on():
+        our_work.prepare_notes(run.drive, run.sheets, site, today, our_work.gsc_queries(run.gsc, site))
+    else:
+        our_work.wi.ensure_our_work_tab(run.sheets, site.reports_sheet_id)
+    print()
+
+
+def wait_for_texts(runs: list, minutes: int, sleep=time.sleep, clock=time.monotonic) -> list:
+    """Before the decks are built: waits (checking every 5 minutes, at most `minutes`) until the AI Notes slots of
+    the decks about to be sent are all ready. Returns what is still waiting at the end (the decks are then
+    built without those texts)."""
+    deadline = clock() + minutes * 60
+    announced = False
+    while True:
+        pending = []
+        for r in runs:
+            if r.site.deck.enabled and r.site.reports_sheet_id:
+                try:
+                    pending += [f"{r.name}:{p}" for p in deck_runner.pending_texts(r.sheets, r.site.reports_sheet_id, r.site)]
+                except Exception:                              # noqa: BLE001  a site that cannot be read waits for nothing
+                    continue
+        if not pending:
+            print("texts: all ready" if announced else "texts: nothing to wait for")
+            return []
+        if minutes <= 0 or clock() >= deadline:
+            print(f"texts: {len(pending)} still waiting ({', '.join(sorted(pending))}); the decks are built without them")
+            return pending
+        if not announced:
+            print(f"texts: waiting for {len(pending)} ({', '.join(sorted(pending))}), at most {minutes} minutes")
+            announced = True
+        sleep(max(1, min(300, deadline - clock())))
+
+
+def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_only=False, test=False, build=False):
+    """Phase 1c: the weekly and monthly decks of one site, built from its Reports sheet and emailed. With the
+    handoff on the sync run does not send them: the second run (build) does, with the texts that are ready."""
     site = run.site
     if not site.deck.enabled:
         return
@@ -553,8 +602,18 @@ def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_onl
         run.decks_text = "off (no SMTP settings)"
         print("decks: off (no SMTP settings)\n")
         return
+    extras = None
+    if handoff_on() or build or test:                      # the new way: texts from AI Notes, the work of the site
+        if handoff_on() and not build and not test and not mark_only and not rebuild_decks:
+            run.decks_text = "held for the second run"
+            print("decks: held (the second run builds and sends them)\n")
+            return
+        today = date.today()
+        if test:                                            # a test send reads the work of the site as it is today
+            our_work.scan_site(run.drive, sheets_service, site, today)
+        extras = our_work.extras_for(run.drive, sheets_service, site, today, run.gsc)
     result = deck_runner.run_decks(sheets_service, site.reports_sheet_id, site, smtp, os.environ,
-                                   rebuild_decks, print, scrub, mark_only=mark_only, test=test)
+                                   rebuild_decks, print, scrub, mark_only=mark_only, test=test, extras=extras)
     run.decks_text = result.text()
     if result.failed:
         raise GscPulseError(f"deck delivery failed: {', '.join(result.failed)}")
@@ -991,6 +1050,30 @@ def main():
         print(f"  ✅  Done — updated at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         return
 
+    # ---- The second run: build and send the decks of every site, with the texts that are ready -----
+    if os.environ.get("DECK_PHASE", "").strip().lower() == "build":
+        wait_for_texts([r for r in enabled if r.status != "failed"],
+                       int(re.sub(r"\D", "", os.environ.get("WAIT_FOR_TEXTS_MINUTES", "")) or 0))
+        for r in enabled:
+            if r.status == "failed":
+                continue
+            try:
+                sync_decks(r.sheets, r, smtp, deck_rebuild_for(r, rebuild_decks, rebuild_deck_site, rebuild_deck_kind),
+                           test=test_deck and bool(rebuild_deck_site) and r.name.lower() == rebuild_deck_site,
+                           build=True)
+            except Exception as e:
+                r.decks_text = r.decks_text if r.decks_text != "off" else "failed"
+                fail_site(r, e)
+                print()
+            if r.status == "pending":
+                r.status = "ok"
+        print_summary(runs)
+        failed = [r.name for r in runs if r.status == "failed"]
+        if failed:
+            raise GscPulseError(f"{len(failed)} of {len(enabled)} site(s) failed: {', '.join(failed)}")
+        print(f"  ✅  Decks done — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        return
+
     # ---- Phase 1: v1 tabs of every site, one after another -----------------
     for r in enabled:
         if r.status == "failed":
@@ -1053,6 +1136,16 @@ def main():
         if not r.v1_done:
             continue                        # v1 failed (no access?): nothing to append
         sync_history(r.gsc, r.sheets, r, started_at, history_off_text)
+
+    # ---- Phase 2b: the work of every site, and the rows of the AI Notes tab ---------
+    for r in enabled:
+        if not r.v1_done:
+            continue
+        try:
+            sync_work(r, date.today())
+        except Exception as e:
+            fail_site(r, e)
+            print()
 
     # ---- Phase 3: Meta tab of every site -----------------------------------
     for r in enabled:
