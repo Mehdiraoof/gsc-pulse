@@ -24,7 +24,7 @@ WEAK = f"{ROOT}/article/garden-tools"
 ID = f"{ROOT}/article/12345"
 FA = f"{ROOT}/article/%D9%85%DB%8C%DA%A9%D8%B1%D9%88%D8%B3%DA%A9%D9%88%D9%BE-%D8%B2%DB%8C%D8%B3%D8%AA%DB%8C"
 FAD = content.display_url(FA)
-TIE = f"{ROOT}/article/best-binoculars-for-bird-watching-beginners"
+TIE = f"{ROOT}/article/best-binoculars-for-bird-watching-beginners-guide"
 FEW = f"{ROOT}/article/stone-bridges"
 
 FA_PLAIN = "میکروسکوپ"                  # میکروسکوپ
@@ -38,8 +38,8 @@ PAIRS = [("microscope", BIO, 40, 2000, 6.0), ("biological microscope", BIO, 5, 3
          ("weather forecast", WEAK, 3, 500, 9.0), ("random thing", WEAK, 2, 300, 9.5),
          ("anything at all", ID, 3, 500, 8.0),
          (FA_PLAIN, FA, 14, 1000, 5.0), (FA_ARABIC, FA, 6, 200, 6.0),
-         ("best binoculars for bird watching beginners", TIE, 2, 50, 6.0),
-         ("binoculars bird watching beginners", TIE, 7, 900, 6.0),
+         ("best binoculars for bird watching beginners guide", TIE, 2, 50, 6.0),
+         ("binoculars for bird watching beginners guide", TIE, 7, 900, 6.0),
          ("stone bridge", FEW, 0, 5, 12.0), ("old unrelated words", FEW, 1, 55, 12.0),
          ("about us", f"{ROOT}/about", 40, 500, 2.0)]
 
@@ -96,15 +96,15 @@ class ScoreTests(unittest.TestCase):
 
     def stats(self, url, rows):
         return content.build_pages({url: (1, sum(r[1] for r in rows), 5.0)},
-                                   [(q, url, 1, n, 5.0) for q, n in rows])
+                                   [(q, url, 1, n, 5.0) for q, n in rows])[content.url_key(url)]
 
     def test_impressions_only_break_ties_between_good_matches(self):
         stats = self.stats(BIO, [("microscope", 2000), ("biological microscope", 300)])
         pick = content.pick_keyword(stats, BRAND, BIO)
         self.assertEqual((pick.keyword, pick.strong, pick.top), ("biological microscope", True, "microscope"))
-        tie = self.stats(TIE, [("best binoculars for bird watching beginners", 50),
-                               ("binoculars bird watching beginners", 900)])
-        self.assertEqual(content.pick_keyword(tie, BRAND, TIE).keyword, "binoculars bird watching beginners")
+        tie = self.stats(TIE, [("best binoculars for bird watching beginners guide", 50),
+                               ("binoculars for bird watching beginners guide", 900)])
+        self.assertEqual(content.pick_keyword(tie, BRAND, TIE).keyword, "binoculars for bird watching beginners guide")
 
     def test_a_typo_or_a_search_naming_another_site_does_not_beat_a_clean_match(self):
         stats = self.stats(BIO, [("biologcal microscope", 5000), ("biological microscope amazon.com", 4000),
@@ -158,7 +158,7 @@ class NewRowsTests(FakeSiteBase):
         self.assertEqual(row[content.KEY], "biological microscope")
         self.assertNotIn(content.REVIEW_ALERT, row["Alerts"])
         self.assertIn("microscope", row["Secondary Keywords"])                      # the big search is still listed
-        self.assertEqual(row["Primary KW Impr."], 300)                              # the numbers follow the keyword
+        self.assertEqual(int(row["Primary KW Impr."]), 300)                              # the numbers follow the keyword
 
     def test_a_page_with_no_strong_match_gets_no_keyword_and_the_alert(self):
         self.run_it()
@@ -181,7 +181,7 @@ class NewRowsTests(FakeSiteBase):
 
     def test_ties_go_to_the_search_with_more_impressions_and_a_search_with_few_impressions_cannot_win(self):
         self.run_it()
-        self.assertEqual(self.row(TIE)[content.KEY], "binoculars bird watching beginners")
+        self.assertEqual(self.row(TIE)[content.KEY], "binoculars for bird watching beginners guide")
         self.assertEqual(self.row(FEW)[content.KEY], "")                            # "stone bridge" has 5 impressions: not enough
 
     def test_a_page_with_no_searches_at_all_keeps_the_rule_of_the_page_title(self):
@@ -228,7 +228,7 @@ class ExistingRowsTests(FakeSiteBase):
         row = self.row(BIO)
         self.assertEqual(row[content.KEY], "microscope")
         self.assertIn("my merged idea", row["Secondary Keywords"])
-        self.assertEqual(row["Primary KW Impr."], 2000)                             # the numbers follow whatever is in the cell
+        self.assertEqual(int(row["Primary KW Impr."]), 2000)                             # the numbers follow whatever is in the cell
 
 
 class OneTimeFixTests(FakeSiteBase):
@@ -278,7 +278,7 @@ class OneTimeFixTests(FakeSiteBase):
         self.assertEqual(row[content.KEY], "biological microscope")                  # a refresh never overwrites it
         self.assertIn("added by hand", row["Secondary Keywords"])
         self.assertIn("microscope", content.split_keywords(row["Secondary Keywords"]))
-        self.assertEqual(row["Primary KW Impr."], 300)                              # the numbers follow the new keyword
+        self.assertEqual(int(row["Primary KW Impr."]), 300)                              # the numbers follow the new keyword
         self.assertEqual(self.plan_for(BIO), [])                                    # a second run finds nothing to do
         self.assertIn(content.REVIEW_ALERT, self.alerts(WEAK))                      # the flagged row got its alert
 
@@ -288,7 +288,7 @@ class OneTimeFixTests(FakeSiteBase):
     def test_a_row_someone_chose_or_with_a_brief_or_a_draft_is_never_changed(self):
         self.edit("Pages", BIO, "Notes/Checklist", "Keyword checked on 2026-11-02")
         self.edit("Pages", FAD, "Attachments", "Brief · https://docs.example.test/brief1")
-        self.edit("Pages", TIE, content.KEY, "binoculars bird watching beginners")       # not the top search? it is: still a pick
+        self.edit("Pages", TIE, content.KEY, "binoculars for bird watching beginners guide")
         self.edit("Pages", FEW, content.KEY, "something nobody searched")                # not the page's top search
         urls = {c.url for c in self.plan()}
         self.assertNotIn(BIO, urls)

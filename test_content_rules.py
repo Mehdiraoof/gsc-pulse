@@ -257,15 +257,16 @@ class KeywordTests(base.Base):
     def sitemap(self, *urls):
         return lambda: (list(urls), True)
 
-    def test_an_empty_keyword_takes_the_top_search_of_the_page_even_from_older_months(self):
-        old = [("example old brand", self.NEW, 1, 500, 1.0), ("old search", self.NEW, 2, 90, 15.0),
-               ("older search", self.NEW, 1, 40, 18.0)]
+    def test_an_empty_keyword_takes_the_best_fitting_search_of_the_page_even_from_older_months(self):
+        old_url = f"{ROOT}/article/old-search"
+        old = [("example old brand", old_url, 1, 500, 1.0), ("old search", old_url, 2, 90, 15.0),
+               ("older search", old_url, 1, 40, 18.0)]
         with mock.patch(f"{base.__name__}.OLD_PAIRS", old):
-            result = self.run_it(sitemap=self.sitemap(self.NEW))
-        r = self.find("Articles", self.NEW)
+            result = self.run_it(sitemap=self.sitemap(old_url))
+        r = self.find("Articles", old_url)
         self.assertEqual(r[content.KEY], "old search")                       # the brand search is skipped
         self.assertEqual(r["Notes/Checklist"], "")
-        self.assertEqual(result.keywords, {"searches": 4, "title": 0, "empty": 0})   # the three pages of the site, too
+        self.assertEqual(result.keywords, {"searches": 4, "title": 0, "empty": 0, "review": 1})   # the three pages of the site, too; the home page fits no search
 
     def test_without_searches_the_title_is_used_and_the_note_says_so_once(self):
         probe = probes({self.NEW: Probe(200, "", "A Quiet Post")})

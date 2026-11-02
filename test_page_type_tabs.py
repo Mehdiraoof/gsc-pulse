@@ -15,15 +15,15 @@ from test_content_run import ROOT, TODAY, Base
 
 DAY2 = date(2026, 10, 28)
 
-A = f"{ROOT}/article/a"
-EN_ARTICLE = f"{ROOT}/en/article/e1"
-SONG = f"{ROOT}/song/s1"
-EN_SONG = f"{ROOT}/en/song/s2"
-VIDEO = f"{ROOT}/programepisode/v1"
-PROGRAM = f"{ROOT}/program/p1"
+A = f"{ROOT}/article/garden-shoes"
+EN_ARTICLE = f"{ROOT}/en/article/english-garden-words"
+SONG = f"{ROOT}/song/worship-song-lyrics"
+EN_SONG = f"{ROOT}/en/song/english-song-words"
+VIDEO = f"{ROOT}/programepisode/episode-title-words"
+PROGRAM = f"{ROOT}/program/program-overview"
 SERIES = f"{ROOT}/programseries/q1"
 SHOP = f"{ROOT}/shop/item"
-ABOUT = f"{ROOT}/about"
+ABOUT = f"{ROOT}/about-us"
 
 PAGES = {A: (30, 1000, 6.0), EN_ARTICLE: (10, 400, 5.0), SONG: (40, 3000, 3.0), EN_SONG: (5, 300, 4.0),
          VIDEO: (20, 1200, 5.0), PROGRAM: (8, 500, 7.0), SERIES: (4, 200, 8.0), SHOP: (3, 800, 6.0),

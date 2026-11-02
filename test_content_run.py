@@ -17,7 +17,7 @@ from test_own_access import FakeDrive
 
 TODAY, FINAL = date(2026, 10, 27), date(2026, 10, 24)
 ROOT = "https://example.test"
-A, B, ABOUT, HOME = f"{ROOT}/article/a", f"{ROOT}/article/b", f"{ROOT}/about", f"{ROOT}/"
+A, B, ABOUT, HOME = f"{ROOT}/article/garden-shoes", f"{ROOT}/article/tiny-question", f"{ROOT}/about-us", f"{ROOT}/"
 
 PAGES = {A: (30, 1000, 6.0), B: (2, 10, 12.0), ABOUT: (50, 600, 2.0), HOME: (200, 9000, 1.5)}
 PAIRS = [("garden shoes", A, 20, 600, 6.0), ("how to plant a tree", A, 5, 200, 7.0),
@@ -210,7 +210,7 @@ class RowTests(Base):
         self.assertEqual(r["Query Fan-outs"], "how to plant a tree")
         self.assertEqual(r["Ranking Queries"], "3")
         self.assertEqual((r["Intent"], r["Keyword Type"], r["Content Type"]), ("Informational", "General", "Cluster"))
-        self.assertEqual(r["Slug"], "/article/a")
+        self.assertEqual(r["Slug"], "/article/garden-shoes")
         self.assertEqual(float(r["Clicks MoM"]), 1.0)             # September is twice August
         self.assertIn(r["Priority"], content.PRIORITIES)
         self.assertEqual(r["Alerts"], "")
@@ -227,7 +227,7 @@ class RowTests(Base):
 
     def test_a_landing_page_row(self):
         r = self.find("Landing Pages", ABOUT)
-        self.assertEqual((r["Intent"], r["Content Type"], r["Slug"]), ("Navigational", "Pillar", "/about"))
+        self.assertEqual((r["Intent"], r["Content Type"], r["Slug"]), ("Navigational", "Pillar", "/about-us"))
         self.assertEqual(r[content.KEY], "about us")
 
     def test_new_topics_come_from_searches_that_land_on_the_home_page(self):
@@ -298,7 +298,7 @@ class GuideTests(Base):
 class TargetedTests(unittest.TestCase):
 
     def test_a_search_merged_into_a_page_row_is_not_proposed_as_an_idea(self):
-        recs = [{"row": {content.KEY: "kw", content.URL: "https://example.test/article/a",
+        recs = [{"row": {content.KEY: "kw", content.URL: "https://example.test/article/garden-shoes",
                          "Secondary Keywords": "merged idea, ایده، old primary"}},
                 {"row": {content.KEY: "topic", content.URL: ""}}]
         recs[0]["vals"] = {"Secondary Keywords": "merged idea, old primary, fresh from this refresh"}

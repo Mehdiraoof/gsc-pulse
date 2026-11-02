@@ -20,14 +20,14 @@ IMPORT = [{"sheet_id": "OLD-SHEET", "source_tab": "Old Blog", "target_tab": "Art
 
 def old_rows():
     return [
-        ["garden shoes", "Briefed", "Update", f"{ROOT}/article/a/#top", "N/A", "Great shoes", "A description",
+        ["garden shoes", "Briefed", "Update", f"{ROOT}/article/garden-shoes/#top", "N/A", "Great shoes", "A description",
          "Shoes", "Garden", "October 27, 2024", "a\n b", "note a"],
-        ["old keyword", "Published", "Keep", "", "article/b", "N/A", "N/A", "", "", "N/A", "", "N/A"],
+        ["old keyword", "Published", "Keep", "", "article/tiny-question", "N/A", "N/A", "", "", "N/A", "", "N/A"],
         ["c topic", "Pending", "", "", "", "", "", "", "", "", "", ""],
         ["best bread recipes", "Briefed", "Write", "", "", "", "", "", "", "", "", ""],
         ["ghost post", "Published", "Update", f"{ROOT}/article/ghost", "", "", "", "", "", "", "", ""],
         ["published idea", "Published", "", "", "", "", "", "", "", "", "", ""],
-        ["twin", "Researched", "", f"{ROOT}/article/a?x=1", "", "", "", "", "", "", "", ""],
+        ["twin", "Researched", "", f"{ROOT}/article/garden-shoes?x=1", "", "", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", "Lonely", "", "", "", ""],
     ]
@@ -199,7 +199,7 @@ class MatchingTests(base.Base):
             self.run_import()
         b = self.find("Articles", B)
         self.assertEqual((b[content.KEY], b[content.STATUS], b[content.TODO], b["Slug"]),
-                         ("old keyword", "Published", "Keep", "article/b"))
+                         ("old keyword", "Published", "Keep", "article/tiny-question"))
         c = self.find("Articles", C)
         self.assertEqual((c[content.KEY], c[content.STATUS]), ("c topic", "Pending"))   # an unknown status stays
 
