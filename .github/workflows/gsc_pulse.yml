@@ -112,7 +112,7 @@ jobs:
   sync:
     if: ${{ inputs.deck_phase != 'build' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60     # a first refresh of a big dashboard (thousands of pages to check) takes about 25 minutes
     steps:
       - uses: actions/checkout@v7
 
