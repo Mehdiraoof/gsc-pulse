@@ -145,6 +145,24 @@ class CheckTests(Base):
             self.assertTrue(self.log_has("already sent for the latest period"))
         self.assertEqual(self.kinds_sent(), 2)
 
+    def test_what_was_shown_with_numbers_is_remembered_only_when_the_real_monthly_deck_goes_out(self):
+        self.site.reports_sheet_id = RID
+        self.sync_finishes()
+        ids = ["updated|2026-10-12|https://example.test/article/updated"]
+
+        def extras(kind, report):
+            return {"texts": {}, "waiting": [], "work": [], "shown": ids if kind == "monthly" else []}
+
+        def run(**kw):
+            return deck_runner.run_decks(self.sheets, RID, self.site, self.smtp, self.env, log=lambda s: None,
+                                         send=lambda s, m: self.sent.append(m), fetch_logo=lambda u: None,
+                                         extras=extras, **kw)
+
+        run(test=True, rebuild=True)                                          # a test copy remembers nothing
+        self.assertEqual(our_work.shown_ids(self.sheets, self.site), set())
+        run(gate="second")
+        self.assertEqual(our_work.shown_ids(self.sheets, self.site), set(ids))
+
     def test_two_runs_that_overlap_send_it_once(self):
         self.sync_finishes()
         self.task_writes(ai_notes.OUR_WORK_INTRO, ai_notes.WEEKLY_SUMMARY)
