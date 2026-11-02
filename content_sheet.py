@@ -394,6 +394,26 @@ def ensure_extra_tabs(sheets, file_id: str):
     tabs.patch_cells(sheets, file_id, [(f"'{n}'!A1:{letters(len(h) - 1)}1", [h]) for n, h, _, _ in wanted])
 
 
+def ensure_tabs(sheets, file_id: str, tab_list: list) -> list:
+    """Adds the tabs of the list that the file does not have yet (a page type that came after the file was made),
+    made exactly like the first tabs: header, colours, dropdowns, the grey rule for gone pages. They go before the
+    Guide. Existing tabs and their rows are not touched. Returns the names added."""
+    titles, _ = history.grid_info(sheets, file_id)
+    missing = [t for t in tab_list if t.name not in titles]
+    if not missing:
+        return []
+    at = list(titles).index(GUIDE) if GUIDE in titles else len(titles)
+    made = history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": [
+        {"addSheet": {"properties": {"title": t.name, "index": at + i}}} for i, t in enumerate(missing)]}))
+    reqs = []
+    for reply in made["replies"]:
+        reqs += tab_requests(reply["addSheet"]["properties"]["sheetId"])
+    history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": reqs}))
+    tabs.patch_cells(sheets, file_id, [(f"'{t.name}'!A1:{letters(len(content.HEADERS) - 1)}1", [content.HEADERS])
+                                       for t in missing])
+    return [t.name for t in missing]
+
+
 SETTLED_GREY, SETTLED_TEXT = "#EEEEEE", "#8A8FA3"
 
 

@@ -77,6 +77,7 @@ class ContentResult:
     removed: dict = field(default_factory=dict)     # gone / redirect / merged -> rows moved to Removed Pages
     keywords: dict = field(default_factory=lambda: {"searches": 0, "title": 0, "empty": 0})
     found_gone: int = 0                             # pages of the history or sitemap that already returned 404/410: no row
+    tab_notes: list = field(default_factory=list)   # page types left without a tab (over the limit): said in the owner's note
 
     def added_text(self) -> str:
         return ", ".join(f"{self.added[s]} from {s}" for s in SOURCES if self.added.get(s))
@@ -1111,8 +1112,14 @@ def run_content(drive, sheets, site, reports_id: str, fetch, final: date, today:
         cs.initial_setup(sheets, file_id, label, cfg.tabs)
     else:
         cs.ensure_extra_tabs(sheets, file_id)
+        added = cs.ensure_tabs(sheets, file_id, cfg.tabs)               # a page type that came after the file was made
+        if added:
+            log(f"  content: {len(added)} tab(s) added for page types: {', '.join(added)}")
         if cs.refresh_guide(sheets, file_id, label, cfg.tabs):         # the Guide is the tool's text: kept current
             log("  content: the Guide tab was brought up to date")
+    for note in cfg.notes:
+        log(f"  content: tabs: {note}")
+    result.tab_notes = [n for n in cfg.notes if n.startswith("NO TAB")]
     state = State(cs.read_all(sheets, file_id, cs.STATE, 4))
     # a page that is gone keeps its row, greyed (a rule on the tab, added once to a tab made before it existed) ...
     if not state.get("format", "settled"):
@@ -1161,6 +1168,7 @@ def owner_email(result: ContentResult, label: str, link: str) -> tuple:
     if result.warned or result.removed:
         lines.append(f"Pages warned (gone or moved, removed next time if still so): {result.warned}")
         lines += [f"Rows marked Removed or Redirected ({k}): {n}" for k, n in sorted(result.removed.items())]
+    lines += result.tab_notes
     if any(result.keywords.values()):
         lines.append("Empty Primary Keywords filled from " + ", ".join(
             f"{k}: {n}" for k, n in result.keywords.items()))

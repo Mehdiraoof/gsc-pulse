@@ -875,6 +875,8 @@ def run_views(sheets, reports_id: str, site, newest_month: str = "", new_month: 
     requests = []
     if full:
         for title, sid in titles.items():
+            if title.startswith(SEGMENT_PREFIX) and title not in names:
+                continue                  # the tab of a page type that was split or dropped stays, as history
             if is_view_name(title) and title not in (EVENTS, IMPACT):
                 requests.append({"deleteSheet": {"sheetId": sid}})
     if SHEET1 in titles and not tabs.read_tab(sheets, reports_id, SHEET1):

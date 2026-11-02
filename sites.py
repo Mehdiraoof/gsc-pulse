@@ -215,7 +215,8 @@ def _parse_deck(value, where: str) -> DeckConfig:
 # The content dashboard (v2.5)
 # --------------------------------------------------------------------------- #
 
-CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "seasonal_regex", "min_gap_impressions_90d",
+CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "page_type_tabs", "skip_types", "tab_names",
+                  "seasonal_regex", "min_gap_impressions_90d",
                   "import_from", "gap_exclude_terms", "repair_imports",
                   "sop_doc_id", "briefs_folder_id", "drafts_folder_id", "language", "extra_rules",
                   "max_briefs_per_run", "max_drafts_per_run", "ai", "ai_drafts")
@@ -230,6 +231,42 @@ RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas", "i
 MAX_CONTENT_TABS = 8
 
 
+LANGUAGE_CODES = frozenset(
+    "aa ab af ak am an ar as ay az ba be bg bn bo br bs ca ce co cs cy da de dv el en eo es et eu fa fi fj fo fr fy "
+    "ga gd gl gn gu he hi hr ht hu hy id ig is it ja jv ka kk km kn ko ku ky la lb lo lt lv mg mi mk ml mn mr ms mt "
+    "my nb ne nl nn no oc om or pa pl ps pt qu rm ro ru rw sa sd si sk sl sm sn so sq sr st su sv sw ta te tg th ti "
+    "tk tl tr tt ug uk ur uz vi xh yi yo zh zu".split())
+LANGUAGE_NAMES = {
+    "english": "en", "persian": "fa", "farsi": "fa", "arabic": "ar", "turkish": "tr", "russian": "ru",
+    "german": "de", "french": "fr", "spanish": "es", "italian": "it", "portuguese": "pt", "dutch": "nl",
+    "chinese": "zh", "japanese": "ja", "korean": "ko", "hindi": "hi", "urdu": "ur", "hebrew": "he",
+    "kurdish": "ku", "armenian": "hy", "azeri": "az", "pashto": "ps", "indonesian": "id", "polish": "pl",
+    "ukrainian": "uk", "swedish": "sv", "greek": "el", "romanian": "ro", "bengali": "bn", "thai": "th",
+    "vietnamese": "vi", "فارسی": "fa", "انگلیسی": "en", "عربی": "ar", "ترکی": "tr", "کردی": "ku"}
+
+
+def language_code(name: str) -> str:
+    """The language folder a page type name stands for ("en", "fa-ir", "English"), or "" when the name is not
+    a language. A language is never a page type of the content dashboard: it never gets a tab, and its folder
+    is ignored when a page is placed. A short code counts only in lower case (a type "It" is not Italian)."""
+    n = str(name or "").strip()
+    if re.fullmatch(r"[a-z]{2}(-[a-z]{2})?", n) and n[:2] in LANGUAGE_CODES:
+        return n
+    return LANGUAGE_NAMES.get(n.lower(), "")
+
+
+def strip_language(url: str, folders) -> str:
+    """The address without a leading language folder: https://host/en/song/x -> https://host/song/x."""
+    if not folders:
+        return url
+    m = re.match(r"^((?:https?:)?//[^/?#]+)?/(" + "|".join(re.escape(f) for f in folders) + r")(?=[/?#]|$)(.*)$",
+                 url, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return url
+    rest = m.group(3)
+    return (m.group(1) or "") + (rest if rest.startswith("/") else "/" + rest)
+
+
 @dataclass
 class ContentTab:
     name: str
@@ -238,14 +275,17 @@ class ContentTab:
     description: str = ""
     gaps: bool = False             # new-topic rows (content gaps) are proposed for this tab
     landing: bool = False          # landing pages: Navigational intent, Pillar content type
+    lang_folders: tuple = ()       # language folders of the site (/en/): ignored when a page is placed
 
     def matches(self, url: str) -> bool:
-        """Does this page belong to the tab? Tried on the URL as given and on its readable form."""
+        """Does this page belong to the tab? Tried on the URL as given and on its readable form, and with the
+        language folder of the site (/en/) taken off: a page in another language is in the tab of its page type."""
         from urllib.parse import unquote
         bare = re.sub(r"[?#].*$", "", unquote(url, errors="replace"))     # no query, no fragment
         for candidate in {url, unquote(url, errors="replace"), bare}:
-            if re.search(self.url_regex, candidate) and not (
-                    self.exclude_regex and re.search(self.exclude_regex, candidate)):
+            forms = {candidate, strip_language(candidate, self.lang_folders)}
+            if any(re.search(self.url_regex, f) for f in forms) and not (
+                    self.exclude_regex and any(re.search(self.exclude_regex, f) for f in forms)):
                 return True
         return False
 
@@ -278,6 +318,11 @@ class ContentConfig:
     max_drafts_per_run: int = 5
     ai: dict = field(default_factory=dict)               # provider, model, fallback_model, max_requests_per_run, daily_requests
     ai_drafts: bool = True                               # false: a Draft row is left untouched (the site stops at the brief)
+    # page-type tabs (see resolve_content_tabs): every page type of the site gets a tab, except the skipped ones
+    page_type_tabs: bool = False
+    skip_types: list = field(default_factory=list)       # page type names (and the "other" label) that get no tab
+    tab_names: dict = field(default_factory=dict)        # page type name -> tab name (Article -> Articles)
+    notes: list = field(default_factory=list)            # what was decided about tabs, for the run log
 
     @property
     def creation_enabled(self) -> bool:
@@ -333,9 +378,26 @@ def _parse_content(value, where: str) -> "ContentConfig":
         raise SitesConfigError(f"{at}: 'min_gap_impressions_90d' must be a number, 1 or more")
     cfg.min_gap_impressions_90d = gap
     tabs = value.get("tabs")
-    if not isinstance(tabs, list) or not 1 <= len(tabs) <= MAX_CONTENT_TABS:
+    page_type_tabs = value.get("page_type_tabs", tabs is None)       # no tab list: the page types make the tabs
+    if not isinstance(page_type_tabs, bool):
+        raise SitesConfigError(f"{at}: 'page_type_tabs' must be true or false")
+    if tabs is None and page_type_tabs:
+        tabs = []
+    if not isinstance(tabs, list) or not (1 <= len(tabs) <= MAX_CONTENT_TABS or not tabs and page_type_tabs):
         raise SitesConfigError(f"{at}: 'tabs' must be a list of 1 to {MAX_CONTENT_TABS} "
-                               f"{{name, url_regex}} objects")
+                               f"{{name, url_regex}} objects (or leave it out and let the page types make the tabs)")
+    cfg.page_type_tabs = page_type_tabs
+    skip = value.get("skip_types") or []
+    if not isinstance(skip, list) or len(skip) > 30 or any(
+            not isinstance(s, str) or not TYPE_NAME_PATTERN.fullmatch(s.strip()) for s in skip):
+        raise SitesConfigError(f"{at}: 'skip_types' must be a list of page type names")
+    cfg.skip_types = [s.strip() for s in skip]
+    names_map = value.get("tab_names") or {}
+    if not isinstance(names_map, dict) or len(names_map) > 30 or any(
+            not isinstance(k, str) or not isinstance(v, str) or not TYPE_NAME_PATTERN.fullmatch(v.strip())
+            for k, v in names_map.items()):
+        raise SitesConfigError(f"{at}: 'tab_names' must map page type names to short tab names")
+    cfg.tab_names = {k.strip(): v.strip() for k, v in names_map.items()}
     seen = set()
     for i, item in enumerate(tabs, start=1):
         tat = f"{at}, tab {i}"
@@ -425,6 +487,70 @@ def _parse_content(value, where: str) -> "ContentConfig":
             raise SitesConfigError(f"{at}: 'ai.{key}' must be a whole number from 0 to 1000")
     cfg.ai = dict(ai)
     return cfg
+
+
+def resolve_content_tabs(site) -> None:
+    """
+    The tabs of the content dashboard. The tabs written in `content.tabs` come first and are kept as they are.
+    With `page_type_tabs` every page type of the site that has no tab yet gets one, in the order of `page_types`
+    (then the rest, named `other_label`), with no tab configuration:
+      * a type named in `skip_types` gets no tab (its searches behave as before);
+      * a language (en, fa, English ...) is never a page type here: no tab, and its folder (/en/) is taken off a
+        page's address before the page is placed, so /en/song/x is a page of the Song tab;
+      * a type whose tab name (`tab_names`, else the type name) is the name of a tab already there is covered by it;
+      * over MAX_CONTENT_TABS the last types get no tab, and the notes say which.
+    Everything decided is written to `content.notes` (page type names and counts only), printed by the run.
+    """
+    cfg = site.content
+    if not cfg.enabled:
+        return
+    folders = tuple(dict.fromkeys(language_code(t["name"]) for t in site.page_types if language_code(t["name"])))
+    for t in cfg.tabs:
+        t.lang_folders = folders
+    if not cfg.page_type_tabs:
+        return
+    skip = {s.lower() for s in cfg.skip_types}
+    known = {t["name"].lower() for t in site.page_types} | {site.other_label.lower()}
+    cfg.notes += [f"skip_types names a page type the site does not have ({len(skip - known)})"] if skip - known else []
+    taken = {t.name.lower() for t in cfg.tabs} | set(RESERVED_CONTENT_TABS)
+    had_tabs = bool(cfg.tabs)
+    derived, before = [], []
+    for t in site.page_types:
+        name, regex = t["name"], t["regex"]
+        exclude = "|".join(f"(?:{r})" for r in before) if site.first_match_wins else ""
+        if language_code(name):
+            cfg.notes.append(f"page type {name}: a language, not a page type: no tab, its pages go to their own page type")
+            continue
+        before.append(regex)
+        if name.lower() in skip:
+            cfg.notes.append(f"page type {name}: on the skip list: no tab")
+            continue
+        derived.append((name, regex, exclude))
+    if site.other_label.lower() not in skip:
+        derived.append((site.other_label, ".", "|".join(f"(?:{r})" for r in before)))
+    else:
+        cfg.notes.append(f"page type {site.other_label}: on the skip list: no tab")
+    room = MAX_CONTENT_TABS - len(cfg.tabs)
+    over = []
+    for name, regex, exclude in derived:
+        tab_name = cfg.tab_names.get(name, name)
+        if tab_name.lower() in taken:
+            cfg.notes.append(f"page type {name}: covered by the tab {tab_name}" if tab_name.lower() in
+                             {t.name.lower() for t in cfg.tabs} else f"page type {name}: its tab name {tab_name} is taken: no tab")
+            continue
+        if room <= 0:
+            over.append(name)
+            continue
+        cfg.tabs.append(ContentTab(name=tab_name, url_regex=regex, exclude_regex=exclude,
+                                   description=f"Pages of the type {name}.",
+                                   gaps=not had_tabs and not cfg.tabs, lang_folders=folders))
+        taken.add(tab_name.lower())
+        room -= 1
+    if over:
+        cfg.notes.append(f"NO TAB for {len(over)} page type(s), over the limit of {MAX_CONTENT_TABS} tabs: "
+                         f"{', '.join(over)}")
+    if not cfg.tabs:
+        raise SitesConfigError(f"SITES_JSON site '{site.name}', content: no tab is left (check skip_types)")
 
 
 def _flag(entry: dict, key: str, where: str) -> bool:
@@ -618,6 +744,7 @@ def parse_sites_json(raw: str) -> list:
         if site.other_label.lower() in {t["name"].lower() for t in site.page_types} | {"all"}:
             raise SitesConfigError(f"{where}: 'other_label' is already used by a page type "
                                    f"(or is 'All')")
+        resolve_content_tabs(site)
         own = [site.sheet_id, site.history_sheet_id, site.reports_sheet_id]
         if len({v for v in own if v}) != len([v for v in own if v]):
             raise SitesConfigError(f"{where}: sheet_id, history_sheet_id and reports_sheet_id "
