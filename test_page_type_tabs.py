@@ -346,6 +346,7 @@ class CopyTestTests(FakeSiteBase):
                                     sleep=lambda s: None)
 
         out = []
+        sent_before = len(self.sent)
         lines = cct.run(self.drive, self.fs, self.site, new, real, refresh, "Example", log=out.append)
         self.assertEqual({name: tab.data for name, tab in self.fs.books[real].items()}, keep)      # the real file: read only
         text = "\n".join(lines)
@@ -356,7 +357,7 @@ class CopyTestTests(FakeSiteBase):
         (copy_id,) = [i for i, f in self.drive.files_.items() if f["name"].startswith("[Copy test]")]
         self.assertNotEqual(copy_id, real)
         self.assertEqual(list(self.fs.books[copy_id])[:6], ["Articles", "Landing Pages", "Songs", "Video", "Program", "Guide"])
-        self.assertEqual(self.sent, [])                                                           # nothing is emailed
+        self.assertEqual(len(self.sent), sent_before)                                             # the copy test emails nothing
         self.assertFalse(any(copy_id in line or real in line for line in out))                    # no file id in the log
         self.assertTrue(any("old idea rows" in line for line in lines))
 
