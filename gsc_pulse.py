@@ -479,6 +479,64 @@ def source_reader(run: SiteRun):
     return read
 
 
+def http_result(call) -> str:
+    """"ok (mime type)" or the HTTP status of a failed read-only request; never an id, a name or a message."""
+    try:
+        got = call().execute(num_retries=2)
+        kinds = {"application/vnd.google-apps.folder": "folder", "application/vnd.google-apps.spreadsheet": "Google Sheet",
+                 "application/vnd.google-apps.document": "Google Doc",
+                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx file"}
+        mime = got.get("mimeType", "")
+        return "ok" + (f" ({kinds.get(mime, 'other file')})" if mime else "")
+    except HttpError as e:
+        return f"refused ({e.resp.status})"
+    except Exception as e:                              # noqa: BLE001
+        return f"not tried ({type(e).__name__})"
+
+
+def access_report(items: list, me_drive, sa_drive, sa_sheets) -> list:
+    """For each {label, id}: can the owner's own Google client open it, can the service account open it, and can the
+    Sheets API read it as a spreadsheet? Read-only; one line per item with the label and the results."""
+    lines = []
+    for item in items:
+        fid = str(item.get("id", ""))
+        me = http_result(lambda: me_drive.files().get(fileId=fid, fields="id,mimeType")) if me_drive else "not tried"
+        sa = http_result(lambda: sa_drive.files().get(fileId=fid, fields="id,mimeType")) if sa_drive else "not tried"
+        sheet = (http_result(lambda: sa_sheets.spreadsheets().get(spreadsheetId=fid, fields="spreadsheetId"))
+                 if sa_sheets else "not tried")
+        lines.append(f"{item.get('label', '?')}: the owner's client {me}; service account {sa}; as a spreadsheet {sheet}")
+    return lines
+
+
+def access_check_command():
+    """A read-only look at what this tool can open. The files to look at are in the repository variable
+    ACCESS_CHECK_IDS (JSON [{"label": ..., "id": ...}]). Nothing is created, changed or imported; the log holds the
+    labels and results only."""
+    try:
+        items = json.loads(os.environ.get("ACCESS_CHECK_IDS", "").strip() or "[]")
+        assert isinstance(items, list) and all(isinstance(i, dict) for i in items)
+    except (ValueError, AssertionError):
+        raise GscPulseError("access check: ACCESS_CHECK_IDS is not a JSON list of {label, id}") from None
+    _SENSITIVE.extend(str(i.get("id", "")) for i in items)
+    try:
+        me = auth.build_me_clients(os.environ, build).drive
+    except auth.AuthError as e:
+        print(f"  access check: the owner's client is unusable ({e})")
+        me = None
+    sa_drive = sa_sheets = None
+    raw = os.environ.get("GSC_SERVICE_ACCOUNT_JSON")
+    if raw:
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(raw), scopes=["https://www.googleapis.com/auth/drive.metadata.readonly",
+                                         "https://www.googleapis.com/auth/spreadsheets.readonly"])
+            sa_drive, sa_sheets = build("drive", "v3", credentials=creds), build("sheets", "v4", credentials=creds)
+        except (ValueError, KeyError):
+            print("  access check: the service account key could not be used")
+    for line in access_report(items, me, sa_drive, sa_sheets):
+        print(f"  access check: {line}")
+
+
 def select_only(runs: list, only: str):
     """With a site name, every other site is switched off for this run: nothing of it is read, written or sent."""
     only = only.strip().lower()
@@ -1123,6 +1181,11 @@ def main():
     for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
         for kind in ("weekly", "monthly"):
             _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients_for(kind), os.environ))
+
+    # ---- A read-only check of what the tool's Google access can open: its own command ---------------------------
+    if os.environ.get("ACCESS_CHECK", "").strip().lower() in ("1", "true", "yes"):
+        access_check_command()
+        return
 
     # ---- The fake test site: its own command, nothing else runs (no real site is touched) --------
     if os.environ.get("BUILD_TEST_SITE", "").strip().lower() in ("1", "true", "yes"):

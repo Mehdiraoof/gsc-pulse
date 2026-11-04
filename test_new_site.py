@@ -13,7 +13,7 @@ import site_check
 import sites
 import test_content_run as tcr
 from test_content_run import ROOT, Base
-from test_history import FakeSheets
+from test_history import FakeSheets, Req, http_error
 from test_own_access import FakeDrive
 
 ART = f"{ROOT}/istanbul-weather-in-february/"
@@ -274,6 +274,52 @@ class FoldersTests(unittest.TestCase):
         dash, created = provision.content_file(self.drive, self.fs, self.site, "Example")
         self.assertTrue(created)
         self.assertEqual(self.parents(dash), [self.project])
+
+
+class AccessCheckTests(unittest.TestCase):
+    """The read-only check of what the tool can open: results by label, never an id or a name, nothing written."""
+
+    class Drive:
+        def __init__(self, table):
+            self.table, self.calls = table, []
+
+        def files(self):
+            return self
+
+        def spreadsheets(self):
+            return self
+
+        def get(self, fileId, fields=None, spreadsheetId=None):
+            fid = fileId or spreadsheetId
+            self.calls.append(fid)
+
+            def run():
+                if fid not in self.table:
+                    raise http_error(404, "not found: " + fid)
+                return {"id": fid, "mimeType": self.table[fid]}
+            return Req(run)
+
+    FOLDER, XLSX, SHEET = ("application/vnd.google-apps.folder",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           "application/vnd.google-apps.spreadsheet")
+
+    def test_what_each_client_can_open_is_said_by_label(self):
+        me = self.Drive({"MINE": self.FOLDER})
+        sa_drive = self.Drive({"OLD": self.XLSX, "COPY": self.SHEET})
+        sa_sheets = self.Drive({"COPY": self.SHEET})
+        lines = gsc_pulse.access_report(
+            [{"label": "folder", "id": "OTHERS"}, {"label": "mine", "id": "MINE"}, {"label": "old file", "id": "OLD"},
+             {"label": "converted", "id": "COPY"}], me, sa_drive, sa_sheets)
+        self.assertEqual(lines[0], "folder: the owner's client refused (404); service account refused (404); as a spreadsheet refused (404)")
+        self.assertIn("the owner's client ok (folder)", lines[1])
+        self.assertEqual(lines[2], "old file: the owner's client refused (404); service account ok (xlsx file); as a spreadsheet refused (404)")
+        self.assertEqual(lines[3], "converted: the owner's client refused (404); service account ok (Google Sheet); as a spreadsheet ok (Google Sheet)")
+        self.assertNotIn("OLD", " ".join(lines) + "COPY".join(lines))
+        self.assertNotIn("not found", " ".join(lines))
+
+    def test_a_client_that_could_not_be_made_is_reported_not_guessed(self):
+        lines = gsc_pulse.access_report([{"label": "x", "id": "A"}], None, None, None)
+        self.assertEqual(lines, ["x: the owner's client not tried; service account not tried; as a spreadsheet not tried"])
 
 
 if __name__ == "__main__":

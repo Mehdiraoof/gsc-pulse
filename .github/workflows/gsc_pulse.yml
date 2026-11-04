@@ -89,6 +89,11 @@ on:
         description: "Content dashboard test on a COPY: one forced refresh of this site's dashboard copy (a name from SITES_JSON) with the settings in the variable CONTENT_COPY_OVERRIDES. The real dashboard is only read, nothing is emailed"
         required: false
         default: ""
+      access_check:
+        description: "Read-only: for the files listed in the variable ACCESS_CHECK_IDS, say whether the tool's Google access can open them. Nothing is created, changed or sent"
+        required: false
+        type: boolean
+        default: false
       only_site:
         description: "Run for this one site only (a name from SITES_JSON): every other site is left alone"
         required: false
@@ -177,6 +182,8 @@ jobs:
           REBUILD_CONTENT_SITE: ${{ inputs.rebuild_content_site }}
           FIX_KEYWORDS_SITE: ${{ inputs.fix_keywords_site }}
           ONLY_SITE: ${{ inputs.only_site }}
+          ACCESS_CHECK: ${{ inputs.access_check }}
+          ACCESS_CHECK_IDS: ${{ vars.ACCESS_CHECK_IDS }}
           SITE_FOLDERS_SITE: ${{ inputs.site_folders_site }}
           FIX_KEYWORDS_APPLY: ${{ inputs.fix_keywords_apply }}
           CONTENT_COPY_SITE: ${{ inputs.content_copy_site }}
