@@ -265,6 +265,7 @@ class FoldersTests(unittest.TestCase):
     def test_the_sheets_and_the_content_dashboard_are_made_in_the_project_folder(self):
         self.site.drive_folder_id = self.project
         self.site.content.sheet_id = ""
+        self.site.reports_sheet_id = ""                                            # (the helper site has a fake Reports id)
         made = provision.provision_site(self.drive, self.fs, self.site, None, self.logs.append)
         self.assertEqual(made.created, 3)
         for name in ("Example · PulseO Data", "Example · PulseO History", "Example · PulseO Reports"):
