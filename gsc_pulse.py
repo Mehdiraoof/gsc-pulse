@@ -1251,7 +1251,7 @@ def main():
         content_copy_command(copy_site, enabled)
         return
 
-    # ---- The folders for written content of one site (Content SEO / Briefs): its own command ------------------
+    # ---- The folders for written content of one site (Briefs / Drafts): its own command ------------------
     folders_site = os.environ.get("SITE_FOLDERS_SITE", "").strip().lower()
     if folders_site:
         run = next((r for r in enabled if r.name.lower() == folders_site and r.status != "failed" and r.drive is not None),

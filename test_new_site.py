@@ -250,17 +250,19 @@ class FoldersTests(unittest.TestCase):
         self.assertTrue(self.logs)
         self.assertNotIn("SOMEONE-ELSES-FOLDER", " ".join(self.logs))
 
-    def test_content_seo_and_briefs_are_made_once_next_to_the_other_files_and_content_creation_stays_off(self):
+    def test_briefs_and_drafts_are_made_once_next_to_the_other_files_and_content_creation_stays_off(self):
         self.site.drive_folder_id = self.project
         made = provision.content_folders(self.drive, self.site, "Example", self.logs.append)
-        self.assertEqual(self.parents(made["content_seo"]), [self.project])
-        self.assertEqual(self.parents(made["briefs"]), [made["content_seo"]])
+        self.assertEqual(self.parents(made["briefs"]), [self.project])
+        self.assertEqual(self.parents(made["drafts"]), [self.project])
         self.assertTrue(made["in_project"])
         again = provision.content_folders(self.drive, self.site, "Example", self.logs.append)
-        self.assertEqual((again["content_seo"], again["briefs"]), (made["content_seo"], made["briefs"]))
-        self.assertEqual(sorted(self.drive.names(provision.FOLDER)).count("Briefs"), 1)
-        self.assertFalse(self.site.content.creation_enabled)                       # the Briefs id is not put into the config
-        self.assertNotIn(made["briefs"], " ".join(self.logs))
+        self.assertEqual((again["briefs"], again["drafts"]), (made["briefs"], made["drafts"]))
+        names = sorted(self.drive.names(provision.FOLDER))
+        self.assertEqual((names.count("Briefs"), names.count("Drafts"), names.count("Content SEO")), (1, 1, 0))
+        self.assertFalse(self.site.content.creation_enabled)                       # the ids are not put into the config
+        self.assertNotIn(made["briefs"] + made["drafts"], " ".join(self.logs))
+
 
     def test_the_sheets_and_the_content_dashboard_are_made_in_the_project_folder(self):
         self.site.drive_folder_id = self.project

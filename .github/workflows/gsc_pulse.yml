@@ -91,7 +91,7 @@ on:
         required: false
         default: ""
       site_folders_site:
-        description: "Make the Content SEO and Briefs folders of this one site (next to its other files) and stop"
+        description: "Make the Briefs and Drafts folders of this one site (next to its other files) and stop"
         required: false
         default: ""
       fix_keywords_site:

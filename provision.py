@@ -121,15 +121,17 @@ def site_folder_for(drive, site, label: str, log=print) -> tuple:
     return ensure_folder(drive, label, ensure_folder(drive, ROOT_FOLDER)), False
 
 
+
+
 def content_folders(drive, site, label: str, log=print) -> dict:
-    """The folders for the written content of a site: "Content SEO" with "Briefs" inside, next to the site's other
-    files. Found when they exist. Nothing here switches content creation on (that needs the Briefs folder in the
-    site's configuration, which the owner puts there)."""
+    """The folders for the written content of a site: "Briefs" and "Drafts", next to the site's other files (the
+    owner can move them wherever the site's content lives; the ids stay). Found when they exist. Nothing here
+    switches content creation on: that needs the two ids in the site's configuration, which the owner puts there."""
     parent, in_project = site_folder_for(drive, site, label, log)
-    seo = ensure_folder(drive, "Content SEO", parent)
-    briefs = ensure_folder(drive, "Briefs", seo)
-    log(f"  folders ready: Content SEO and Briefs inside it ({'in the project folder' if in_project else f'in PulseO / {label}'})")
-    return {"content_seo": seo, "briefs": briefs, "in_project": in_project}
+    briefs = ensure_folder(drive, "Briefs", parent)
+    drafts = ensure_folder(drive, "Drafts", parent)
+    log(f"  folders ready: Briefs and Drafts ({'in the project folder' if in_project else f'in PulseO / {label}'})")
+    return {"briefs": briefs, "drafts": drafts, "in_project": in_project}
 
 
 def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
