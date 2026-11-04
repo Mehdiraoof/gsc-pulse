@@ -289,7 +289,7 @@ class AccessCheckTests(unittest.TestCase):
         def spreadsheets(self):
             return self
 
-        def get(self, fileId, fields=None, spreadsheetId=None):
+        def get(self, fileId=None, fields=None, spreadsheetId=None):
             fid = fileId or spreadsheetId
             self.calls.append(fid)
 
