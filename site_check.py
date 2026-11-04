@@ -218,17 +218,17 @@ def sitemap_roots(origin: str, get) -> list:
     return found or [f"{origin}/sitemap.xml"]
 
 
-def read_sitemaps(origin: str, get=default_get) -> tuple:
-    """(addresses, ok). `ok` is False when no sitemap could be read at all: the caller then adds
-    nothing for this run. One sitemap file that fails inside an index only costs its own pages."""
+def read_sitemap_files(origin: str, get=default_get) -> tuple:
+    """({sitemap file address: [page addresses]}, ok). `ok` is False when no sitemap could be read at all: the caller
+    then adds nothing for this run. One sitemap file that fails inside an index only costs its own pages."""
     if not origin:
-        return [], False
-    urls, seen, readable = {}, set(), 0
+        return {}, False
+    files, seen, readable, total = {}, set(), 0, 0
     roots = sitemap_roots(origin, get)
     default = f"{origin}/sitemap.xml"
     for round_ in (roots, [default]):             # the default address is the second try
         queue = [a for a in round_ if a not in seen]
-        while queue and len(seen) < MAX_SITEMAPS and len(urls) < MAX_SITEMAP_URLS:
+        while queue and len(seen) < MAX_SITEMAPS and total < MAX_SITEMAP_URLS:
             address = queue.pop(0)
             if address in seen:
                 continue
@@ -241,10 +241,20 @@ def read_sitemaps(origin: str, get=default_get) -> tuple:
             if kind == "index":
                 queue.extend(locs)
             else:
-                urls.update(dict.fromkeys(locs))
+                files[address] = list(dict.fromkeys(locs))
+                total += len(files[address])
         if readable:
             break
-    return list(urls)[:MAX_SITEMAP_URLS], bool(readable)
+    return files, bool(readable)
+
+
+def read_sitemaps(origin: str, get=default_get) -> tuple:
+    """(addresses, ok): every page address of the sitemap(s), once each. See read_sitemap_files."""
+    files, ok = read_sitemap_files(origin, get)
+    urls = {}
+    for locs in files.values():
+        urls.update(dict.fromkeys(locs))
+    return list(urls)[:MAX_SITEMAP_URLS], ok
 
 
 def _entries(body: bytes) -> tuple:

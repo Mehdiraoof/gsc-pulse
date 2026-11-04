@@ -21,6 +21,7 @@ Once a month (after the monthly report), or on demand, this module
 Nothing here prints an ID, a link, a URL or a keyword. The file never names the tool.
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -681,6 +682,8 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             continue
         header, rows = cs.table_of(cs.read_all(sheets, file_id, t.name))
         tables[t.name] = (header, rows, info[t.name][0], info[t.name][1])
+        if t.sitemap:                            # a page that has a row stays in its tab, even when it left the sitemap
+            t.members |= {content.url_key(r.get(content.URL)) for r in rows if str(r.get(content.URL, "")).strip()}
 
     # ---- the pages of the site: Search Console, the stored history, the sitemap -----------
     existing_keys = {content.url_key(r.get(content.URL)) for _, rows, _, _ in tables.values()
@@ -1217,3 +1220,15 @@ def owner_email(result: ContentResult, label: str, link: str) -> tuple:
         lines += [f"- {k or '(no keyword yet)'}: {a} [{t}]" for k, a, t in result.urgent]
     lines += ["", link, ""]
     return f"Content dashboard refreshed · {label} · {result.month}", "\n".join(lines)
+
+
+def fill_tab_members(cfg, files: dict) -> int:
+    """The pages of the tabs that follow a sitemap: `files` is {sitemap file address: [page addresses]}; a tab holds
+    the pages of the files its `sitemap` pattern matches. Returns how many of those tabs got at least one page."""
+    got = 0
+    for t in cfg.tabs:
+        if t.sitemap:
+            t.members = {content.url_key(u) for address, locs in files.items() if re.search(t.sitemap, address)
+                         for u in locs}
+            got += bool(t.members)
+    return got

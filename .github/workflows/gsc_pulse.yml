@@ -89,6 +89,14 @@ on:
         description: "Content dashboard test on a COPY: one forced refresh of this site's dashboard copy (a name from SITES_JSON) with the settings in the variable CONTENT_COPY_OVERRIDES. The real dashboard is only read, nothing is emailed"
         required: false
         default: ""
+      only_site:
+        description: "Run for this one site only (a name from SITES_JSON): every other site is left alone"
+        required: false
+        default: ""
+      site_folders_site:
+        description: "Make the Content SEO and Briefs folders of this one site (next to its other files) and stop"
+        required: false
+        default: ""
       fix_keywords_site:
         description: "One-time fix of Primary Keywords for this one site (a name from SITES_JSON). Without fix_keywords_apply it is a DRY RUN: the plan goes into a new sheet in your Drive and the dashboard is not touched"
         required: false
@@ -145,6 +153,7 @@ jobs:
           HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
           SITES_JSON: ${{ secrets.SITES_JSON }}
           SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
           DISCOVER_SITE: ${{ inputs.discover_site }}
           REBUILD_ALARMS: ${{ inputs.rebuild_alarms }}
           REBUILD_DECKS: ${{ inputs.rebuild_decks }}
@@ -167,6 +176,8 @@ jobs:
           MARK_DECKS_SITE: ${{ inputs.mark_decks_site }}
           REBUILD_CONTENT_SITE: ${{ inputs.rebuild_content_site }}
           FIX_KEYWORDS_SITE: ${{ inputs.fix_keywords_site }}
+          ONLY_SITE: ${{ inputs.only_site }}
+          SITE_FOLDERS_SITE: ${{ inputs.site_folders_site }}
           FIX_KEYWORDS_APPLY: ${{ inputs.fix_keywords_apply }}
           CONTENT_COPY_SITE: ${{ inputs.content_copy_site }}
           CONTENT_COPY_OVERRIDES: ${{ vars.CONTENT_COPY_OVERRIDES }}
@@ -217,6 +228,7 @@ jobs:
           GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
           SITES_JSON: ${{ secrets.SITES_JSON }}
           SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

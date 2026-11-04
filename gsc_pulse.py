@@ -479,6 +479,35 @@ def source_reader(run: SiteRun):
     return read
 
 
+def select_only(runs: list, only: str):
+    """With a site name, every other site is switched off for this run: nothing of it is read, written or sent."""
+    only = only.strip().lower()
+    if not only:
+        return
+    if not any(r.name.lower() == only for r in runs):
+        raise GscPulseError("only_site: that name is not in the configuration")
+    for r in runs:
+        if r.name.lower() != only:
+            r.status = "disabled"
+
+
+_MEMBERS_LOADED = {}
+
+
+def load_tab_members(site, origin: str) -> bool:
+    """Reads the sitemaps once per run and gives every tab that follows a sitemap its pages (content_run.
+    fill_tab_members). False when the sitemaps could not be read: the caller then leaves the content step
+    alone for this run, because without them every search would look like a search with no page."""
+    if not site.content.enabled or not site.content.has_sitemap_tabs:
+        return True
+    if site.name not in _MEMBERS_LOADED:
+        files, ok = site_check.read_sitemap_files(origin, site_check.default_get)
+        _MEMBERS_LOADED[site.name] = ok
+        if ok:
+            content_run.fill_tab_members(site.content, files)
+    return _MEMBERS_LOADED[site.name]
+
+
 def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False, cleanup_gone_since: str = ""):
     """Phase 1c2: the content dashboard of one site (own-access sites only: PulseO has to be able
     to create the file in the owner's Drive)."""
@@ -513,6 +542,10 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False, cleanup_g
         return
     notify = (lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None
     origin = site_check.origin_of(site.site_url)
+    if not load_tab_members(site, origin):
+        run.content_text = "waiting (sitemap not readable)"
+        print("content: waiting, the sitemap could not be read (the tabs of this site follow its sitemap)\n")
+        return
     try:
         result = content_run.run_content(
             run.drive, run.sheets, site, site.reports_sheet_id, fetch, final, today, notify, print,
@@ -559,7 +592,10 @@ def sync_work(run: SiteRun, today: date):
     if not site.deck.enabled or not site.reports_sheet_id:
         return
     site_header(run, "Work and AI notes")
-    our_work.scan_site(run.drive, run.sheets, site, today)
+    if load_tab_members(site, site_check.origin_of(site.site_url)):
+        our_work.scan_site(run.drive, run.sheets, site, today)
+    else:
+        print("  work: the scan of new and updated pages was skipped (the sitemap could not be read)")
     if handoff_on():
         our_work.prepare_notes(run.drive, run.sheets, site, today, our_work.gsc_queries(run.gsc, site))
         deck_runner.mark_synced(run.sheets, site.reports_sheet_id, site)       # last: the deck checks may now send this period
@@ -865,7 +901,9 @@ def content_copy_command(site_name: str, runs: list):
         patch = json.loads(os.environ.get("CONTENT_COPY_OVERRIDES", "").strip() or "{}")
         extra = os.environ.get("SITES_JSON_EXTRA", "")
         base = os.environ.get("SITES_JSON", "")
-        text = sites.merge_sites_json(base, extra) if extra.strip() else base
+        text = base
+        for more in (extra, os.environ.get("SITES_JSON_MORE", "")):
+            text = sites.merge_sites_json(text, more) if more.strip() else text
         test_site = next(s for s in sites.parse_sites_json(sites.apply_overrides(text, run.name, patch))
                          if s.name == run.site.name)
     except (ValueError, sites.SitesConfigError, StopIteration) as e:
@@ -1031,6 +1069,7 @@ def main():
     # Which sites? SITES_JSON (several sites) or the older single-site settings.
     sites_json = os.environ.get("SITES_JSON")
     sites_json_extra = os.environ.get("SITES_JSON_EXTRA")
+    sites_json_more = os.environ.get("SITES_JSON_MORE")
     try:
         site_list = sites.load_sites(
             sites_json,
@@ -1039,12 +1078,12 @@ def main():
             (args.history_sheet or os.environ.get("HISTORY_SHEET_ID")
              or cfg.get("history_sheet_id")),
             force_single=bool(args.site or args.sheet),
-            sites_json_extra=sites_json_extra,
+            sites_json_extra=sites_json_extra, sites_json_more=sites_json_more,
         )
     except sites.SitesConfigError as e:
         print(f"\n  ERROR: {e}")
         sys.exit(1)
-    multi = (bool((sites_json or "").strip() or (sites_json_extra or "").strip())
+    multi = (bool((sites_json or "").strip() or (sites_json_extra or "").strip() or (sites_json_more or "").strip())
              and not (args.site or args.sheet))
     history_off_text = ("no history_sheet_id for this site" if multi else "no HISTORY_SHEET_ID")
 
@@ -1102,7 +1141,8 @@ def main():
         return
 
     runs = [SiteRun(s, status="pending" if s.enabled else "disabled") for s in site_list]
-    enabled = [r for r in runs if r.status != "disabled"]
+    select_only(runs, os.environ.get("ONLY_SITE", ""))                     # a run for ONE site: the others are not touched
+    enabled =[r for r in runs if r.status != "disabled"]
 
     # ---- Banner ------------------------------------------------------------
     print()
@@ -1146,6 +1186,16 @@ def main():
     copy_site = os.environ.get("CONTENT_COPY_SITE", "").strip().lower()
     if copy_site:
         content_copy_command(copy_site, enabled)
+        return
+
+    # ---- The folders for written content of one site (Content SEO / Briefs): its own command ------------------
+    folders_site = os.environ.get("SITE_FOLDERS_SITE", "").strip().lower()
+    if folders_site:
+        run = next((r for r in enabled if r.name.lower() == folders_site and r.status != "failed" and r.drive is not None),
+                   None)
+        if run is None:
+            raise GscPulseError("site folders: that site is not available")
+        provision.content_folders(run.drive, run.site, run.site.deck.site_label or run.name)
         return
 
     # ---- The one-time fix of Primary Keywords of one site: dry run unless asked to apply ----------------------

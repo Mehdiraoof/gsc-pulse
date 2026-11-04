@@ -74,6 +74,14 @@ class FakeDrive:
             return {"id": fid}
         return Req(run)
 
+    def get(self, fileId, fields=None):
+        """Only `fields="id"` (does this file or folder exist for the tool?); the parents of a file are not modelled."""
+        def run():
+            if fields == "id" and fileId in self.files_ and not self.files_[fileId]["trashed"]:
+                return {"id": fileId}
+            raise http_error(404, "File not found")
+        return Req(run)
+
     def copy(self, fileId, body, fields=None):
         def run():
             self.n += 1

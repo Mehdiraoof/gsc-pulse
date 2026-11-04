@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 AUTH_MODES = ("robot", "me")
 ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "reports_sheet_id",
-                  "page_types", "first_match_wins", "other_label", "other_deck_label", "opportunities",
+                  "drive_folder_id", "page_types", "first_match_wins", "other_label", "other_deck_label", "opportunities",
                   "thresholds",
                   "weekly_segments",
                   "content",
@@ -66,6 +66,7 @@ class Site:
     sheet_id: str = ""
     history_sheet_id: str = ""
     reports_sheet_id: str = ""
+    drive_folder_id: str = ""            # the Drive folder of the site's files (empty: PulseO / <site label>)
     page_types: list = field(default_factory=list)       # [{"name": ..., "regex": ...}]
     thresholds: dict = field(default_factory=dict)       # overrides of THRESHOLD_DEFAULTS
     weekly_segments: bool = False
@@ -80,7 +81,7 @@ class Site:
 
     def sensitive_values(self) -> list:
         """Everything that must never appear in a public log."""
-        ids = [v for v in (self.site_url, self.sheet_id, self.history_sheet_id,
+        ids = [v for v in (self.site_url, self.sheet_id, self.history_sheet_id, self.drive_folder_id,
                            self.reports_sheet_id) if v]
         return (ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
                 + list(self.opportunities.get("brand_terms", [])) + self.content.sensitive_values())
@@ -225,7 +226,7 @@ AI_PROVIDERS = ("gemini", "anthropic")
 MAX_EXCLUDE_TERMS = 200
 IMPORT_FIELDS = ("sheet_id", "source_tab", "target_tab")
 MAX_IMPORTS = 8
-CONTENT_TAB_FIELDS = ("name", "url_regex", "exclude_regex", "description", "gaps", "landing")
+CONTENT_TAB_FIELDS = ("name", "url_regex", "exclude_regex", "description", "gaps", "landing", "sitemap")
 RESERVED_CONTENT_TABS = ("guide", "_state", "keyword seeds", "keyword ideas", "import log",
                          "removed pages")
 MAX_CONTENT_TABS = 8
@@ -276,11 +277,18 @@ class ContentTab:
     gaps: bool = False             # new-topic rows (content gaps) are proposed for this tab
     landing: bool = False          # landing pages: Navigational intent, Pillar content type
     lang_folders: tuple = ()       # language folders of the site (/en/): ignored when a page is placed
+    sitemap: str = ""              # a regex on the address of a sitemap file: the tab holds the pages listed in those files
+    members: set = field(default_factory=set, compare=False, repr=False)    # url_key of those pages, read at run time
 
     def matches(self, url: str) -> bool:
         """Does this page belong to the tab? Tried on the URL as given and on its readable form, and with the
-        language folder of the site (/en/) taken off: a page in another language is in the tab of its page type."""
+        language folder of the site (/en/) taken off: a page in another language is in the tab of its page type.
+        A tab with a `sitemap` holds the pages that sitemap lists (the address pattern then only excludes)."""
         from urllib.parse import unquote
+        if self.sitemap:
+            from content import url_key                                  # (imported here: content does not import sites)
+            return url_key(url) in self.members and not (
+                self.exclude_regex and re.search(self.exclude_regex, unquote(url, errors="replace")))
         bare = re.sub(r"[?#].*$", "", unquote(url, errors="replace"))     # no query, no fragment
         for candidate in {url, unquote(url, errors="replace"), bare}:
             forms = {candidate, strip_language(candidate, self.lang_folders)}
@@ -329,6 +337,10 @@ class ContentConfig:
     @property
     def creation_enabled(self) -> bool:
         return bool(self.briefs_folder_id)
+
+    @property
+    def has_sitemap_tabs(self) -> bool:
+        return any(t.sitemap for t in self.tabs)
 
     def sensitive_values(self) -> list:
         rules = [t.url_regex for t in self.tabs] + [t.exclude_regex for t in self.tabs]
@@ -412,9 +424,9 @@ def _parse_content(value, where: str) -> "ContentConfig":
     seen = set()
     for i, item in enumerate(tabs, start=1):
         tat = f"{at}, tab {i}"
-        if not isinstance(item, dict) or "name" not in item or "url_regex" not in item \
+        if not isinstance(item, dict) or "name" not in item or ("url_regex" not in item and "sitemap" not in item) \
                 or set(item) - set(CONTENT_TAB_FIELDS):
-            raise SitesConfigError(f"{tat}: must be an object with 'name' and 'url_regex' "
+            raise SitesConfigError(f"{tat}: must be an object with 'name' and 'url_regex' or 'sitemap' "
                                    f"(optional: {', '.join(CONTENT_TAB_FIELDS[2:])})")
         name = item["name"]
         if not isinstance(name, str) or not TYPE_NAME_PATTERN.fullmatch(name.strip()):
@@ -431,7 +443,8 @@ def _parse_content(value, where: str) -> "ContentConfig":
         if not isinstance(description, str) or len(description) > 300:
             raise SitesConfigError(f"{tat}: 'description' must be short text")
         cfg.tabs.append(ContentTab(
-            name=name, url_regex=_regex(item["url_regex"], tat, "url_regex", True),
+            name=name, url_regex=_regex(item.get("url_regex", "."), tat, "url_regex", True),
+            sitemap=_regex(item.get("sitemap"), tat, "sitemap", False),
             exclude_regex=_regex(item.get("exclude_regex"), tat, "exclude_regex", False),
             description=description.strip(),
             gaps=item.get("gaps", i == 1),              # content gaps go to the first tab unless said otherwise
@@ -742,6 +755,7 @@ def parse_sites_json(raw: str) -> list:
             sheet_id=_text(entry, "sheet_id", where, required=enabled and auth == "robot"),
             history_sheet_id=_text(entry, "history_sheet_id", where, required=False),
             reports_sheet_id=_text(entry, "reports_sheet_id", where, required=False),
+            drive_folder_id=_text(entry, "drive_folder_id", where, required=False),
             page_types=_parse_page_types(entry.get("page_types"), where),
             thresholds=_parse_thresholds(entry.get("thresholds"), where),
             weekly_segments=_flag(entry, "weekly_segments", where),
@@ -844,19 +858,23 @@ def apply_overrides(raw: str, name: str, patch: dict) -> str:
 
 
 def load_sites(sites_json, site_url, sheet_id, history_sheet_id, force_single=False,
-               sites_json_extra=None) -> list:
+               sites_json_extra=None, sites_json_more=None) -> list:
     """
     Which sites to run.
       * force_single (command-line --site / --sheet given): just that one site.
-      * SITES_JSON set and not blank: the list from it, with SITES_JSON_EXTRA (same format,
+      * SITES_JSON set and not blank: the list from it, with SITES_JSON_EXTRA and then SITES_JSON_MORE (same format,
         optional) merged in: an extra entry replaces the entry of the same name.
       * only SITES_JSON_EXTRA set: the list from it.
       * otherwise: the single site from site_url / sheet_id / history_sheet_id.
     """
-    has_extra = bool(sites_json_extra and sites_json_extra.strip())
+    extras = [e for e in (sites_json_extra, sites_json_more) if e and e.strip()]       # the extra lists, in this order
+    has_extra = bool(extras)
     if not force_single and (has_extra or (sites_json and sites_json.strip())):
         if has_extra:
-            return parse_sites_json(merge_sites_json(sites_json or "", sites_json_extra))
+            merged = sites_json or ""
+            for extra in extras:
+                merged = merge_sites_json(merged, extra)
+            return parse_sites_json(merged)
         return parse_sites_json(sites_json)
     sites = legacy_sites(site_url, sheet_id, history_sheet_id)
     if not sites[0].site_url or not sites[0].sheet_id:

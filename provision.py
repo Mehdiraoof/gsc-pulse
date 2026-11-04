@@ -105,6 +105,33 @@ def _save_row(sheets, index_id: str, row_no, row: list, rows_count: int) -> int:
     return row_no
 
 
+def site_folder_for(drive, site, label: str, log=print) -> tuple:
+    """(folder id, in the project folder?) where a site's files go: the Drive folder named in the site's
+    `drive_folder_id` when this tool can open it (its Google permission covers only the files it made itself, so a
+    folder somebody else made may be refused), else the folder PulseO keeps: PulseO / <label>. A refusal is said once
+    in the log, without the id."""
+    wanted = getattr(site, "drive_folder_id", "")
+    if wanted:
+        try:
+            drive.files().get(fileId=wanted, fields="id").execute(num_retries=RETRIES)
+            return wanted, True
+        except Exception:  # noqa: BLE001  not found or not allowed: fall back
+            log(f"  provision: the project folder of {label} cannot be opened with this tool's access; "
+                f"its files go to PulseO / {label}")
+    return ensure_folder(drive, label, ensure_folder(drive, ROOT_FOLDER)), False
+
+
+def content_folders(drive, site, label: str, log=print) -> dict:
+    """The folders for the written content of a site: "Content SEO" with "Briefs" inside, next to the site's other
+    files. Found when they exist. Nothing here switches content creation on (that needs the Briefs folder in the
+    site's configuration, which the owner puts there)."""
+    parent, in_project = site_folder_for(drive, site, label, log)
+    seo = ensure_folder(drive, "Content SEO", parent)
+    briefs = ensure_folder(drive, "Briefs", seo)
+    log(f"  folders ready: Content SEO and Briefs inside it ({'in the project folder' if in_project else f'in PulseO / {label}'})")
+    return {"content_seo": seo, "briefs": briefs, "in_project": in_project}
+
+
 def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
     """
     Makes sure the site has its three sheets and sets site.sheet_id / history_sheet_id /
@@ -129,7 +156,7 @@ def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
         if ids[kind]:
             continue
         if folder is None:
-            folder = ensure_folder(drive, label, ensure_folder(drive, ROOT_FOLDER))
+            folder, _ = site_folder_for(drive, site, label, log)
         ids[kind] = create(drive, f"{label} · {title}", SHEET, folder)
         result.created += 1
         row[1 + i] = ids[kind]
@@ -167,7 +194,9 @@ def provision_site(drive, sheets, site, notify=None, log=print) -> Provisioned:
 
 def _site_folder(drive, site, label: str) -> str:
     """The folder of the site's other sheets (wherever the owner has moved it), else the one
-    PulseO makes itself."""
+    PulseO makes itself. A site with a `drive_folder_id` keeps all its files there."""
+    if getattr(site, "drive_folder_id", ""):
+        return site_folder_for(drive, site, label)[0]
     if site.sheet_id:
         try:
             parents = drive.files().get(fileId=site.sheet_id, fields="parents").execute(
