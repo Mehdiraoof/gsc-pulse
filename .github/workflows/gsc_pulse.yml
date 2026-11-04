@@ -68,14 +68,6 @@ on:
         required: false
         type: boolean
         default: false
-      cleanup_gone_site:
-        description: "One-off: move the pages of this site (a name from SITES_JSON) that were added already gone (first warned on cleanup_gone_since) to Removed Pages"
-        required: false
-        default: ""
-      cleanup_gone_since:
-        description: "With cleanup_gone_site: the day (YYYY-MM-DD) those pages were first warned"
-        required: false
-        default: ""
       test_deck:
         description: "With rebuild_deck_site: send a test copy to the owner only, subject starts with [Test], and do not mark the deck as sent"
         required: false
@@ -176,8 +168,6 @@ jobs:
           GEMINI_API_KEY: ${{ inputs.create_content_test != '' && secrets.GEMINI_API_KEY || '' }}
           BUILD_TEST_SITE: ${{ inputs.build_test_site }}
           RESET_TEST_SITE: ${{ inputs.reset_test_site }}
-          CLEANUP_GONE_SITE: ${{ inputs.cleanup_gone_site }}
-          CLEANUP_GONE_SINCE: ${{ inputs.cleanup_gone_since }}
           MARK_DECKS_SITE: ${{ inputs.mark_decks_site }}
           REBUILD_CONTENT_SITE: ${{ inputs.rebuild_content_site }}
           FIX_KEYWORDS_SITE: ${{ inputs.fix_keywords_site }}
