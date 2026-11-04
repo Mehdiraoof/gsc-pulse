@@ -264,6 +264,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("AI_HANDOFF", jobs["build"]["if"])
         self.assertNotIn("needs", jobs["build"])                             # a check does not belong to a sync run
 
+    def test_the_workflow_has_no_more_inputs_than_github_allows(self):
+        inputs = self.data[True]["workflow_dispatch"]["inputs"]
+        self.assertLessEqual(len(inputs), 25, "GitHub refuses a workflow with more than 25 inputs (every push then fails)")
+
     def test_the_first_check_is_told_apart_and_nothing_waits_four_hours(self):
         env = self.data["jobs"]["build"]["steps"][-1]["env"]
         self.assertIn("'13 14 * * 1' && 'first'", env["DECK_CHECK"])
