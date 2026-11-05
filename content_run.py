@@ -576,14 +576,14 @@ def mirror_url(url: str, from_code: str, to_code: str, prefixes: dict) -> str:
 
 
 def page_language(url: str, probe, prefixes: dict) -> str:
-    """The language of a page that was read: its <html lang>, else the folder it lives in; "" when it cannot be told."""
-    if probe is not None and probe.lang in prefixes:
-        return probe.lang
+    """The language of a page that was read: its <html lang>, else the folder it lives in. "" when it cannot be told,
+    and when the two disagree (a page in the Persian folder written in English is neither)."""
+    html = probe.lang if probe is not None and probe.lang in prefixes else ""
     path = urlsplit(url).path
-    for code, folder in prefixes.items():
-        if folder and (path == folder or path.startswith(folder + "/")):
-            return code
-    return ""
+    folder = next((code for code, f in prefixes.items() if f and (path == f or path.startswith(f + "/"))), "")
+    if html and folder and html != folder:
+        return ""
+    return html or folder
 
 
 def pair_languages(ctx: Context, work: dict, result: ContentResult, log=print):
