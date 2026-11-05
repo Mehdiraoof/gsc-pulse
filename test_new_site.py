@@ -339,6 +339,19 @@ class AccessCheckTests(unittest.TestCase):
         self.assertEqual(lines, ["x: the owner's client not tried; service account not tried; as a spreadsheet not tried"])
 
 
+class AuditTests(unittest.TestCase):
+
+    def test_pictures_and_dash_keywords_are_counted_from_a_tab(self):
+        rows = [{"Published URL": f"{ROOT}/wp-content/uploads/2025/07/a.jpg", "Primary Keyword": ""},
+                {"Published URL": f"{ROOT}/uploads/b.GIF?x=1", "Primary Keyword": "-"},
+                {"Published URL": f"{ROOT}/sites/default/files/doc", "Primary Keyword": "real"},
+                {"Published URL": f"{ROOT}/istanbul-weather/", "Primary Keyword": "istanbul weather"},
+                {"Published URL": "", "Primary Keyword": "–"},
+                {"Published URL": f"{ROOT}/gifted-guide/", "Primary Keyword": "gifts"}]
+        self.assertEqual(gsc_pulse.audit_rows(rows), {"rows": 6, "picture addresses": 3, "dash keywords": 2})
+        self.assertEqual(gsc_pulse.audit_rows([]), {"rows": 0, "picture addresses": 0, "dash keywords": 0})
+
+
 class ServiceAccountAddressTests(unittest.TestCase):
 
     def test_only_the_address_is_taken_from_the_key(self):

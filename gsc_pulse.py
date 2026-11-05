@@ -46,11 +46,13 @@ except ImportError:
 
 import ai_client
 import auth
+import content
 import content_accept
 import content_copy_test
 import content_create
 import content_import
 import content_run
+import content_sheet
 import fake_site
 import rehearsal
 import deck_runner
@@ -517,7 +519,40 @@ def service_account_email(raw: str) -> str:
     return email if re.fullmatch(r"[^@\s]+@[^@\s]+", email) else ""
 
 
-def access_check_command(smtp=None):
+IMAGE_LIKE = re.compile(r"\.(?:jpe?g|png|gif|webp|svg|avif|bmp|ico|tiff?|mp4|mp3|zip)(?:[?#]|$)|"
+                        r"/(?:wp-content/uploads|sites/default/files|files/styles)/", re.IGNORECASE)
+
+
+def audit_rows(rows: list) -> dict:
+    """Counts in the rows of one content tab: the rows whose page address is a picture or an uploaded file, and the
+    rows whose keyword is only a dash. Read-only; the addresses themselves are never kept."""
+    pictures = sum(1 for r in rows if IMAGE_LIKE.search(str(r.get(content.URL, ""))))
+    dashes = sum(1 for r in rows if str(r.get(content.KEY, "")).strip() in ("-", "–", "—"))
+    return {"rows": len(rows), "picture addresses": pictures, "dash keywords": dashes}
+
+
+def audit_dashboards(site_list: list, drive, sheets) -> list:
+    """One line per tab of every site that has a content dashboard (counts only)."""
+    lines = []
+    for site in site_list:
+        if not site.enabled or not site.content.enabled:
+            continue
+        try:
+            file_id = rehearsal.source_dashboard_id(drive, sheets, site)
+        except Exception as e:                                  # noqa: BLE001
+            lines.append(f"{site.name}: no dashboard found ({type(e).__name__})")
+            continue
+        info = content_sheet.sheet_info(sheets, file_id)
+        for tab in site.content.tabs:
+            if tab.name not in info:
+                continue
+            _, rows = content_sheet.table_of(content_sheet.read_all(sheets, file_id, tab.name))
+            counts = audit_rows(rows)
+            lines.append(f"{site.name} · {tab.name}: " + ", ".join(f"{n} {k}" for k, n in counts.items()))
+    return lines
+
+
+def access_check_command(smtp=None, site_list=None):
     """A read-only look at what this tool can open. The files to look at are in the repository variable
     ACCESS_CHECK_IDS (JSON [{"label": ..., "id": ...}]). Nothing is created, changed or imported; the log holds the
     labels and results only."""
@@ -528,10 +563,11 @@ def access_check_command(smtp=None):
         raise GscPulseError("access check: ACCESS_CHECK_IDS is not a JSON list of {label, id}") from None
     _SENSITIVE.extend(str(i.get("id", "")) for i in items)
     try:
-        me = auth.build_me_clients(os.environ, build).drive
+        me_clients = auth.build_me_clients(os.environ, build)
+        me = me_clients.drive
     except auth.AuthError as e:
         print(f"  access check: the owner's client is unusable ({e})")
-        me = None
+        me, me_clients = None, None
     sa_drive = sa_sheets = None
     raw = os.environ.get("GSC_SERVICE_ACCOUNT_JSON")
     if raw:
@@ -544,6 +580,9 @@ def access_check_command(smtp=None):
             print("  access check: the service account key could not be used")
     for line in access_report(items, me, sa_drive, sa_sheets):
         print(f"  access check: {line}")
+    if site_list and os.environ.get("ACCESS_CHECK_AUDIT", "").strip().lower() in ("1", "true", "yes") and me_clients:
+        for line in audit_dashboards(site_list, me_clients.drive, me_clients.sheets):
+            print(f"  audit: {line}")
     address = service_account_email(raw or "")
     if address and smtp is not None:            # only when the run was started with send_emails: the log stays public
         notify_owner(smtp, "The address to share a sheet with",
@@ -1200,7 +1239,7 @@ def main():
 
     # ---- A read-only check of what the tool's Google access can open: its own command ---------------------------
     if os.environ.get("ACCESS_CHECK", "").strip().lower() in ("1", "true", "yes"):
-        access_check_command(owner_smtp)
+        access_check_command(owner_smtp, site_list)
         return
 
     # ---- The fake test site: its own command, nothing else runs (no real site is touched) --------
