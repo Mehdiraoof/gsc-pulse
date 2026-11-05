@@ -37,7 +37,7 @@ import content
 import history
 
 NOTES = "Notes/Checklist"
-EMPTY_WORDS = {"", "n/a", "na", "#n/a", "tbd"}
+EMPTY_WORDS = {"", "n/a", "na", "#n/a", "tbd", "-", "–", "—"}      # a lone dash is a filler, not a value
 DATE_COLUMNS = ("Briefed Date", "Published/Updated Date")
 WORDS = "Words Count (Suggested)"
 SECONDARY = "Secondary Keywords"

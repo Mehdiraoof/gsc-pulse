@@ -105,6 +105,21 @@ class SitemapReadingTests(unittest.TestCase):
         flat, ok = site_check.read_sitemaps(ROOT, self.get)
         self.assertEqual(sorted(flat), sorted({u for urls in FILES.values() for u in urls}))
 
+    def test_the_pictures_listed_inside_a_page_entry_are_not_pages(self):
+        body = ("<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9' xmlns:image='http://www.google.com/schemas/sitemap-image/1.1'>"
+                f"<url><loc>{ART}</loc><image:image><image:loc>{ROOT}/wp-content/uploads/a.jpg</image:loc></image:image>"
+                f"<image:image><image:loc>{ROOT}/wp-content/uploads/b.gif</image:loc></image:image></url>"
+                f"<url><loc>{ABOUT}</loc></url></urlset>").encode()
+        self.assertEqual(site_check._locs(body), ("urls", [ART, ABOUT]))
+        entries = site_check._entries(body)
+        self.assertEqual([a for a, _ in entries[1]], [ART, ABOUT])
+
+    def test_a_lone_dash_in_an_old_sheet_is_a_filler_not_a_keyword(self):
+        import content_import
+        for filler in ("-", " - ", "–", "—", "N/A", ""):
+            self.assertEqual(content_import.clean(filler), "", filler)
+        self.assertEqual(content_import.clean("cheap-flights"), "cheap-flights")
+
     def test_without_a_readable_sitemap_nothing_is_read_and_it_says_so(self):
         self.assertEqual(site_check.read_sitemap_files(ROOT, lambda a: (404, b"")), ({}, False))
         self.assertEqual(site_check.read_sitemap_files("", self.get), ({}, False))

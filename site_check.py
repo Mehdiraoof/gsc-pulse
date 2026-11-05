@@ -200,9 +200,10 @@ def _locs(body: bytes) -> tuple:
     tag = root.tag.rsplit("}", 1)[-1].lower()
     kind = {"sitemapindex": "index", "urlset": "urls"}.get(tag, "")
     out = []
-    for el in root.iter():
-        if el.tag.rsplit("}", 1)[-1].lower() == "loc" and el.text and el.text.strip():
-            out.append(el.text.strip())
+    for item in root:                  # only the <loc> of each <url> or <sitemap>: an <image:loc> inside it is a picture
+        for el in item:
+            if el.tag.rsplit("}", 1)[-1].lower() == "loc" and el.text and el.text.strip():
+                out.append(el.text.strip())
     return kind, out
 
 
