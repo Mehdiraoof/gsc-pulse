@@ -64,7 +64,7 @@ def page(url, lang, **kw):
 
 def live_site():
     """What the fake site answers when a page is read."""
-    table = {u: page(u, "fa" if u.startswith(FA) else "en") for u in EVERY}
+    table = {u: page(u, "fa" if u.startswith(FA + "/") else "en") for u in EVERY}
     table[DECLARED] = page(DECLARED, "en", alternates={"en": DECLARED, "fa": FA_DECLARED})
     table[FA_DECLARED] = page(FA_DECLARED, "fa", alternates={"en": DECLARED, "fa": FA_DECLARED})
     table[NO_TRANSLATION] = page(NO_TRANSLATION, "en", alternates={"en": NO_TRANSLATION})
