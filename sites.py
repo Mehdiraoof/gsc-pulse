@@ -218,7 +218,7 @@ def _parse_deck(value, where: str) -> DeckConfig:
 
 CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "page_type_tabs", "skip_types", "tab_names",
                   "seasonal_regex", "min_gap_impressions_90d", "keyword_strong_match", "keyword_min_impressions",
-                  "import_from", "gap_exclude_terms", "repair_imports",
+                  "import_from", "gap_exclude_terms", "repair_imports", "languages", "extra_sitemaps",
                   "sop_doc_id", "briefs_folder_id", "drafts_folder_id", "language", "extra_rules",
                   "max_briefs_per_run", "max_drafts_per_run", "ai", "ai_drafts")
 AI_FIELDS = ("provider", "model", "fallback_model", "max_requests_per_run", "daily_requests")
@@ -333,6 +333,8 @@ class ContentConfig:
     skip_types: list = field(default_factory=list)       # page type names (and the "other" label) that get no tab
     tab_names: dict = field(default_factory=dict)        # page type name -> tab name (Article -> Articles)
     notes: list = field(default_factory=list)            # what was decided about tabs, for the run log
+    languages: dict = field(default_factory=dict)        # two languages of the site: {"en": "", "fa": "/fa"} (code -> folder)
+    extra_sitemaps: list = field(default_factory=list)   # sitemap indexes robots.txt does not name (a language folder's)
 
     @property
     def creation_enabled(self) -> bool:
@@ -346,7 +348,7 @@ class ContentConfig:
         rules = [t.url_regex for t in self.tabs] + [t.exclude_regex for t in self.tabs]
         ids = [i.sheet_id for i in self.imports]
         return [v for v in [self.sheet_id, self.seasonal_regex, self.sop_doc_id, self.briefs_folder_id,
-                            self.drafts_folder_id] + ids + rules if v]
+                            self.drafts_folder_id] + ids + rules + list(self.extra_sitemaps) if v]
 
     def tab_of(self, url: str):
         """The first tab a page belongs to, or None (pages that match no tab are ignored)."""
@@ -484,6 +486,19 @@ def _parse_content(value, where: str) -> "ContentConfig":
     if language not in ("", "fa", "en"):
         raise SitesConfigError(f"{at}: 'language' must be fa or en")
     cfg.language = language
+    langs = value.get("languages") or {}
+    if langs:
+        if (not isinstance(langs, dict) or len(langs) != 2
+                or any(not isinstance(k, str) or k not in LANGUAGE_CODES or not isinstance(v, str)
+                       or not re.fullmatch(r"(?:/[\w-]+)?/?", v.strip()) for k, v in langs.items())):
+            raise SitesConfigError(f"{at}: 'languages' must name two languages and the folder of each, "
+                                   f"like {{\"en\": \"\", \"fa\": \"/fa\"}}")
+        cfg.languages = {k: v.strip().rstrip("/") for k, v in langs.items()}
+    more = value.get("extra_sitemaps") or []
+    if (not isinstance(more, list) or len(more) > 5
+            or any(not isinstance(m, str) or not re.match(r"https?://\S+$", m.strip()) for m in more)):
+        raise SitesConfigError(f"{at}: 'extra_sitemaps' must be a list of up to 5 sitemap addresses")
+    cfg.extra_sitemaps = [m.strip() for m in more]
     rules = value.get("extra_rules", "")
     if not isinstance(rules, str) or len(rules) > 3000:
         raise SitesConfigError(f"{at}: 'extra_rules' must be text of at most 3000 characters")

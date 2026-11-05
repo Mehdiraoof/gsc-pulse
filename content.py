@@ -653,12 +653,15 @@ def decaying(clicks: list) -> bool:
 
 def alerts_for(*, advice_code: str, competing: list, seasonal: bool, peak_month: int, today: date,
                url: str, duplicate: bool, decay: bool, position: float, impressions: float,
-               gone: bool, no_data: bool = False, check: str = "", possible: str = "", review: bool = False) -> str:
+               gone: bool, no_data: bool = False, check: str = "", possible: str = "", review: bool = False,
+               language: str = "") -> str:
     """The Alerts cell. `gone` is the owner's own Status; `no_data`: no impressions in the last
     complete month (the row is kept as it is, only this alert says so); `check`: what the status
     check of the page said (404 / redirect, first time); `possible`: addresses an old sheet's row
     might belong to."""
     out = []
+    if language:
+        out.append(language)
     if review:
         out.append(REVIEW_ALERT)
     if competing:

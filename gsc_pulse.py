@@ -614,7 +614,7 @@ def load_tab_members(site, origin: str) -> bool:
     if not site.content.enabled or not site.content.has_sitemap_tabs:
         return True
     if site.name not in _MEMBERS_LOADED:
-        files, ok = site_check.read_sitemap_files(origin, site_check.default_get)
+        files, ok = site_check.read_sitemap_files(origin, site_check.default_get, site.content.extra_sitemaps)
         _MEMBERS_LOADED[site.name] = ok
         if ok:
             content_run.fill_tab_members(site.content, files)
@@ -665,7 +665,7 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False, cleanup_g
             force=force, read_source=source_reader(run) if site.content.imports else None,
             history_pages=((lambda: history.read_page_urls(run.sheets, site.history_sheet_id))
                            if site.history_sheet_id else None),
-            sitemap=lambda: site_check.read_sitemaps(origin, site_check.default_get),
+            sitemap=lambda: site_check.read_sitemaps(origin, site_check.default_get, site.content.extra_sitemaps),
             probe=site_check.fetch_probe, cleanup_gone_since=cleanup_gone_since)
     except Exception:
         run.content_text = "failed"

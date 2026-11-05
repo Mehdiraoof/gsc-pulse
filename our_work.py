@@ -51,7 +51,7 @@ def scan_site(drive, sheets, site, today: date, get=site_check.default_get, log=
         log("  work: no content dashboard yet")
         return 0
     state, rows = load_content(sheets, file_id, site)
-    entries, ok = site_check.read_sitemap_entries(site_check.origin_of(site.site_url), get)
+    entries, ok = site_check.read_sitemap_entries(site_check.origin_of(site.site_url), get, site.content.extra_sitemaps)
     first_seen = None
     if not state.keys({"seen"}) and site.history_sheet_id:
         first_seen = history.read_first_seen(sheets, site.history_sheet_id)          # the first run: from the history

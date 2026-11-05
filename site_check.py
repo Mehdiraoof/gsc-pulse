@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import content
 
@@ -52,6 +52,8 @@ class Probe:
     status: int = 0
     location: str = ""
     title: str = ""
+    lang: str = ""                      # the language of the page: the first part of <html lang> ("fa" for fa-IR)
+    alternates: dict = field(default_factory=dict)      # the translations the page declares: {"fa": address} (hreflang)
 
     @property
     def kind(self) -> str:
@@ -108,16 +110,38 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _title_of(raw: bytes, content_type: str) -> str:
+def _decode(raw: bytes, content_type: str) -> str:
     m = re.search(r"charset=([\w-]+)", content_type or "", re.IGNORECASE)
     for charset in ([m.group(1)] if m else []) + ["utf-8"]:
         try:
-            text = raw.decode(charset, errors="replace")
-            break
+            return raw.decode(charset, errors="replace")
         except LookupError:
             continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _title_of(raw: bytes, content_type: str) -> str:
+    text = _decode(raw, content_type)
     t = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
     return " ".join(html.unescape(t.group(1)).split()) if t else ""
+
+
+def parse_page(text: str, base: str = "") -> tuple:
+    """(title, language, translations) of a page: the language is the first part of <html lang> ("fa" for
+    fa-IR), the translations are the hreflang tags of its head as {language: address} (x-default is not a language)."""
+    t = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+    title = " ".join(html.unescape(t.group(1)).split()) if t else ""
+    m = re.search(r"<html\b[^>]*?\blang\s*=\s*[\"']?([A-Za-z]{2,3})", text[:5000], re.IGNORECASE)
+    lang = m.group(1).lower() if m else ""
+    alternates = {}
+    for tag in re.findall(r"<link\b[^>]*>", text[:100_000], re.IGNORECASE):
+        if not re.search(r"rel\s*=\s*[\"']?alternate", tag, re.IGNORECASE):
+            continue
+        hl = re.search(r"hreflang\s*=\s*[\"']([A-Za-z]{2,3})(?:-[A-Za-z0-9]+)?[\"']", tag, re.IGNORECASE)
+        href = re.search(r"href\s*=\s*[\"']([^\"']+)[\"']", tag, re.IGNORECASE)
+        if hl and href:
+            alternates.setdefault(hl.group(1).lower(), urllib.parse.urljoin(base, html.unescape(href.group(1))))
+    return title, lang, alternates
 
 
 def fetch_probe(url: str, timeout: float = TIMEOUT_S) -> Probe:
@@ -128,9 +152,10 @@ def fetch_probe(url: str, timeout: float = TIMEOUT_S) -> Probe:
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(req, timeout=timeout) as resp:
-            title = _title_of(resp.read(MAX_BODY), resp.headers.get("Content-Type", "")) \
-                if resp.status == 200 else ""
-            return Probe(resp.status, "", title)
+            title, lang, alternates = (
+                parse_page(_decode(resp.read(MAX_BODY), resp.headers.get("Content-Type", "")), url)
+                if resp.status == 200 else ("", "", {}))
+            return Probe(resp.status, "", title, lang, alternates)
     except urllib.error.HTTPError as e:
         return Probe(e.code, e.headers.get("Location", "") if e.headers else "", "")
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException, socket.timeout):
@@ -219,13 +244,13 @@ def sitemap_roots(origin: str, get) -> list:
     return found or [f"{origin}/sitemap.xml"]
 
 
-def read_sitemap_files(origin: str, get=default_get) -> tuple:
+def read_sitemap_files(origin: str, get=default_get, extra=()) -> tuple:
     """({sitemap file address: [page addresses]}, ok). `ok` is False when no sitemap could be read at all: the caller
     then adds nothing for this run. One sitemap file that fails inside an index only costs its own pages."""
     if not origin:
         return {}, False
     files, seen, readable, total = {}, set(), 0, 0
-    roots = sitemap_roots(origin, get)
+    roots = sitemap_roots(origin, get) + [e for e in extra if e]       # the extra indexes of other languages
     default = f"{origin}/sitemap.xml"
     for round_ in (roots, [default]):             # the default address is the second try
         queue = [a for a in round_ if a not in seen]
@@ -249,9 +274,9 @@ def read_sitemap_files(origin: str, get=default_get) -> tuple:
     return files, bool(readable)
 
 
-def read_sitemaps(origin: str, get=default_get) -> tuple:
+def read_sitemaps(origin: str, get=default_get, extra=()) -> tuple:
     """(addresses, ok): every page address of the sitemap(s), once each. See read_sitemap_files."""
-    files, ok = read_sitemap_files(origin, get)
+    files, ok = read_sitemap_files(origin, get, extra)
     urls = {}
     for locs in files.values():
         urls.update(dict.fromkeys(locs))
@@ -281,13 +306,13 @@ def _entries(body: bytes) -> tuple:
     return kind, out
 
 
-def read_sitemap_entries(origin: str, get=default_get) -> tuple:
+def read_sitemap_entries(origin: str, get=default_get, extra=()) -> tuple:
     """({address: lastmod}, ok): like read_sitemaps, with the date each page says it was last changed
     ('' when the sitemap does not say). `ok` is False when no sitemap could be read at all."""
     if not origin:
         return {}, False
     urls, seen, readable = {}, set(), 0
-    for round_ in (sitemap_roots(origin, get), [f"{origin}/sitemap.xml"]):
+    for round_ in (sitemap_roots(origin, get) + [e for e in extra if e], [f"{origin}/sitemap.xml"]):
         queue = [a for a in round_ if a not in seen]
         while queue and len(seen) < MAX_SITEMAPS and len(urls) < MAX_SITEMAP_URLS:
             address = queue.pop(0)

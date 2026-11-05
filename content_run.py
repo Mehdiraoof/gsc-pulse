@@ -23,6 +23,7 @@ Nothing here prints an ID, a link, a URL or a keyword. The file never names the 
 
 import re
 import time
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -78,6 +79,7 @@ class ContentResult:
     removed: dict = field(default_factory=dict)     # gone / redirect / merged -> rows moved to Removed Pages
     keywords: dict = field(default_factory=lambda: {"searches": 0, "title": 0, "empty": 0, "review": 0})
     found_gone: int = 0                             # pages of the history or sitemap that already returned 404/410: no row
+    languages: dict = field(default_factory=dict)   # translations: pairs, pages without a version, unreadable, rows added per language
     tab_notes: list = field(default_factory=list)   # page types left without a tab (over the limit): said in the owner's note
 
     def added_text(self) -> str:
@@ -101,6 +103,8 @@ class ContentResult:
             if any(self.keywords.values()):
                 parts.append("primary keywords filled from "
                              + ", ".join(f"{k} {n}" for k, n in self.keywords.items()))
+            if self.languages:
+                parts.append("translations: " + ", ".join(f"{k} {n}" for k, n in self.languages.items()))
         for _, report in self.imports:
             parts.append(f"imported {report.text()}")
         for _, report in self.repairs:
@@ -544,6 +548,121 @@ def fill_keywords(ctx: Context, work: dict, result: ContentResult):
                 add_note(rec, NOTE_NO_KEYWORD)
 
 
+LANGUAGE_NAMES = {"en": "English", "fa": "Persian", "ar": "Arabic", "tr": "Turkish", "ru": "Russian", "de": "German",
+                  "fr": "French", "es": "Spanish", "it": "Italian", "ku": "Kurdish", "az": "Azerbaijani", "hy": "Armenian"}
+
+
+def missing_alert(code: str) -> str:
+    return f"No {LANGUAGE_NAMES.get(code, code.upper())} version"
+
+
+def mirror_url(url: str, from_code: str, to_code: str, prefixes: dict) -> str:
+    """The address the same page would have in the other language when each language has its own folder
+    (/fa/slug/ for /slug/): the folder is swapped. "" when the address is not under the folder of its language."""
+    p = urlsplit(url)
+    src, dst = prefixes.get(from_code, ""), prefixes.get(to_code, "")
+    path = p.path or "/"
+    under = lambda folder: bool(folder) and (path == folder or path.startswith(folder + "/"))      # noqa: E731
+    if src:
+        if not under(src):
+            return ""
+        rest = path[len(src):] or "/"
+    else:
+        if under(dst):
+            return ""
+        rest = path
+    new = (dst + rest) if dst else rest
+    return urlunsplit((p.scheme, p.netloc, new, "", ""))
+
+
+def page_language(url: str, probe, prefixes: dict) -> str:
+    """The language of a page that was read: its <html lang>, else the folder it lives in; "" when it cannot be told."""
+    if probe is not None and probe.lang in prefixes:
+        return probe.lang
+    path = urlsplit(url).path
+    for code, folder in prefixes.items():
+        if folder and (path == folder or path.startswith(folder + "/")):
+            return code
+    return ""
+
+
+def pair_languages(ctx: Context, work: dict, result: ContentResult, log=print):
+    """Pairs the pages of the two languages of a site (content.languages). A page that declares its translations in
+    hreflang tags is paired by them (no tag for the other language: it has no version). A page that declares none
+    is paired with the same address in the other language's folder, and only when that page answers 200 in the other
+    language; 404, 410 or a redirect means there is no version. A page that could not be read, or whose language is
+    not known, is left as it is. Sets rec["lang_state"] (pair, missing, unreadable), rec["lang_other"] and, for a
+    pair, rec["lang_target"] and rec["add_related"]; counts them in result.languages."""
+    prefixes = ctx.site.content.languages
+    if not prefixes or ctx.probe is None:
+        return
+    codes = list(prefixes)
+    pages = [rec for recs in work.values() for rec in recs
+             if str(rec["row"].get(content.URL, "")).strip() and not rec["blank"] and not rec.get("remove")
+             and not rec.get("settled") and not rec.get("skip_new") and not rec.get("topic")]
+    known = {content.url_key(str(r["row"][content.URL])): r.get("probe") for r in pages}
+    need = []
+    for rec in pages:
+        url = str(rec["row"][content.URL]).strip()
+        probe = rec.get("probe")
+        code = page_language(url, probe, prefixes) if probe is not None and probe.kind == site_check.OK else ""
+        rec["lang_state"] = "unreadable"
+        if not code:
+            continue
+        other = codes[1] if code == codes[0] else codes[0]
+        rec["lang"], rec["lang_other"] = code, other
+        if probe.alternates:
+            target = probe.alternates.get(other)
+            if target:
+                rec["lang_state"], rec["lang_target"] = "pair", target
+            else:
+                rec["lang_state"] = "missing"
+        else:
+            mirror = mirror_url(url, code, other, prefixes)
+            if mirror:
+                need.append((rec, mirror))
+    fetched = {}
+    wanted = [m for _, m in need if content.url_key(m) not in known]
+    if wanted:
+        fetched = {content.url_key(u): p for u, p in site_check.check_all(wanted, ctx.probe).items()}
+    for rec, mirror in need:
+        other = rec["lang_other"]
+        pr = known.get(content.url_key(mirror)) or fetched.get(content.url_key(mirror))
+        if pr is None:
+            continue
+        if pr.kind == site_check.OK:
+            if page_language(mirror, pr, prefixes) == other:
+                rec["lang_state"], rec["lang_target"] = "pair", mirror
+            else:
+                rec["lang_state"] = "missing"                # the folder answers with the other language's text
+        elif pr.kind in (site_check.GONE_KIND, site_check.REDIRECT):
+            rec["lang_state"] = "missing"
+    pairs, counts = set(), {"unreadable": 0}
+    for rec in pages:
+        state = rec.get("lang_state")
+        if state == "pair":
+            rec["add_related"] = content.display_url(rec["lang_target"])
+            pairs.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_target"]))))
+        elif state == "missing":
+            counts[f"no {rec['lang_other']}"] = counts.get(f"no {rec['lang_other']}", 0) + 1
+        else:
+            counts["unreadable"] += 1
+        if rec.get("new") and rec.get("lang"):
+            counts[f"added {rec['lang']}"] = counts.get(f"added {rec['lang']}", 0) + 1
+    result.languages = {"pairs": len(pairs), **counts}
+    log("  content: languages " + ", ".join(f"{k} {v}" for k, v in result.languages.items()))
+
+
+def language_alert(rec: dict, row: dict) -> str:
+    """The alert about a missing translation for a row. A row whose page could not be read keeps the alert it had."""
+    if rec.get("lang_state") == "missing":
+        return missing_alert(rec["lang_other"])
+    if rec.get("lang_state") == "pair":
+        return ""
+    had = str(row.get("Alerts", ""))
+    return next((missing_alert(c) for c in LANGUAGE_NAMES if missing_alert(c) in had), "")
+
+
 def needs_review(ctx: Context, rec: dict, row: dict, stats, title: str) -> bool:
     """Is the row flagged "Keyword needs review"? Never when its notes say "Keyword checked". An empty keyword is
     flagged when no search of the page fits it (see fill_keywords). A keyword that is set stays as it is; the flag
@@ -832,6 +951,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             log(f"  content: {result.found_gone} pages of the history or sitemap were already gone: no row")
 
     fill_keywords(ctx, work, result)
+    pair_languages(ctx, work, result, log)
 
     # ---- page rows -----------------------------------------------------------------
     all_urls = [str(rec["row"].get(content.URL, "")) for recs in work.values() for rec in recs]
@@ -883,6 +1003,7 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                 duplicate=content.dup_key(str(row.get(content.URL, ""))) in dups,
                 decay=content.decaying(vals["_series"]), position=vals["_position"],
                 review=needs_review(ctx, rec, row, stats, _title_of(rec)),
+                language=language_alert(rec, row),
                 impressions=vals["_impressions"], no_data=no_data,
                 gone=content.is_settled(row),
                 check=rec.get("check", ""), possible=state.get("possible", content.row_key(row)))
@@ -897,7 +1018,8 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
                     "Intent": content.intent_for(t.landing),
                     "Keyword Type": "Seasonal" if vals["_seasonal"] else "General",
                     "Content Type": content.content_type_for(t.landing, vals["_impressions"]),
-                    content.SLUG: content.slug_of(address), **rec.get("import", {})}
+                    content.SLUG: content.slug_of(address), **({"Related URLs": rec["add_related"]} if rec.get("add_related") else {}),
+                    **rec.get("import", {})}
     # a row whose own keyword cell is empty gets the computed one, whether the row is new or not
     for t in cfg.tabs:
         for rec in work.get(t.name, []):
@@ -1026,6 +1148,12 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             if rec.get("settle") and cs.col_of(header, content.STATUS) is not None:
                 updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, content.STATUS))}{2 + i}",
                                 [[rec["settle"][0]]]))
+            if rec.get("add_related") and i < n_old and cs.col_of(header, "Related URLs") is not None:
+                # the address of the other language is added to Related URLs, once; what is there stays
+                have = str(rec["row"].get("Related URLs", ""))
+                if content.url_key(rec["add_related"]) not in {content.url_key(x) for x in re.split(r"[\s,]+", have) if x}:
+                    updates.append((f"'{t.name}'!{cs.letters(cs.col_of(header, 'Related URLs'))}{2 + i}",
+                                    [[(have.rstrip() + "\n" if have.strip() else "") + rec["add_related"]]]))
         for i in range(0, len(updates), PATCH_CHUNK):
             tabs.patch_cells(sheets, file_id, updates[i:i + PATCH_CHUNK])
         # no row ever leaves a tab: a page that is gone or moved (found twice in a row), or an old row merged
