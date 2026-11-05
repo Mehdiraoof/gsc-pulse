@@ -324,5 +324,17 @@ class AccessCheckTests(unittest.TestCase):
         self.assertEqual(lines, ["x: the owner's client not tried; service account not tried; as a spreadsheet not tried"])
 
 
+class ServiceAccountAddressTests(unittest.TestCase):
+
+    def test_only_the_address_is_taken_from_the_key(self):
+        key = json.dumps({"type": "service_account", "client_email": "bot@proj.iam.gserviceaccount.com",
+                          "private_key": "-----BEGIN PRIVATE KEY-----SECRET-----END PRIVATE KEY-----"})
+        self.assertEqual(gsc_pulse.service_account_email(key), "bot@proj.iam.gserviceaccount.com")
+
+    def test_an_unusable_key_gives_nothing(self):
+        for raw in ("", "not json", "[]", json.dumps({"client_email": "no address"}), json.dumps({})):
+            self.assertEqual(gsc_pulse.service_account_email(raw), "", raw)
+
+
 if __name__ == "__main__":
     unittest.main()

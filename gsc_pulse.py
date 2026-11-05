@@ -508,7 +508,16 @@ def access_report(items: list, me_drive, sa_drive, sa_sheets) -> list:
     return lines
 
 
-def access_check_command():
+def service_account_email(raw: str) -> str:
+    """The address of the service account (its `client_email`), nothing else from the key; "" when the key is unusable."""
+    try:
+        email = str(json.loads(raw).get("client_email", "")).strip()
+    except (ValueError, AttributeError):
+        return ""
+    return email if re.fullmatch(r"[^@\s]+@[^@\s]+", email) else ""
+
+
+def access_check_command(smtp=None):
     """A read-only look at what this tool can open. The files to look at are in the repository variable
     ACCESS_CHECK_IDS (JSON [{"label": ..., "id": ...}]). Nothing is created, changed or imported; the log holds the
     labels and results only."""
@@ -535,6 +544,13 @@ def access_check_command():
             print("  access check: the service account key could not be used")
     for line in access_report(items, me, sa_drive, sa_sheets):
         print(f"  access check: {line}")
+    address = service_account_email(raw or "")
+    if address and smtp is not None:            # only when the run was started with send_emails: the log stays public
+        notify_owner(smtp, "The address to share a sheet with",
+                     f"To let the tool read an old sheet, share that sheet (Viewer) with:\n\n{address}\n")
+        print("  access check: the service account address was emailed to the owner")
+    elif address:
+        print("  access check: (tick send_emails to get the service account address by email; it is not printed here)")
 
 
 def select_only(runs: list, only: str):
@@ -1184,7 +1200,7 @@ def main():
 
     # ---- A read-only check of what the tool's Google access can open: its own command ---------------------------
     if os.environ.get("ACCESS_CHECK", "").strip().lower() in ("1", "true", "yes"):
-        access_check_command()
+        access_check_command(owner_smtp)
         return
 
     # ---- The fake test site: its own command, nothing else runs (no real site is touched) --------
