@@ -637,29 +637,85 @@ def pair_languages(ctx: Context, work: dict, result: ContentResult, log=print):
                 rec["lang_state"] = "missing"                # the folder answers with the other language's text
         elif pr.kind in (site_check.GONE_KIND, site_check.REDIRECT):
             rec["lang_state"] = "missing"
+    suggest_translations(pages)
     pairs, counts = set(), {"unreadable": 0}
+    possible = set()
     for rec in pages:
         state = rec.get("lang_state")
         if state == "pair":
             rec["add_related"] = content.display_url(rec["lang_target"])
             pairs.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_target"]))))
+        elif state == "possible":
+            counts["possible"] = counts.get("possible", 0) + 1
+            possible.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_possible"]))))
         elif state == "missing":
             counts[f"no {rec['lang_other']}"] = counts.get(f"no {rec['lang_other']}", 0) + 1
         else:
             counts["unreadable"] += 1
         if rec.get("new") and rec.get("lang"):
             counts[f"added {rec['lang']}"] = counts.get(f"added {rec['lang']}", 0) + 1
+    if possible:
+        counts["possible pairs"] = len(possible)
     result.languages = {"pairs": len(pairs), **counts}
     log("  content: languages " + ", ".join(f"{k} {v}" for k, v in result.languages.items()))
 
 
+POSSIBLE_MIN_SCORE = 0.7        # how alike two slugs must be (the balance of the shared words) to suggest a translation
+POSSIBLE_MIN_WORDS = 2          # ... and the words they share
+POSSIBLE_ALERT = "Possible translation: "
+
+
+def slug_similarity(a: str, b: str) -> tuple:
+    """(score, shared words) of two page addresses: the balance (F1) of the topic words of their slugs, spelling
+    normalized, plural endings and filler words off. 0 when either slug has no words."""
+    wa, wb = content.keyword_words(content.slug_text(a)), content.keyword_words(content.slug_text(b))
+    common = len(wa & wb)
+    if not wa or not wb or not common:
+        return 0.0, 0
+    score = 2 * common / (len(wa) + len(wb))
+    if common == min(len(wa), len(wb)) and common >= 3 and score >= 0.5:
+        score = max(score, POSSIBLE_MIN_SCORE)         # the short slug sits whole inside the long one (three words or more)
+    return score, common
+
+
+def suggest_translations(pages: list):
+    """Before a page is said to have no version in the other language, its slug is compared with the slugs of the
+    pages of that language that have no version either (the same article often has a different slug: /cost-what-you-
+    need-to-know/ and /fa/cost/). The most alike one, when close enough, becomes rec["lang_possible"] and the page's state
+    "possible": it gets the alert "Possible translation: <address>" instead of the missing-version alert, and no
+    Related URLs."""
+    missing = [r for r in pages if r.get("lang_state") == "missing"]
+    found = {}
+    for rec in missing:
+        url = str(rec["row"][content.URL]).strip()
+        best = None
+        for cand in missing:
+            if cand["lang"] != rec["lang_other"]:
+                continue
+            curl = str(cand["row"][content.URL]).strip()
+            score, shared = slug_similarity(url, curl)
+            if score >= POSSIBLE_MIN_SCORE and shared >= POSSIBLE_MIN_WORDS and (best is None or score > best[0]):
+                best = (score, curl)
+        if best:
+            found[id(rec)] = best[1]
+    for rec in missing:
+        if id(rec) in found:
+            rec["lang_state"], rec["lang_possible"] = "possible", found[id(rec)]
+
+
 def language_alert(rec: dict, row: dict) -> str:
-    """The alert about a missing translation for a row. A row whose page could not be read keeps the alert it had."""
+    """The alert about a translation for a row: the missing version, or a possible translation. A row whose page could
+    not be read keeps the alert it had."""
     if rec.get("lang_state") == "missing":
         return missing_alert(rec["lang_other"])
+    if rec.get("lang_state") == "possible":
+        return POSSIBLE_ALERT + content.display_url(rec["lang_possible"])
     if rec.get("lang_state") == "pair":
         return ""
     had = str(row.get("Alerts", ""))
+    kept = re.search(re.escape(POSSIBLE_ALERT) + r"\S+", had)
+    if kept:
+        return kept.group(0).rstrip(",")
     return next((missing_alert(c) for c in LANGUAGE_NAMES if missing_alert(c) in had), "")
 
 

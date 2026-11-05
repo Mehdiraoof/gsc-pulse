@@ -22,12 +22,14 @@ FA_ONLY = f"{FA}/persian-only-guide/"
 DECLARED, FA_DECLARED = f"{ROOT}/hreflang-page/", f"{FA}/translated-with-another-name/"
 NO_TRANSLATION = f"{ROOT}/declares-itself-only/"
 FALLBACK_EN, FALLBACK_FA = f"{ROOT}/fallback-guide/", f"{FA}/fallback-guide/"
+POSS_EN, POSS_FA = f"{ROOT}/turkey-plastic-surgery-cost-what-you-need-to-know/", f"{FA}/turkey-plastic-surgery-cost/"
+HOTEL_EN, HOTEL_FA = f"{ROOT}/hotels-in-osmanbey-istanbul/", f"{FA}/hotels-in-uskudar-istanbul/"
 BROKEN = f"{ROOT}/unreadable-page/"
 HOME, FA_HOME = f"{ROOT}/", f"{FA}/"
 
-FILES = {f"{ROOT}/post-sitemap.xml": [HOME, ART, ONLY_EN, DECLARED, NO_TRANSLATION, FALLBACK_EN, BROKEN],
+FILES = {f"{ROOT}/post-sitemap.xml": [HOME, ART, ONLY_EN, DECLARED, NO_TRANSLATION, FALLBACK_EN, BROKEN, POSS_EN, HOTEL_EN],
          f"{ROOT}/page-sitemap.xml": [HOME, ABOUT],
-         f"{FA}/post-sitemap.xml": [FA_HOME, FA_ART, FA_ONLY, FA_DECLARED, FALLBACK_FA],
+         f"{FA}/post-sitemap.xml": [FA_HOME, FA_ART, FA_ONLY, FA_DECLARED, FALLBACK_FA, POSS_FA, HOTEL_FA],
          f"{FA}/page-sitemap.xml": [FA_HOME, FA_ABOUT]}
 EVERY = sorted({u for urls in FILES.values() for u in urls})
 
@@ -39,7 +41,9 @@ PAIRS = [("istanbul weather in february", ART, 5, 300, 6.0), ("istanbul weather 
          ("hreflang page", DECLARED, 5, 300, 6.0), ("translated with another name", FA_DECLARED, 5, 300, 6.0),
          ("declares itself only", NO_TRANSLATION, 5, 300, 6.0),
          ("fallback guide", FALLBACK_EN, 5, 300, 6.0), ("fallback guide fa", FALLBACK_FA, 5, 300, 6.0),
-         ("unreadable page", BROKEN, 5, 300, 6.0)]
+         ("unreadable page", BROKEN, 5, 300, 6.0),
+         ("turkey plastic surgery cost", POSS_EN, 5, 300, 6.0), ("turkey plastic surgery cost fa", POSS_FA, 5, 300, 6.0),
+         ("hotels in osmanbey", HOTEL_EN, 5, 300, 6.0), ("hotels in uskudar", HOTEL_FA, 5, 300, 6.0)]
 
 TABS = [{"name": "Articles", "sitemap": "post-sitemap", "exclude_regex": r"^https://example\.test/(fa/?)?$"},
         {"name": "Landing Pages", "sitemap": "page-sitemap"}]
@@ -180,7 +184,7 @@ class PersianRowsTests(FakeSiteBase):
                          {content.display_url(u) for u in (HOME, FA_HOME, ABOUT, FA_ABOUT)})
         articles = {r[content.URL] for r in self.table("Articles")[1] if r.get(content.URL)}
         self.assertNotIn(content.display_url(FA_HOME), articles)                                   # excluded like the English home
-        self.assertEqual(result.languages["added fa"], 5)             # the home page, the about page and three articles
+        self.assertEqual(result.languages["added fa"], 7)             # the home page, the about page and five articles
 
 
 class PairingTests(FakeSiteBase):
@@ -205,7 +209,46 @@ class PairingTests(FakeSiteBase):
         self.assertIn("No Persian version", self.row(NO_TRANSLATION)["Alerts"])          # it declares a set without Persian
         self.assertNotIn("version", self.row(FALLBACK_FA)["Alerts"])                     # in the Persian folder but written in English: left alone
         self.assertIn("No Persian version", self.row(FALLBACK_EN)["Alerts"])
-        self.assertEqual((result.languages["no fa"], result.languages["no en"], result.languages["unreadable"]), (3, 1, 2))
+        self.assertEqual((result.languages["no fa"], result.languages["no en"], result.languages["unreadable"]), (4, 2, 2))
+
+    def test_a_close_slug_in_the_other_language_is_a_possible_translation_not_a_missing_version(self):
+        result = self.go()
+        self.assertIn(f"Possible translation: {POSS_FA}", self.row(POSS_EN)["Alerts"])
+        self.assertIn(f"Possible translation: {POSS_EN}", self.row(POSS_FA)["Alerts"])
+        for url in (POSS_EN, POSS_FA):
+            self.assertNotIn("version", self.row(url)["Alerts"])
+            self.assertEqual(self.row(url).get("Related URLs", ""), "")                  # nothing is filled for a guess
+        self.assertEqual((result.languages["possible"], result.languages["possible pairs"]), (2, 1))
+        self.assertEqual(result.languages["pairs"], 4)                                   # the guess is not a pair
+
+    def test_slugs_that_are_only_a_little_alike_stay_missing_versions(self):
+        self.go()
+        self.assertIn("No Persian version", self.row(HOTEL_EN)["Alerts"])           # one word of three differs
+        self.assertIn("No English version", self.row(HOTEL_FA)["Alerts"])
+        self.assertNotIn("Possible", self.row(ONLY_EN)["Alerts"])
+
+    def test_a_page_that_has_its_translation_is_never_offered_as_a_possible_one(self):
+        table = {u: self.live(u) for u in EVERY}
+        same = f"{FA}/turkey-plastic-surgery-cost-what-you-need-to-know/"
+        table[same] = page(same, "fa")                                                   # the real mirror exists
+        live = lambda u: table.get(u, Probe(404))                                        # noqa: E731
+        self.go()
+        self.run_it(force=True, today=tcr.TODAY.replace(day=28), sitemap=lambda: (EVERY + [same], True), probe=live)
+        self.assertEqual(self.row(POSS_EN)["Related URLs"], same)
+        self.assertNotIn("Possible", self.row(POSS_EN)["Alerts"])
+
+    def test_a_possible_translation_alert_stays_on_a_page_that_cannot_be_read(self):
+        self.go()
+        self.edit("Articles", content.display_url(BROKEN), "Alerts", f"Possible translation: {POSS_FA}")
+        self.run_it(force=True, today=tcr.TODAY.replace(day=28), sitemap=self.sitemap(), probe=self.live)
+        self.assertIn(f"Possible translation: {POSS_FA}", self.row(BROKEN)["Alerts"])
+
+    def test_slug_similarity(self):
+        sim = content_run.slug_similarity
+        self.assertGreaterEqual(sim(POSS_EN, POSS_FA)[0], content_run.POSSIBLE_MIN_SCORE)
+        self.assertLess(sim(HOTEL_EN, HOTEL_FA)[0], content_run.POSSIBLE_MIN_SCORE)
+        self.assertEqual(sim(HOME, FA_HOME), (0.0, 0))
+        self.assertEqual(sim(f"{ROOT}/12345/", f"{FA}/12345/"), (0.0, 0))
 
     def test_a_page_that_cannot_be_read_is_left_as_it_is(self):
         self.go()
