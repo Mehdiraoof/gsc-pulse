@@ -703,7 +703,8 @@ def pair_languages(ctx: Context, work: dict, result: ContentResult, log=print):
             counts["untranslated"] = counts.get("untranslated", 0) + 1
         elif state == "pair":
             rec["add_related"] = content.display_url(rec["lang_target"])
-            pairs.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_target"]))))
+            if rec.get("lang_real") is not False:             # a pair with a page not written in its language is not a translation
+                pairs.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_target"]))))
         elif state == "possible":
             counts["possible"] = counts.get("possible", 0) + 1
             possible.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_possible"]))))
