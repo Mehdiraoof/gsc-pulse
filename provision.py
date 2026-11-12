@@ -26,8 +26,8 @@ import tabs
 ROOT_FOLDER = "PulseO"
 INDEX_NAME = "PulseO · Index"
 INDEX_TAB = "Sites"
-INDEX_HEADER = ["name", "data_id", "history_id", "reports_id", "created_at", "emailed_at", "content_id"]
-INDEX_LAST = "G"                # the last column of the Index tab
+INDEX_HEADER = ["name", "data_id", "history_id", "reports_id", "created_at", "emailed_at", "content_id", "technical_id"]
+INDEX_LAST = "H"                # the last column of the Index tab
 FOLDER, SHEET = "application/vnd.google-apps.folder", "application/vnd.google-apps.spreadsheet"
 KINDS = (("data", "PulseO Data"), ("history", "PulseO History"), ("reports", "PulseO Reports"))
 RETRIES = 5
@@ -248,3 +248,27 @@ def existing_content_file(drive, sheets, site) -> str:
     rows = tabs.read_rows(sheets, index_id, INDEX_TAB, INDEX_LAST)
     _, row = _row_of(rows, site.name)
     return row[6] if len(row) > 6 else ""
+
+
+# --------------------------------------------------------------------------- #
+# The Technical sheet: one more sheet of a site, remembered in the Index (column H)
+# --------------------------------------------------------------------------- #
+
+def technical_file(drive, sheets, site, label: str, log=print):
+    """
+    The Technical sheet of a site: (spreadsheet id, created in this call). The id in the Index (column technical_id), else a
+    new, empty spreadsheet named "[label] Technical" made next to the site's other sheets and remembered at once. Only its own
+    cell of the Index row is written, so a sync running at the same time cannot be overwritten. Nothing here prints an ID.
+    """
+    index_id = _open_index(drive, sheets)
+    rows = tabs.read_rows(sheets, index_id, INDEX_TAB, INDEX_LAST)
+    row_no, row = _row_of(rows, site.name)
+    if row[7]:
+        return row[7], False
+    file_id = create(drive, f"[{label}] Technical", SHEET, _site_folder(drive, site, label))
+    tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!H1", [[INDEX_HEADER[7]]])])
+    if row_no is None:                                   # a site that has no row yet (its sheets come from the configuration)
+        row_no = _save_row(sheets, index_id, None, [site.name] + [""] * 6 + [file_id], len(rows))
+    else:
+        tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!H{row_no}", [[file_id]])])
+    return file_id, True

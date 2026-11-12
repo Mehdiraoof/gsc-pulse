@@ -1,0 +1,57 @@
+name: PulseO technical health
+
+# The daily technical checks (health of every site, alerts by email only for a confirmed, new, worse or fixed problem).
+# It does NOT run by itself yet: the schedule below stays off until the owner approves it. Started by hand it sends no
+# email unless send_emails is ticked.
+on:
+  # schedule:
+  #   - cron: "43 2 * * *"    # every day about 02:43 UTC (05:43 Istanbul), off the hour; GitHub may start it later
+  workflow_dispatch:
+    inputs:
+      only_site:
+        description: "Run for this one site only (a name from SITES_JSON): every other site is left alone"
+        required: false
+        default: ""
+      send_emails:
+        description: "A run started by hand sends NO email unless asked. On: the alert email goes out as in a scheduled run"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pulseo-technical     # never two technical runs at once; the weekly sync has its own group
+  cancel-in-progress: false
+
+jobs:
+  technical:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90     # a failed check is made again after the wait (30 minutes by default)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check the health of the sites
+        env:
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
+          SITES_JSON: ${{ secrets.SITES_JSON }}
+          SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
+          TECHNICAL_RUN: "true"
+          ONLY_SITE: ${{ inputs.only_site }}
+          SEND_EMAILS: ${{ inputs.send_emails }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python gsc_pulse.py

@@ -71,6 +71,7 @@ import keyword_fix
 import opportunities
 import tabs
 import sites
+import technical_run
 
 
 # --------------------------------------------------------------------------- #
@@ -721,6 +722,47 @@ def sync_bing(run: SiteRun, accesses: dict, today: date, make_access=None):
     print()
 
 
+def technical_command(runs: list, smtp):
+    """The daily technical run: health checks of every site that has the module on, one email for all of them when there is
+    something new, worse or fixed (only with smtp: a manual run passes none unless it was asked to send). Nothing is written to
+    a site, to the Reports sheets, the decks or the dashboards."""
+    today = date.today()
+    targets = []
+    for r in runs:
+        if r.status == "failed":
+            continue
+        if not r.site.technical.enabled:
+            print(f"{r.name}: technical: off")
+        elif r.site.auth != "me" or r.drive is None:
+            print(f"{r.name}: technical: off (needs own access)")
+        else:
+            targets.append(r)
+
+    def final(run):
+        return history.last_final_date(functools.partial(iter_gsc_pages, run.gsc, run.site.site_url,
+                                                         num_retries=history.RETRIES), today)
+
+    def page_rows(run, last):
+        rows = []
+        for page in iter_gsc_pages(run.gsc, run.site.site_url, (last - timedelta(days=27)).isoformat(), last.isoformat(),
+                                   ["page"], history.HISTORY_ROW_LIMIT, num_retries=history.RETRIES):
+            rows.extend(page)
+        return rows
+
+    def sitemaps_api(run):
+        return run.gsc.sitemaps().list(siteUrl=run.site.site_url).execute(num_retries=2).get("sitemap", [])
+
+    deps = technical_run.Deps(
+        sleep=time.sleep, final=final, page_rows=page_rows, sitemaps_api=sitemaps_api,
+        mail=(lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None)
+    before = {r.name for r in targets if r.status == "failed"}
+    for line in technical_run.run_technical(targets, deps, print, on_error=lambda r, e: fail_site(r, e)):
+        print(f"  technical: {line}")
+    failed = [r.name for r in targets if r.status == "failed" and r.name not in before]
+    if failed:
+        raise GscPulseError(f"technical: {len(failed)} site(s) failed: {', '.join(failed)}")
+
+
 def deck_rebuild_for(run: SiteRun, everything: bool, site_name: str, kind: str):
     """
     What to rebuild for this site: True (both decks, every site: the rebuild_decks input), a set
@@ -1342,6 +1384,11 @@ def main():
             raise GscPulseError("page type discovery: the site could not be reached")
         discover_page_types(run.gsc, run.sheets, discover_site, start_date, end_date)
         print(f"  ✅  Done — updated at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        return
+
+    # ---- The daily technical run (health checks and alerts): its own command, nothing else runs ------------------
+    if os.environ.get("TECHNICAL_RUN", "").strip().lower() in ("1", "true", "yes"):
+        technical_command(enabled, owner_smtp)
         return
 
     # ---- A refresh of the content dashboard on a copy of it: its own command, nothing else runs -----------------

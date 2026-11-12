@@ -27,7 +27,7 @@ ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "r
                   "drive_folder_id", "page_types", "first_match_wins", "other_label", "other_deck_label", "opportunities",
                   "thresholds",
                   "weekly_segments",
-                  "content", "bing",
+                  "content", "bing", "technical",
                   "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
@@ -77,6 +77,7 @@ class Site:
     deck: "DeckConfig" = None
     content: "ContentConfig" = None                      # the content dashboard (v2.5)
     bing: "BingConfig" = None                            # Bing Webmaster data
+    technical: "TechnicalConfig" = None                  # the daily health checks and the Technical sheet
     enabled: bool = True
     auth: str = "robot"             # robot: the service account; me: the owner's own Google account
 
@@ -86,9 +87,12 @@ class Site:
                            self.reports_sheet_id) if v]
         return (ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
                 + list(self.opportunities.get("brand_terms", [])) + self.content.sensitive_values()
-                + ([self.bing.site_url] if self.bing.site_url else []))
+                + ([self.bing.site_url] if self.bing.site_url else [])
+                + list(self.technical.key_pages_extra) + list(self.technical.money_pages))
 
     def __post_init__(self):
+        if self.technical is None:
+            self.technical = TechnicalConfig()
         if self.deck is None:
             self.deck = DeckConfig()
         if self.content is None:
@@ -632,6 +636,74 @@ def _parse_bing(value, where: str) -> BingConfig:
     return BingConfig(enabled=enabled, auth=auth, site_url=site_url.strip())
 
 
+TECHNICAL_CHECKS = ("health", "inspection", "cwv", "crawl", "exports")      # later phases switch the others on
+TECHNICAL_FIELDS = ("enabled", "key_pages_extra", "money_pages", "inspection_daily_max", "sitemap_drop_alert",
+                    "confirm_minutes", "server_error_share", "large_change_share", "slow_seconds", "checks")
+
+
+@dataclass
+class TechnicalConfig:
+    """The technical health of a site: daily checks (health), later the index watch, web vitals, the crawl and the exports.
+    On unless switched off; it only runs in the daily technical run, never in the weekly sync."""
+    enabled: bool = True
+    key_pages_extra: list = field(default_factory=list)      # pages (paths or addresses) checked besides the top 20 by clicks
+    money_pages: list = field(default_factory=list)          # pages that weigh more in the audit (later phase)
+    inspection_daily_max: int = 1500                         # URL Inspection requests per day (never above 75% of the quota)
+    sitemap_drop_alert: float = 0.2                          # a sitemap that loses more of its addresses than this is a problem
+    confirm_minutes: int = 30                                # minutes between a failed check and the second check
+    server_error_share: float = 0.2                          # more than this share of key pages failing with 5xx or no answer
+    large_change_share: float = 0.3                          # more than this share of key pages changing status at once
+    slow_seconds: float = 10.0                               # the home page must answer within this time
+    checks: dict = field(default_factory=lambda: {k: True for k in TECHNICAL_CHECKS})
+
+
+def _paths(value, at: str, key: str) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 100 or not all(isinstance(p, str) and 0 < len(p.strip()) <= 500
+                                                                  for p in value):
+        raise SitesConfigError(f"{at}: '{key}' must be a list of at most 100 page paths or addresses")
+    return [p.strip() for p in value]
+
+
+def _number(value, at: str, key: str, low: float, high: float, whole: bool = False):
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and low <= value <= high
+    if not ok or (whole and int(value) != value):
+        raise SitesConfigError(f"{at}: '{key}' must be {'a whole ' if whole else 'a '}number from {low} to {high}")
+    return int(value) if whole else float(value)
+
+
+def _parse_technical(value, where: str) -> TechnicalConfig:
+    if value is None:
+        return TechnicalConfig()
+    at = f"{where}, technical"
+    if not isinstance(value, dict):
+        raise SitesConfigError(f"{at}: must be a JSON object")
+    if set(value) - set(TECHNICAL_FIELDS):
+        raise SitesConfigError(f"{at}: has an unknown field (allowed: {', '.join(TECHNICAL_FIELDS)})")
+    enabled = value.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise SitesConfigError(f"{at}: 'enabled' must be true or false")
+    checks = {k: True for k in TECHNICAL_CHECKS}
+    given = value.get("checks", {})
+    if not isinstance(given, dict) or set(given) - set(TECHNICAL_CHECKS) or not all(isinstance(v, bool) for v in given.values()):
+        raise SitesConfigError(f"{at}: 'checks' must be an object of true/false for: {', '.join(TECHNICAL_CHECKS)}")
+    checks.update(given)
+    d = TechnicalConfig()
+    return TechnicalConfig(
+        enabled=enabled,
+        key_pages_extra=_paths(value.get("key_pages_extra"), at, "key_pages_extra"),
+        money_pages=_paths(value.get("money_pages"), at, "money_pages"),
+        inspection_daily_max=_number(value.get("inspection_daily_max", d.inspection_daily_max), at,
+                                     "inspection_daily_max", 0, 1500, whole=True),
+        sitemap_drop_alert=_number(value.get("sitemap_drop_alert", d.sitemap_drop_alert), at, "sitemap_drop_alert", 0.01, 0.9),
+        confirm_minutes=_number(value.get("confirm_minutes", d.confirm_minutes), at, "confirm_minutes", 0, 120, whole=True),
+        server_error_share=_number(value.get("server_error_share", d.server_error_share), at, "server_error_share", 0.05, 1),
+        large_change_share=_number(value.get("large_change_share", d.large_change_share), at, "large_change_share", 0.1, 1),
+        slow_seconds=_number(value.get("slow_seconds", d.slow_seconds), at, "slow_seconds", 1, 60),
+        checks=checks)
+
+
 def _flag(entry: dict, key: str, where: str) -> bool:
     value = entry.get(key, False)
     if not isinstance(value, bool):
@@ -820,6 +892,7 @@ def parse_sites_json(raw: str) -> list:
             deck=_parse_deck(entry.get("deck"), where),
             content=_parse_content(entry.get("content"), where),
             bing=_parse_bing(entry.get("bing"), where),
+            technical=_parse_technical(entry.get("technical"), where),
             enabled=enabled,
         )
         if site.other_label.lower() in {t["name"].lower() for t in site.page_types} | {"all"}:
