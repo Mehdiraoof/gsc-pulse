@@ -155,7 +155,7 @@ class HealthyDay(Base):
     def test_the_tabs_and_the_index(self):
         self.go()
         book = self.fs.books[self.file_id()]
-        self.assertEqual(list(book), ["Overview", "Health Log", "Robots Versions", "Checker Blocked", "_state"])
+        self.assertEqual(list(book), ["Overview", "Health Log", "Index Status", "Robots Versions", "Checker Blocked", "_state"])
         index_id = self.drive.id_of(provision.INDEX_NAME)
         header = self.fs.books[index_id][provision.INDEX_TAB].data[0]
         self.assertEqual(header[7], "technical_id")

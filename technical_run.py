@@ -17,10 +17,11 @@ Nothing is written to a site. The Reports sheets, the decks and the dashboards a
 
 import json
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import content
 import history
+import index_watch
 import provision
 import site_check
 import tabs
@@ -49,6 +50,9 @@ class Deps:
     sitemaps_api: object = None     # (run) -> [{"path", "errors", ...}] of the sitemaps submitted in Search Console
     mail: object = None             # (subject, body) -> None; raises when it cannot send. None: no email in this run
     daily: bool = False             # the small daily check: only the home page and robots.txt
+    inspector: object = None        # (run) -> index_watch.Inspector, or None: the index watch is not made in this run
+    content_pages: object = None    # (run) -> [index_watch.ContentPage]; None: read from the site's content dashboard
+    fill_dashboard: object = None   # (run, table) -> number of tabs written; None: the site's content dashboard
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +90,8 @@ def ensure_tabs(sheets, file_id: str):
         else:
             _add_tab(sheets, file_id, OVERVIEW, OVERVIEW_HEADER)
         titles[OVERVIEW] = None
-    for name, header, hidden in ((HEALTH, HEALTH_HEADER, False), (ROBOTS, ROBOTS_HEADER, False), (BLOCKED, BLOCKED_HEADER, False), (STATE, STATE_HEADER, True)):
+    for name, header, hidden in ((HEALTH, HEALTH_HEADER, False), (index_watch.TAB, index_watch.HEADER, False),
+                                 (ROBOTS, ROBOTS_HEADER, False), (BLOCKED, BLOCKED_HEADER, False), (STATE, STATE_HEADER, True)):
         if name not in titles:
             _add_tab(sheets, file_id, name, header, hidden)
 
@@ -106,7 +111,8 @@ def health_rows(log: list, now: datetime) -> list:
 
 
 ORDER = ("home", "robots", "robots_block", "robots_changed", "sitemap", "sitemap_drop", "key_status", "key_blocked", "key_noindex",
-         "key_canonical", "server_errors", "sitemaps_api")
+         "key_canonical", "server_errors", "sitemaps_api", "idx_run", "idx_key_index", "idx_key_canonical", "idx_key_rich",
+         "idx_new_content", "idx_sitemap_not_indexable", "idx_dropped", "idx_rich_errors")
 
 
 def entry_of(r, now: datetime) -> dict:
@@ -120,6 +126,10 @@ def entry_of(r, now: datetime) -> dict:
         status = "Blocked for checker only"
     elif r.note == "not confirmed":
         status = "OK (one failed check, not confirmed)"
+    elif r.key == "idx_run":
+        status = "Stopped" if not r.ok else "Info"
+    elif r.report_only:
+        status = "OK" if r.ok else "Finding"
     else:
         status = "OK" if r.ok else "PROBLEM"
     return {"status": status, "detail": r.detail, "clicks": r.clicks or "", "stamp": f"{day} {clock}"}
@@ -168,6 +178,96 @@ class Work:
     decision: technical.Decision = None
     now_status: dict = field(default_factory=dict)
     created: bool = False
+    watch: object = None            # the index watch of this site (a Watch), when it was made in this run
+
+
+@dataclass
+class Watch:
+    """The index watch of one site in this run: the Index Status table, the inspector, what was found."""
+    table: index_watch.Table
+    inspector: object
+    rnd: index_watch.Round
+    key_urls: list
+    clicks_of: object
+    today: date
+    used_before: int
+    results: list = field(default_factory=list)
+
+    def recheck(self, failing: dict) -> list:
+        """The second look, after the wait: the pages the three key findings named are inspected again and the three findings
+        are made again from what Google says now."""
+        urls = list(dict.fromkeys(u for pages in failing.values() for u in pages))
+        planned = [(u, (self.table.get(u) or {}).get(index_watch.WHY) or index_watch.WHY_KEY) for u in urls]
+        index_watch.inspect_pages(self.inspector, planned, self.table, self.clicks_of, self.today)
+        for u in urls:
+            rec, k = self.table.get(u) or {}, index_watch.key_of(u)
+            if index_watch.is_indexed(rec):
+                self.rnd.dropped.discard(k)
+            if rec.get(index_watch.RICH):
+                self.rnd.rich_gone.discard(k)
+        return index_watch.key_results(self.table, self.key_urls, self.rnd, self.clicks_of)
+
+
+def dashboard_file(run) -> str:
+    """The id of the site's content dashboard, '' when it has none or the tool has no own access to it."""
+    site = run.site
+    if run.drive is None or not site.content.enabled or site.auth != "me":
+        return ""
+    return provision.existing_content_file(run.drive, run.sheets, site)
+
+
+def default_pages(run) -> list:
+    file_id = dashboard_file(run)
+    return index_watch.read_content_pages(run.sheets, file_id, [t.name for t in run.site.content.tabs]) if file_id else []
+
+
+def default_fill(run, table) -> int:
+    file_id = dashboard_file(run)
+    return index_watch.fill_dashboard(run.sheets, file_id, [t.name for t in run.site.content.tabs], table) if file_id else 0
+
+
+def start_watch(run, deps: Deps, ctx: technical.Context, state: TechState, file_id: str, rows: list, final_day, now: datetime,
+                log) -> "Watch | None":
+    """The first round of the index watch: what to look at today, the answers, the findings. None when the watch is off (the
+    small daily check, `checks.inspection` off, no way to ask Google in this run)."""
+    site = run.site
+    if deps.daily or not site.technical.checks.get("inspection", True) or deps.inspector is None:
+        return None
+    inspector = deps.inspector(run)
+    if inspector is None:
+        return None
+    today = now.date()
+    table = index_watch.Table(tabs.read_rows(run.sheets, file_id, index_watch.TAB, index_watch.LAST_COL))
+    used_before = int(state.get("quota", today.isoformat(), "0") or 0)
+    daily_max = site.technical.inspection_daily_max
+    budget = max(0, daily_max - used_before)
+    try:
+        pages = (deps.content_pages or default_pages)(run)
+    except Exception as e:                            # noqa: BLE001  without the dashboard the watch looks at the rest
+        pages = []
+        log(f"technical: {run.name}: the content dashboard could not be read ({type(e).__name__})")
+    dropped = []
+    if final_day and deps.page_rows:
+        try:
+            dropped = index_watch.lost_impressions(rows, deps.page_rows(run, final_day - timedelta(days=28)))
+        except Exception:                             # noqa: BLE001
+            dropped = []
+    blocked = [u for u in ctx.key_urls if content.url_key(u) in ctx.blocked]
+    planned = index_watch.plan(ctx.key_urls, blocked, pages, dropped, ctx.sitemap_urls, table, today, budget)
+    rnd = index_watch.inspect_pages(inspector, planned, table, ctx.clicks_of, today)
+    watch = Watch(table, inspector, rnd, ctx.key_urls, ctx.clicks_of, today, used_before)
+    watch.results = (index_watch.key_results(table, ctx.key_urls, rnd, ctx.clicks_of)
+                     + index_watch.report_results(table, ctx.key_urls, pages, ctx.sitemap_urls, rnd, today, ctx.clicks_of)
+                     + [index_watch.run_result(rnd, used_before, budget, len(table.recs), daily_max)])
+    return watch
+
+
+def blocked_note(table: index_watch.Table, blocked_urls: list) -> str:
+    """What Google says about the pages the checker cannot reach."""
+    recs = [table.get(u) for u in blocked_urls]
+    indexed = sum(1 for r in recs if r and index_watch.is_indexed(r))
+    unknown = sum(1 for r in recs if not r or not index_watch.is_known(r))
+    return f"; Google's index: {indexed} indexed, {len(recs) - indexed - unknown} not indexed, {unknown} not checked yet"
 
 
 def key_page_set(site, origin: str, rows: list) -> tuple:
@@ -221,7 +321,17 @@ def prepare(run, deps: Deps, now: datetime, log) -> Work:
         prev_robots=state.get("robots", "text"), prev_counts=prev_counts,
         extra_sitemaps=list(site.content.extra_sitemaps), daily=deps.daily, blocked=blocked)
     first = technical.check_all(ctx)
-    return Work(run, label, file_id, state, ctx, first, created=created)
+    work = Work(run, label, file_id, state, ctx, first, created=created)
+    try:
+        work.watch = start_watch(run, deps, ctx, state, file_id, rows, final_day, now, log)
+    except Exception as e:                            # noqa: BLE001  the index watch never stops the health checks
+        log(f"technical: {run.name}: the index watch could not be made ({type(e).__name__})")
+    if work.watch:
+        first.results += work.watch.results
+        for r in first.results:
+            if r.key == "key_blocked":
+                r.detail += blocked_note(work.watch.table, [u for u in ctx.key_urls if content.url_key(u) in ctx.blocked])
+    return work
 
 
 def confirm_work(w: Work, deps: Deps, today: date):
@@ -229,6 +339,11 @@ def confirm_work(w: Work, deps: Deps, today: date):
     failing = technical.failing_of(w.first)
     if failing:
         w.second = technical.check_all(w.ctx, only=failing)
+    again = {k: v for k, v in failing.items() if k.startswith("idx_key_")}
+    if w.watch and again:                             # Google is asked again about the key pages it named
+        if w.second is None:
+            w.second = technical.Round([], {}, None, {})
+        w.second.results += w.watch.recheck(again)
     w.final, w.log = technical.confirm(w.first, w.second, w.ctx)
     now_status = dict(w.first.key_status)
     now_status.update(w.second.key_status if w.second else {})
@@ -241,7 +356,7 @@ def confirm_work(w: Work, deps: Deps, today: date):
     w.now_status = now_status
 
 
-def write_work(w: Work, deps: Deps, now: datetime, mailed: bool):
+def write_work(w: Work, deps: Deps, now: datetime, mailed: bool, log=print):
     """The sheet and the state, after the email was tried: a problem is marked as told only if the email went out."""
     run, sheets, today = w.run, w.run.sheets, now.date()
     state, d = w.state, w.decision
@@ -272,7 +387,18 @@ def write_work(w: Work, deps: Deps, now: datetime, mailed: bool):
     for key, e in entries.items():
         state.set("last", key, json.dumps(e, ensure_ascii=False), today)
     tabs.rewrite(sheets, w.file_id, OVERVIEW, OVERVIEW_HEADER, overview_rows(entries, opened, now))
+    if w.watch:                                       # what was asked today counts against the quota of the day
+        state.set("quota", today.isoformat(), str(w.watch.used_before + w.watch.inspector.used), today)
+        for old in [k for k in state.of("quota") if k < (today - timedelta(days=6)).isoformat()]:
+            state.delete("quota", old)
     tabs.rewrite(sheets, w.file_id, STATE, STATE_HEADER, state.table())
+    if w.watch:
+        try:
+            w.watch.table.write(sheets, w.file_id)
+            tabs_written = (deps.fill_dashboard or default_fill)(run, w.watch.table)
+            log(f"technical: {run.name}: Index Status tab {len(w.watch.table.recs)} pages, dashboard column on {tabs_written} tabs")
+        except Exception as e:                        # noqa: BLE001  the tab and the column never stop the rest
+            log(f"technical: {run.name}: the Index Status tab or the dashboard column could not be written ({type(e).__name__})")
 
 
 def summary(w: Work) -> str:
@@ -281,8 +407,9 @@ def summary(w: Work) -> str:
     results = [r for r in w.final if not r.skipped and r.note != "changed"]
     failed = sum(1 for l in w.log if l.result.startswith("failed"))
     confirmed = sum(1 for l in w.log if l.result == "confirmed problem")
+    asked = f", {w.watch.rnd.answered} pages inspected ({w.watch.rnd.failed} failed)" if w.watch else ""
     return (f"{len(results)} checks, {len(w.ctx.key_urls)} key pages, {failed} failed the first check, {confirmed} confirmed, "
-            f"{len(d.opened)} open, {len(d.alerts) + (1 if d.large else 0)} to tell, {len(d.fixed)} fixed")
+            f"{len(d.opened)} open, {len(d.alerts) + (1 if d.large else 0)} to tell, {len(d.fixed)} fixed{asked}")
 
 
 def run_technical(runs: list, deps: Deps, log=print, on_error=None) -> list:
@@ -328,7 +455,7 @@ def run_technical(runs: list, deps: Deps, log=print, on_error=None) -> list:
         log("technical: something is worth telling, no email in this run; it stays untold until a scheduled run")
     for w in good:
         try:
-            write_work(w, deps, now, mailed)
+            write_work(w, deps, now, mailed, log)
             lines.append(f"{w.run.name}: {summary(w)}")
         except Exception as e:                        # noqa: BLE001
             (on_error or (lambda r, x: log(f"technical: {r.name}: failed ({type(x).__name__})")))(w.run, e)

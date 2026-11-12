@@ -566,14 +566,15 @@ def _move(sid: int, source: int, destination: int) -> dict:
                               "destinationIndex": destination + 1 if source < destination else destination}}
 
 
-def add_columns(sheets, file_id: str, tab: str, sid: int, header: list, names: list) -> list:
+def add_columns(sheets, file_id: str, tab: str, sid: int, header: list, names: list, anchors: tuple = None) -> list:
     """Puts the Bing columns, in their order, right after the last of Google's performance columns (at the end when that
     column is not in the tab). A column that is somewhere else (an earlier version put them at the end) is moved; one that
     is in place is left. Inserting and moving keep every column's format, rules and filter with it. Styles what it adds
     like the other columns the tool writes. Returns the new header."""
     header = list(header)
     before = len(header)
-    start = header.index(ANCHOR) + 1 if ANCHOR in header else before
+    present = [header.index(a) + 1 for a in (anchors or (ANCHOR,)) if a in header]       # after the last of the anchor columns found
+    start = max(present) if present else before
     grid = _column_count(sheets, file_id, sid)
     requests, written, at_end = [], [], False
     for i, name in enumerate(names):

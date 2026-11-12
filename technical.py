@@ -223,6 +223,7 @@ class Result:
     clicks: int = 0                            # clicks of those pages in the last 28 days
     count: int = 0                             # how much is wrong (pages, errors): more than before is "worse"
     note: str = ""                             # "changed" for robots.txt; "not confirmed" after a failed second check
+    report_only: bool = False                  # a finding for the owner to read: never opened as a problem, never emailed
 
     @property
     def family(self) -> str:
@@ -244,6 +245,17 @@ FAMILIES = {
                      "Compare the sitemap with the last one you know: find what removed the pages (a plugin, a filter, a failed build)."),
     "key_status": ("Key pages answer", "Key pages not answering 200",
                    "Open these pages: check for deleted pages, redirects or errors after a recent change."),
+    "idx_key_index": ("Key pages in Google's index", "Key pages not in Google's index",
+                      "In Search Console, URL Inspection, look at these pages and read the reason Google gives; fix that first."),
+    "idx_key_canonical": ("Key pages: Google's canonical", "Google took another address as the main one for key pages",
+                          "In URL Inspection compare the declared canonical with the one Google chose; make them agree, or merge the duplicate."),
+    "idx_key_rich": ("Key pages: rich results", "Rich result problem on key pages",
+                     "Open URL Inspection (or the Rich Results Test) for these pages and fix the errors listed for each type."),
+    "idx_new_content": ("New content not indexed", "New content not indexed", ""),
+    "idx_sitemap_not_indexable": ("Sitemap pages not indexable", "Sitemap pages not indexable", ""),
+    "idx_dropped": ("Pages dropped from the index", "Pages dropped from the index", ""),
+    "idx_rich_errors": ("Rich result errors (other pages)", "Rich result errors", ""),
+    "idx_run": ("URL Inspection use", "URL Inspection", ""),
     "key_blocked": ("Key pages blocked for checker", "Key pages blocked for the checker only",
                      "These pages are live but refuse the checker (403); look at them with the index inspection instead."),
     "key_noindex": ("Key pages noindex", "Key pages set to noindex",
@@ -292,6 +304,7 @@ class Context:
     extra_sitemaps: list = field(default_factory=list)
     daily: bool = False                            # the small daily check: the home page and robots.txt only
     blocked: set = field(default_factory=set)      # content.url_key of the key pages that are known to refuse the checker only
+    sitemap_urls: list = field(default_factory=list)   # every page address the sitemaps list (read in the first round)
     # filled while the checks run, saved afterwards
     robots_text: str = None
     sitemap_counts: dict = field(default_factory=dict)
@@ -376,6 +389,7 @@ def check_sitemaps(ctx: Context, robots_text) -> list:
                 queue.extend(locs)
             else:
                 total += len(set(locs))
+                ctx.sitemap_urls.extend(locs)
             out.append(Result(f"sitemap:{address}", True, detail=f"{len(set(locs))} {'sitemaps' if kind == 'index' else 'addresses'}"))
         failed_root = any(r.key == f"sitemap:{root}" and not r.ok for r in out)
         if failed_root or child_failed:
@@ -479,6 +493,8 @@ class Round:
 def check_all(ctx: Context, only: dict = None) -> Round:
     """One round of every check. `only` ({result key: its pages}) makes it the second round: only what failed is asked again."""
     ctx.key_status, ctx.sitemap_counts, ctx.robots_text = {}, {}, None
+    if only is None:
+        ctx.sitemap_urls = []
     results = []
     failing = only or {}
 
@@ -510,7 +526,7 @@ def check_all(ctx: Context, only: dict = None) -> Round:
 
 def failing_of(rnd: Round) -> dict:
     """{key: pages} of what failed in a round: what the second round asks again."""
-    return {r.key: list(r.pages) for r in rnd.results if not r.ok and not r.skipped}
+    return {r.key: list(r.pages) for r in rnd.results if not r.ok and not r.skipped and not r.report_only}
 
 
 @dataclass
@@ -537,6 +553,9 @@ def confirm(first: Round, second: Round = None, ctx: Context = None) -> tuple:
         elif r.note == "blocked":
             log.append(LogLine(r.key, "blocked for checker only", r.detail, r.pages, r.clicks))
             final.append(r)
+        elif r.report_only:
+            log.append(LogLine(r.key, "ok" if r.ok else "finding", r.detail, r.pages if not r.ok else [], r.clicks if not r.ok else 0))
+            final.append(r)
         elif r.ok:
             log.append(LogLine(r.key, "ok", r.detail))
             final.append(r)
@@ -548,7 +567,7 @@ def confirm(first: Round, second: Round = None, ctx: Context = None) -> tuple:
                 if pages or not r.pages:
                     clicks = ctx.clicks_of(pages) if ctx and pages else r2.clicks
                     keep = Result(r.key, False, detail=r2.detail, pages=pages, clicks=clicks,
-                                  count=len(pages) if r.key.startswith(("key_", "server_")) else max(r2.count, 1))
+                                  count=len(pages) if r.key.startswith(("key_", "server_", "idx_key_")) else max(r2.count, 1))
                     if r.key == "sitemaps_api":
                         keep.count = r2.count
                     final.append(keep)
@@ -643,7 +662,7 @@ class Decision:
     told: list = field(default_factory=list)        # keys whose open record is marked as told when the email goes out
 
 
-KEY_FAMILIES = ("key_status", "key_noindex", "key_canonical", "server_errors")
+KEY_FAMILIES = ("key_status", "key_noindex", "key_canonical", "server_errors")      # folded into one alert during a large change
 
 
 def large_change(prev: dict, now: dict, share: float):
@@ -670,7 +689,7 @@ def decide(results: list, opened: dict, today: date, large: dict = None, clicks_
         folded = set(KEY_FAMILIES)
         d.large = dict(large, clicks=clicks_of(large["pages"]))
     for r in results:
-        if r.skipped or r.note == "changed" or r.ok:
+        if r.skipped or r.note == "changed" or r.ok or r.report_only:
             continue
         rec = d.opened.get(r.key)
         title = title_of(r.key)
