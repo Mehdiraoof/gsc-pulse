@@ -186,7 +186,7 @@ class Reading(unittest.TestCase):
                               '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>2</v></c></row>')
         got = self.read(
             [listed("1", "2026-10 pages.csv"), listed("2", "2026-09 pages.xlsx", "application/octet-stream"),
-             listed("3", "2026-10 queries", bing_ai.GOOGLE_SHEET)],
+             listed("GS", "2026-10 queries", bing_ai.GOOGLE_SHEET)],
             {"1": PAGES.encode(), "2": xlsx})
         by = {e.name: e for e in got}
         self.assertEqual(by["2026-10 pages.csv"].values[1], ["https://example.test/a", "12"])

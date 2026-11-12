@@ -102,7 +102,7 @@ class Base(unittest.TestCase):
     def make_run(self, site):
         return SimpleNamespace(site=site, name=site.name, drive=self.drive, sheets=self.fs, gsc=None, status="pending")
 
-    def deps(self, mail=True, mail_error=None):
+    def deps(self, mail=True, mail_error=None, daily=False):
         def send(subject, body):
             if mail_error:
                 raise mail_error
@@ -111,12 +111,12 @@ class Base(unittest.TestCase):
             fetch=self.web.fetch, get=self.web.get, sleep=self.slept.append, now=lambda: self.now,
             final=lambda run: date(2026, 11, 10), page_rows=lambda run, last: self.rows,
             sitemaps_api=lambda run: self.api if not isinstance(self.api, Exception) else (_ for _ in ()).throw(self.api),
-            mail=send if mail else None)
+            mail=send if mail else None, daily=daily)
 
-    def go(self, mail=True, mail_error=None, runs=None, advance=True, deps=None):
+    def go(self, mail=True, mail_error=None, runs=None, advance=True, deps=None, daily=False):
         """One daily run (the next day, unless told otherwise). Returns the lines the run prints for its summary."""
         self.mails.clear()
-        lines = technical_run.run_technical(runs or self.runs, deps or self.deps(mail, mail_error), self.logs.append,
+        lines = technical_run.run_technical(runs or self.runs, deps or self.deps(mail, mail_error, daily), self.logs.append,
                                             on_error=lambda r, e: self.errors.append((r.name, repr(e))))
         self.assertEqual(self.errors, [])
         if advance:
@@ -188,6 +188,78 @@ class HealthyDay(Base):
         self.go()
         self.assertEqual(self.mails, [])
         self.assertTrue(any(name == "Key pages answer" and res == "skipped" for name, res in self.log_results()))
+
+
+class SmallDailyCheck(Base):
+    """On the days between the weekly full checks only the home page and robots.txt are looked at."""
+
+    def test_only_the_home_page_and_robots_are_asked_for(self):
+        self.go()                                                              # the full check
+        asked = len(self.web.calls)
+        self.web.set_page(1, noindex=True)                                     # things the small check does not look at
+        self.web.files[ROOT] = (404, b"")
+        self.go(daily=True)
+        self.assertEqual(self.mails, [])
+        self.assertEqual(self.slept, [])
+        self.assertEqual(self.web.calls[asked:], [HOME + "/"])                 # no key page, no sitemap
+        rows = self.tab("Health Log")[1:]
+        self.assertEqual([(r[2], r[3]) for r in rows[-3:]],
+                         [("Home page", "ok"), ("robots.txt", "ok"), ("robots.txt blocking", "ok")])
+
+    def test_a_home_page_that_is_down_is_told(self):
+        self.go(daily=True)
+        self.assertEqual(self.mails, [])
+        self.web.pages[HOME + "/"] = Fetched(503, {}, "", 0.1)
+        self.go(daily=True)
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Home page not answering")
+        self.assertEqual(self.slept, [1800])                                   # the second check comes first, as always
+        self.go(daily=True)
+        self.assertEqual(self.mails, [])                                       # and it is told once
+        self.web.pages[HOME + "/"] = Fetched(200, {}, page_html(), 0.2)
+        self.go(daily=True)
+        self.assertEqual(self.mails[0][0], "Fixed · Example · Home page not answering")
+
+    def test_a_robots_file_that_blocks_everything_is_told(self):
+        self.go(daily=True)
+        self.web.files[HOME + "/robots.txt"] = (200, f"User-agent: *\nDisallow: /\nSitemap: {ROOT}\n".encode())
+        self.go(daily=True)
+        self.assertEqual(self.mails[0][0], "Site alert · Example · robots.txt blocks the whole site")
+
+    def test_the_daily_check_does_not_close_or_open_what_only_the_weekly_check_sees(self):
+        self.web.set_page(1, noindex=True)
+        self.go()                                                              # the weekly check tells it
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages set to noindex")
+        self.web.set_page(1)                                                   # fixed, but only the weekly check can see it
+        self.go(daily=True)
+        self.assertEqual(self.mails, [])
+        self.assertIn("key_noindex", self.state().open())
+        self.web.set_page(2, noindex=True)                                     # new problems the small check cannot see
+        self.web.set_page(3, noindex=True)
+        self.go(daily=True)
+        self.assertEqual(self.mails, [])
+        self.go()                                                              # the next weekly check: 2 pages now, 1 before
+        self.assertEqual(len(self.mails), 1)
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages set to noindex")
+        self.assertIn("got worse", self.mails[0][1])
+
+    def test_the_overview_keeps_the_weekly_rows_and_renews_the_daily_ones(self):
+        self.go()
+        self.go(daily=True)
+        overview = self.tab("Overview")
+        names = [r[0] for r in overview[4:] if r]
+        self.assertEqual(names[:3], ["Home page", "robots.txt", "robots.txt blocking"])
+        self.assertIn("Key pages answer", names)
+        self.assertIn("Sitemaps in Search Console", names)
+        stamps = {r[0]: r[5] for r in overview[4:] if len(r) > 5}
+        self.assertEqual(stamps["Home page"], "2026-11-13 03:00")
+        self.assertEqual(stamps["Key pages answer"], "2026-11-12 03:00")
+
+    def test_the_key_page_memory_survives_a_daily_check(self):
+        self.go()
+        before = self.state().get("keystat", "snapshot")
+        self.go(daily=True)
+        self.assertEqual(self.state().get("keystat", "snapshot"), before)
+        self.assertEqual(json.loads(self.state().get("sitemaps", "counts"))[ROOT], 30)
 
 
 class KeyPageRedirects(Base):

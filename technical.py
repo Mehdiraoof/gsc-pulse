@@ -288,6 +288,7 @@ class Context:
     prev_robots: str = None                        # the last version of robots.txt that was read; None: never
     prev_counts: dict = field(default_factory=dict)  # {sitemap address: number of pages} of the last good run
     extra_sitemaps: list = field(default_factory=list)
+    daily: bool = False                            # the small daily check: the home page and robots.txt only
     # filled while the checks run, saved afterwards
     robots_text: str = None
     sitemap_counts: dict = field(default_factory=dict)
@@ -483,6 +484,8 @@ def check_all(ctx: Context, only: dict = None) -> Round:
         r = check_robots(ctx)
         results += [x for x in r if only is None or x.key in failing]
         robots_text = ctx.robots_text
+    if ctx.daily:                                  # the small daily check: only the home page and robots.txt
+        return Round(results, {}, ctx.robots_text, {})
     if wanted("sitemap", "sitemap_drop"):
         results += check_sitemaps(ctx, robots_text)
     key_keys = ("key_status", "key_noindex", "key_canonical", "server_errors")

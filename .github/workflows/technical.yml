@@ -8,6 +8,10 @@ on:
   #   - cron: "43 2 * * *"    # every day about 02:43 UTC (05:43 Istanbul), off the hour; GitHub may start it later
   workflow_dispatch:
     inputs:
+      mode:
+        description: "full (home page, robots.txt, sitemaps, key pages, sitemaps in Search Console) or daily (home page and robots.txt only)"
+        required: false
+        default: "full"
       only_site:
         description: "Run for this one site only (a name from SITES_JSON): every other site is left alone"
         required: false
@@ -48,6 +52,7 @@ jobs:
           SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
           SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
           TECHNICAL_RUN: "true"
+          TECHNICAL_MODE: ${{ inputs.mode }}
           ONLY_SITE: ${{ inputs.only_site }}
           SEND_EMAILS: ${{ inputs.send_emails }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}

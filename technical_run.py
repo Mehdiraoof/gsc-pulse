@@ -46,6 +46,7 @@ class Deps:
     page_rows: object = None        # (run, first_day, last_day) -> Search Console rows of ["page"]
     sitemaps_api: object = None     # (run) -> [{"path", "errors", ...}] of the sitemaps submitted in Search Console
     mail: object = None             # (subject, body) -> None; raises when it cannot send. None: no email in this run
+    daily: bool = False             # the small daily check: only the home page and robots.txt
 
 
 # --------------------------------------------------------------------------- #
@@ -102,33 +103,45 @@ def health_rows(log: list, now: datetime) -> list:
     return [[day, clock, technical.name_of(l.key), l.result, l.detail, pages_text(l.pages), l.clicks or ""] for l in log]
 
 
-def overview_rows(final: list, opened: dict, now: datetime) -> list:
+ORDER = ("home", "robots", "robots_block", "robots_changed", "sitemap", "sitemap_drop", "key_status", "key_noindex",
+         "key_canonical", "server_errors", "sitemaps_api")
+
+
+def entry_of(r, now: datetime) -> dict:
+    """What the Overview shows of one result, small enough to be kept in the state between runs."""
     day, clock = _stamp(now)
-    stamp = f"{day} {clock}"
+    if r.skipped:
+        status = "Not checked"
+    elif r.note == "changed":
+        status = "Changed"
+    elif r.note == "not confirmed":
+        status = "OK (one failed check, not confirmed)"
+    else:
+        status = "OK" if r.ok else "PROBLEM"
+    return {"status": status, "detail": r.detail, "clicks": r.clicks or "", "stamp": f"{day} {clock}"}
+
+
+def overview_rows(entries: dict, opened: dict, now: datetime) -> list:
+    """The Overview: the state of the site, then every check as it was last made (the small daily check only renews its own
+    two checks), then the open problems."""
+    day, clock = _stamp(now)
     open_count = len(opened)
     rows = [["Site health", "OK" if not open_count else f"{open_count} open problem{'s' if open_count != 1 else ''}",
-             "Every check passed" if not open_count else "See the open problems below", "", "", stamp],
+             "Every check passed" if not open_count else "See the open problems below", "", "", f"{day} {clock}"],
             ["Last audit", "none yet", "No technical audit has been written yet", "", "", ""], [""]]
-    by_key = {r.key: r for r in final}
-    for r in final:
-        if r.skipped:
-            status = "Not checked"
-        elif r.note == "changed":
-            status = "Changed"
-        elif r.note == "not confirmed":
-            status = "OK (one failed check, not confirmed)"
-        else:
-            status = "OK" if r.ok else "PROBLEM"
-        name = technical.name_of(r.key)
-        if r.key.startswith(("sitemap:", "sitemap_drop:")):
-            name += f": {technical.readable(r.key.split(':', 1)[1])}"
-        rows.append([name, status, r.detail, opened.get(r.key, {}).get("since", ""), r.clicks or "", stamp])
+    family = lambda key: key.split(":", 1)[0]
+    for key in sorted(entries, key=lambda k: ORDER.index(family(k)) if family(k) in ORDER else len(ORDER)):
+        e = entries[key]
+        name = technical.name_of(key)
+        if key.startswith(("sitemap:", "sitemap_drop:")):
+            name += f": {technical.readable(key.split(':', 1)[1])}"
+        rows.append([name, e.get("status", ""), e.get("detail", ""), opened.get(key, {}).get("since", ""),
+                     e.get("clicks", ""), e.get("stamp", "")])
     if opened:
         rows += [[""], ["Open problems", "", "", "", "", ""]]
         for key, rec in opened.items():
-            r = by_key.get(key)
-            rows.append([rec.get("title", key), "open", r.detail if r else "", rec.get("since", ""),
-                         (r.clicks if r else "") or "", ""])
+            e = entries.get(key, {})
+            rows.append([rec.get("title", key), "open", e.get("detail", ""), rec.get("since", ""), e.get("clicks", ""), ""])
     return rows
 
 
@@ -191,6 +204,8 @@ def prepare(run, deps: Deps, now: datetime, log) -> Work:
         except Exception as e:                        # noqa: BLE001  without the clicks the checks still run, on the configured pages
             log(f"technical: {run.name}: the clicks could not be read ({type(e).__name__})")
     urls, clicks = key_page_set(site, origin, rows)
+    if deps.daily:
+        urls = []                                   # the small daily check does not look at the key pages
     try:
         prev_counts = json.loads(state.get("sitemaps", "counts", "{}"))
     except ValueError:
@@ -199,7 +214,7 @@ def prepare(run, deps: Deps, now: datetime, log) -> Work:
         site=site, origin=origin, key_urls=urls, clicks=clicks, fetch=deps.fetch, get=deps.get,
         sitemaps_api=(lambda: deps.sitemaps_api(run)) if deps.sitemaps_api else None,
         prev_robots=state.get("robots", "text"), prev_counts=prev_counts,
-        extra_sitemaps=list(site.content.extra_sitemaps))
+        extra_sitemaps=list(site.content.extra_sitemaps), daily=deps.daily)
     first = technical.check_all(ctx)
     return Work(run, label, file_id, state, ctx, first, created=created)
 
@@ -240,12 +255,18 @@ def write_work(w: Work, deps: Deps, now: datetime, mailed: bool):
         if root not in dropped:                       # a drop is measured against the last good size
             counts[root] = total
     state.set("sitemaps", "counts", json.dumps(counts), today)
-    if not (d.large and not mailed):                 # a large change that was not told is seen again next time
+    if w.now_status and not (d.large and not mailed):   # a large change that was not told is seen again next time
         state.set("keystat", "snapshot", json.dumps(w.now_status, ensure_ascii=False), today)
     opened = technical.mark_told(d.opened, d.told, today) if mailed else d.opened
     state.save_open(opened, today)
     tabs.append(sheets, w.file_id, HEALTH, health_rows(w.log, now))
-    tabs.rewrite(sheets, w.file_id, OVERVIEW, OVERVIEW_HEADER, overview_rows(w.final, opened, now))
+    entries = {k: json.loads(v) for k, v in state.of("last").items()} if deps.daily else {}      # the daily check keeps the rest
+    for r in w.final:
+        entries[r.key] = entry_of(r, now)
+    state.clear("last")
+    for key, e in entries.items():
+        state.set("last", key, json.dumps(e, ensure_ascii=False), today)
+    tabs.rewrite(sheets, w.file_id, OVERVIEW, OVERVIEW_HEADER, overview_rows(entries, opened, now))
     tabs.rewrite(sheets, w.file_id, STATE, STATE_HEADER, state.table())
 
 
