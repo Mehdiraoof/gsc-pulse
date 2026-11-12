@@ -374,7 +374,7 @@ class DashboardTests(Base):
         header, _ = self.dash()
         at = content.HEADERS.index("Ranking Queries") + 1
         self.assertEqual(header, content.HEADERS[:at] + [bing_data.COL_CLICKS, bing_data.COL_IMPR] + content.HEADERS[at:])
-        self.assertEqual([self.value(i, bing_data.COL_CLICKS) for i in range(5)], [8, 7, 0, "", ""])
+        self.assertEqual([self.value(i, bing_data.COL_CLICKS) for i in range(5)], [8, 7, 0, "old", "old"])      # a row with no page, and a settled row, keep what their cells held
         for old, new in zip(before, self.by_name()):
             for name in content.HEADERS:
                 self.assertEqual(new[name], old[name], name)
