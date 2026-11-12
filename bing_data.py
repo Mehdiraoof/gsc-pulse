@@ -479,6 +479,15 @@ def page_totals(pages: list, today: date) -> dict:
     return {k: tuple(v) for k, v in out.items()}
 
 
+def _basic_filter(sheets, file_id: str, sid: int):
+    resp = history._read(sheets.spreadsheets().get(
+        spreadsheetId=file_id, fields="sheets(properties(sheetId),basicFilter)"))
+    for s in resp.get("sheets", []):
+        if s["properties"].get("sheetId") == sid:
+            return s.get("basicFilter")
+    return None
+
+
 def _column_count(sheets, file_id: str, sid: int) -> int:
     resp = history._read(sheets.spreadsheets().get(
         spreadsheetId=file_id, fields="sheets(properties(sheetId,gridProperties(columnCount)))"))
@@ -506,7 +515,9 @@ def add_columns(sheets, file_id: str, tab: str, sid: int, header: list, names: l
             "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
             "properties": {"pixelSize": 120}, "fields": "pixelSize"}})
         requests.append(cs._fmt(sid, "backgroundColor", {"backgroundColor": cs.rgb(cs.TINT_GREY)}, r1=1, c1=c, c2=c + 1))
-    requests.append({"setBasicFilter": {"filter": {"range": cs._range(sid, r1=0, c1=0, c2=len(new))}}})
+    flt = _basic_filter(sheets, file_id, sid)
+    if flt and flt.get("range", {}).get("endColumnIndex") == start:          # the owner's filter, with its criteria, takes the new columns in
+        requests.append({"setBasicFilter": {"filter": dict(flt, range=dict(flt["range"], endColumnIndex=len(new)))}})
     history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": requests}))
     tabs.patch_cells(sheets, file_id, [(f"'{tab}'!{cs.letters(start)}1", [missing])])
     return new

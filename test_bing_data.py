@@ -16,7 +16,7 @@ import content
 import gsc_pulse
 import sites
 from test_content_run import make_site
-from test_history import FakeSheets, Tab, patch_time
+from test_history import FakeSheets, Req, Tab, patch_time
 
 TODAY = date(2026, 11, 12)
 KEY = "k3y-SECRET-9876543210"
@@ -85,6 +85,37 @@ class FakeAccess(bing.Access):
         if isinstance(reply, Exception):
             raise reply
         return reply
+
+
+class FilterSheets(FakeSheets):
+    """Gives back the basic filter of a tab, as the real service does, and keeps the one that was set."""
+
+    def __init__(self):
+        super().__init__()
+        self.filters = {}                       # sheet id -> filter
+
+    def get(self, spreadsheetId, fields=None):
+        inner = super().get(spreadsheetId, fields)
+
+        def run():
+            resp = inner.execute()
+            for s in resp["sheets"]:
+                if s["properties"]["sheetId"] in self.filters:
+                    s["basicFilter"] = self.filters[s["properties"]["sheetId"]]
+            return resp
+        return Req(run)
+
+    def batchUpdate(self, spreadsheetId, body):
+        inner = super().batchUpdate(spreadsheetId, body)
+
+        def run():
+            out = inner.execute()
+            for r in body["requests"]:
+                if "setBasicFilter" in r:
+                    f = r["setBasicFilter"]["filter"]
+                    self.filters[f["range"]["sheetId"]] = f
+            return out
+        return Req(run)
 
 
 class Base(unittest.TestCase):
@@ -244,7 +275,12 @@ class DashboardTests(Base):
 
     def setUp(self):
         super().setUp()
+        self.fs = FilterSheets()
+        self.fs.add_book("REP")
         self.fs.add_book("DASH", {"Articles": (50, 42), "Landing Pages": (50, 42)})
+        sid = self.fs.books["DASH"]["Articles"].sheet_id          # the owner has a filter on Articles, with a condition set
+        self.fs.filters[sid] = {"range": {"sheetId": sid, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": 42},
+                                "criteria": {"2": {"condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": "Published"}]}}}}
         header = content.HEADERS
         for tab in ("Articles", "Landing Pages"):
             self.fs.write_cells(self.fs.books["DASH"][tab], 1, 1, [header])
@@ -292,9 +328,10 @@ class DashboardTests(Base):
 
     def test_the_filter_and_grid_take_the_new_columns_in(self):
         self.run_bing(drive=object())
-        widths = [r["setBasicFilter"]["filter"]["range"]["endColumnIndex"] for _, r in self.fs.requests
-                  if "setBasicFilter" in r]
-        self.assertEqual(widths[-1], 44)
+        sets = [r["setBasicFilter"]["filter"] for _, r in self.fs.requests if "setBasicFilter" in r]
+        self.assertEqual(len(sets), 1)                                      # a tab with no filter does not get one
+        self.assertEqual(sets[0]["range"]["endColumnIndex"], 44)
+        self.assertEqual(sets[0]["criteria"]["2"]["condition"]["type"], "TEXT_EQ")   # what the owner set is kept
         self.assertEqual(self.fs.books["DASH"]["Articles"].col_count, 44)
 
     def test_a_second_run_adds_no_column_and_changes_nothing(self):
