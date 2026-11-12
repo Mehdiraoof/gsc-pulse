@@ -406,7 +406,7 @@ def check_keypages(ctx: Context, only=None) -> list:
     if not ctx.key_urls:
         return [Result(k, skipped=True, detail="no key pages known") for k in ("key_status", "key_noindex", "key_canonical", "server_errors")]
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        fetched = dict(zip(urls, pool.map(lambda u: ctx.fetch(u, False), urls)))
+        fetched = dict(zip(urls, pool.map(lambda u: fetch_page(ctx, u), urls)))
     status_bad, noindex, canon, server = [], [], [], []
     codes = {}
     for url, f in fetched.items():
