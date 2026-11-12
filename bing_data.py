@@ -342,7 +342,7 @@ def _count_column(header, data, taken):
     width = max(len(r) for r in data)
     if header:
         named = [i for i, c in enumerate(header) if aio_import._header_has(c, CIT_WORDS) and i not in taken
-                 and all(aio_import.parse_number(v) is not None for v in aio_import._column(data, i) if v != "")]
+                 and aio_import._share(aio_import._column(data, i), lambda v: aio_import.parse_number(v) is not None) >= 0.5]
         if len(named) == 1:
             return named[0]
     numeric = [i for i in range(width) if i not in taken

@@ -589,5 +589,91 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("https://www.example.test/", site.sensitive_values())
 
 
+
+from test_reports_main import A as SITE_A, B as SITE_B, ReportsMainTests     # noqa: E402  the whole run, on its in-memory fakes
+
+
+class MainTests(unittest.TestCase):
+    """gsc_pulse.main() with the Bing phase: it comes last of the Google phases, and whatever it does, they are unharmed."""
+
+    setUp = ReportsMainTests.setUp
+    run_main = ReportsMainTests.run_main
+
+    def replies(self):
+        today = date.today()
+        return answers(GetUserSites=[{"Url": "https://www.alpha.test/", "IsVerified": True}],
+                       GetRankAndTrafficStats=daily(today - timedelta(days=200), today - timedelta(days=4), traffic_fn))
+
+    def with_bing(self, factory, env=None):
+        with mock.patch.object(bing, "PROVIDERS", {"api_key": factory}), \
+             mock.patch.object(bing_data, "CALL_PAUSE_S", 0):
+            return self.run_main([SITE_A, SITE_B], {"BING_API_KEY": KEY, **(env or {})})
+
+    def google(self):
+        return {book: {n: [list(r) for r in t.data] for n, t in tabs.items() if not n.startswith("Bing") and n not in ("Meta", "State")}
+                for book, tabs in self.sheets.books.items()}
+
+    def fresh(self):
+        ReportsMainTests.setUp(self)
+
+    def test_the_bing_tabs_come_after_history_and_the_google_tabs_are_the_same_as_without_bing(self):
+        out, err = self.with_bing(lambda env: FakeAccess(self.replies()))
+        self.assertIsNone(err)
+        self.assertLess(out.index("site-a · History"), out.index("site-a · Bing"))
+        self.assertLess(out.index("site-a · Bing"), out.index("Summary"))
+        book = self.sheets.books["A-REPORTS-ID"]
+        self.assertGreater(len(book[bing_data.MONTHLY].data), 1)
+        self.assertIn("bing: +", out[out.index("Summary"):])
+        with_bing = self.google()
+        self.fresh()
+        out2, err2 = self.run_main([SITE_A, SITE_B], {})                      # the same run without the key
+        self.assertIsNone(err2)
+        self.assertNotIn("bing:", out2[out2.index("Summary"):])
+        self.assertEqual(self.google(), with_bing)
+
+    def test_bing_down_changes_nothing_in_the_google_phases(self):
+        down = {m: bing.BingError(f"{m}: HTTP 503") for m in answers()}
+        out, err = self.with_bing(lambda env: FakeAccess(dict(self.replies(), **down)))
+        self.assertIsNone(err)
+        self.assertIn("bing: no data from Bing yet", out)
+        self.assertIn("Done", out)
+        mine = self.google()
+        self.fresh()
+        self.run_main([SITE_A, SITE_B], {})
+        self.assertEqual(self.google(), mine)
+
+    def test_a_crash_in_the_bing_phase_is_skipped(self):
+        with mock.patch.object(bing_data, "run_bing", side_effect=RuntimeError("something broke")):
+            out, err = self.with_bing(lambda env: FakeAccess(self.replies()))
+        self.assertIsNone(err)
+        self.assertIn("bing: skipped (", out)
+        self.assertIn("site-a: ok", out)
+        self.assertGreater(len(self.sheets.books["A-REPORTS-ID"][reports_name()].data), 1)
+
+    def test_the_key_is_not_in_the_log_even_when_bing_answers_with_it(self):
+        replies = self.replies()
+
+        def opener(url):
+            method = url.split("/json/")[1].split("?")[0]
+            if method == "GetQueryStats":
+                return 403, json.dumps({"Message": "no access for " + KEY, "ErrorCode": 5}).encode()
+            return 200, json.dumps({"d": replies[method]}).encode()
+
+        out, err = self.with_bing(lambda env: bing.ApiKeyAccess(env["BING_API_KEY"], opener=opener, sleep=lambda s: None))
+        self.assertIsNone(err)
+        self.assertNotIn(KEY, out)
+        self.assertIn("queries could not be read (GetQueryStats: HTTP 403", out)
+
+    def test_a_site_without_a_reports_sheet_is_off(self):
+        out, err = self.with_bing(lambda env: FakeAccess(self.replies()))
+        self.assertIsNone(err)
+        self.assertNotIn("site-b · Bing", out)               # no reports sheet: nothing for Bing to write to
+
+
+def reports_name() -> str:
+    import reports
+    return reports.MONTHLY
+
+
 if __name__ == "__main__":
     unittest.main()

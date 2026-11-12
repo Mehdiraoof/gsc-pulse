@@ -693,6 +693,9 @@ def sync_bing(run: SiteRun, accesses: dict, today: date, make_access=None):
     site = run.site
     if not site.bing.enabled:
         return
+    if not site.reports_sheet_id:
+        run.bing_text = "off (no reports sheet)"
+        return
     site_header(run, "Bing")
     try:
         if site.bing.auth not in accesses:
@@ -849,7 +852,7 @@ def print_summary(runs: list):
               + (f" | views: {run.views_text}" if run.site.reports_sheet_id else "")
               + (f" | content: {run.content_text}" if run.site.content.enabled else "")
               + (f" | decks: {run.decks_text}" if run.site.deck.enabled else "")
-              + (f" | bing: {run.bing_text}" if run.bing_text != "off" else ""))
+              + (f" | bing: {run.bing_text}" if not run.bing_text.startswith("off") else ""))
     print()
 
 
