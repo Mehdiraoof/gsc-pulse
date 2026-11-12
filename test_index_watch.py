@@ -194,6 +194,28 @@ class InspectorTests(unittest.TestCase):
         self.assertEqual(insp.stopped, "repeated errors")
         self.assertEqual(insp.failed, 4)
 
+    def test_every_thread_gets_a_client_of_its_own(self):
+        made = []
+
+        def factory():
+            made.append(threading.get_ident())
+            return self.Service([self.OK])
+        insp = index_watch.Inspector(None, "sc-domain:example.test", sleep=lambda s: None, clock=lambda: 0.0, factory=factory)
+        insp.inspect("https://example.test/1")
+        insp.inspect("https://example.test/2")                                   # the same thread: the same client
+        self.assertEqual(len(made), 1)
+        threads = [threading.Thread(target=insp.inspect, args=(f"https://example.test/t{i}",)) for i in range(3)]
+        for t in threads:
+            t.start()
+            t.join()
+        self.assertEqual(len(made), 4)                                           # one client per thread, however many questions
+
+    def test_a_client_that_cannot_be_made_counts_as_an_error(self):
+        def factory():
+            raise RuntimeError("no client")
+        insp = index_watch.Inspector(None, "sc-domain:example.test", sleep=lambda s: None, clock=lambda: 0.0, factory=factory)
+        self.assertEqual(insp.inspect("https://example.test/1").error, "RuntimeError")
+
     def test_an_error_says_what_but_not_the_address(self):
         insp = self.make([http_error(500)])
         got = insp.inspect("https://example.test/secret-page")

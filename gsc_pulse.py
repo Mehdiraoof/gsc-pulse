@@ -788,17 +788,23 @@ def technical_command(runs: list, smtp):
     def sitemaps_api(run):
         return run.gsc.sitemaps().list(siteUrl=run.site.site_url).execute(num_retries=2).get("sitemap", [])
 
-    inspection_service = []                          # the URL Inspection client, made once and only when it is needed
+    inspection_credentials = []                      # the owner's credentials for URL Inspection, made once and only when needed
 
     def inspector(run):
-        if not inspection_service:
+        if not inspection_credentials:
             try:
-                inspection_service.append(build("searchconsole", "v1", credentials=auth.me_credentials(os.environ)))
+                creds = auth.me_credentials(os.environ)
+                auth.check_access(creds)             # a first access token here, not in four threads at once
+                inspection_credentials.append(creds)
             except Exception as e:  # noqa: BLE001  without it the index watch is left out, the health checks go on
-                inspection_service.append(None)
+                inspection_credentials.append(None)
                 print(f"technical: the index watch is off in this run ({scrub(describe_error(e))})")
-        service = inspection_service[0]
-        return index_watch.Inspector(service, run.site.site_url) if service is not None else None
+        creds = inspection_credentials[0]
+        if creds is None:
+            return None
+        # a client for every thread: the connection of a Google client is not safe to share between threads
+        return index_watch.Inspector(None, run.site.site_url,
+                                     factory=lambda: build("searchconsole", "v1", credentials=creds))
 
     deps = technical_run.Deps(
         sleep=time.sleep, final=final, page_rows=page_rows, sitemaps_api=sitemaps_api, inspector=inspector,

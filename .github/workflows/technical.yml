@@ -53,6 +53,7 @@ jobs:
           SITES_JSON: ${{ secrets.SITES_JSON }}
           SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
           SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
+          PYTHONUNBUFFERED: "1"          # the log is complete even if the run dies
           TECHNICAL_RUN: "true"
           # a scheduled run: the Monday one is the full check, the others are the small one; a run by hand takes its input
           TECHNICAL_MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '43 2 * * 1' && 'full' || 'daily') || inputs.mode }}

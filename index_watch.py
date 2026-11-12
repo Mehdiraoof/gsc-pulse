@@ -117,8 +117,11 @@ class Inspector:
     """Asks the URL Inspection API about one property, spaced, counted, and stopped by a quota answer or repeated errors."""
 
     def __init__(self, service, site_url: str, sleep=time.sleep, clock=time.monotonic, interval: float = INTERVAL_S,
-                 max_errors: int = MAX_ERRORS):
-        self._service, self._site, self._sleep, self._clock = service, site_url, sleep, clock
+                 max_errors: int = MAX_ERRORS, factory=None):
+        """`service` is one client, used by whoever asks. With `factory` (a function that makes a client) every thread gets
+        a client of its own: the connection of a Google client is not safe to share between threads."""
+        self._service, self._factory, self._site, self._sleep, self._clock = service, factory, site_url, sleep, clock
+        self._local = threading.local()
         self._interval, self._max_errors = interval, max_errors
         self._lock = threading.Lock()
         self._next = 0.0
@@ -126,6 +129,13 @@ class Inspector:
         self.used = 0                # requests made in this run
         self.failed = 0
         self.stopped = ""            # "" | "quota reached" | "repeated errors"
+
+    def _client(self):
+        if self._factory is None:
+            return self._service
+        if getattr(self._local, "client", None) is None:
+            self._local.client = self._factory()
+        return self._local.client
 
     def inspect(self, url: str) -> Inspection:
         with self._lock:
@@ -137,7 +147,7 @@ class Inspector:
             self._next = max(now, self._next) + self._interval
             self.used += 1
         try:
-            response = self._service.urlInspection().index().inspect(
+            response = self._client().urlInspection().index().inspect(
                 body={"inspectionUrl": url, "siteUrl": self._site, "languageCode": "en-US"}).execute(num_retries=2)
         except Exception as e:  # noqa: BLE001  one page that cannot be inspected is not a reason to stop, until it repeats
             reason = error_reason(e)
