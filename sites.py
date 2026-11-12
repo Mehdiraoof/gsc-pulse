@@ -218,7 +218,7 @@ def _parse_deck(value, where: str) -> DeckConfig:
 
 CONTENT_FIELDS = ("enabled", "sheet_id", "tabs", "page_type_tabs", "skip_types", "tab_names",
                   "seasonal_regex", "min_gap_impressions_90d", "keyword_strong_match", "keyword_min_impressions",
-                  "import_from", "gap_exclude_terms", "repair_imports", "languages", "extra_sitemaps",
+                  "import_from", "gap_exclude_terms", "repair_imports", "languages", "language_min_share", "extra_sitemaps",
                   "sop_doc_id", "briefs_folder_id", "drafts_folder_id", "language", "extra_rules",
                   "max_briefs_per_run", "max_drafts_per_run", "ai", "ai_drafts")
 AI_FIELDS = ("provider", "model", "fallback_model", "max_requests_per_run", "daily_requests")
@@ -333,6 +333,7 @@ class ContentConfig:
     skip_types: list = field(default_factory=list)       # page type names (and the "other" label) that get no tab
     tab_names: dict = field(default_factory=dict)        # page type name -> tab name (Article -> Articles)
     notes: list = field(default_factory=list)            # what was decided about tabs, for the run log
+    language_min_share: float = 0.5                      # a page of a language folder with a smaller share of its own script is not translated
     languages: dict = field(default_factory=dict)        # two languages of the site: {"en": "", "fa": "/fa"} (code -> folder)
     extra_sitemaps: list = field(default_factory=list)   # sitemap indexes robots.txt does not name (a language folder's)
 
@@ -397,6 +398,10 @@ def _parse_content(value, where: str) -> "ContentConfig":
     if isinstance(min_kw, bool) or not isinstance(min_kw, int) or not 0 <= min_kw <= 10000:
         raise SitesConfigError(f"{at}: 'keyword_min_impressions' must be a whole number from 0 to 10000")
     cfg.keyword_min_impressions = min_kw
+    share = value.get("language_min_share", 0.5)
+    if isinstance(share, bool) or not isinstance(share, (int, float)) or not 0.1 <= share <= 0.9:
+        raise SitesConfigError(f"{at}: 'language_min_share' must be a number from 0.1 to 0.9")
+    cfg.language_min_share = float(share)
     gap = value.get("min_gap_impressions_90d", 100)
     if isinstance(gap, bool) or not isinstance(gap, (int, float)) or gap < 1:
         raise SitesConfigError(f"{at}: 'min_gap_impressions_90d' must be a number, 1 or more")

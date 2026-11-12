@@ -36,7 +36,7 @@ TIMEOUT_S = 15
 WORKERS = 4                     # requests at the same time
 BATCH = 40                      # addresses per round; the time budget is checked between rounds
 BUDGET_S = 20 * 60              # after this the remaining addresses stay "unknown"
-MAX_BODY = 200_000              # bytes of a page read for its title
+MAX_BODY = 400_000              # bytes of a page read for its title, language and text
 MAX_SITEMAP_BYTES = 30_000_000
 MAX_SITEMAPS = 60
 MAX_SITEMAP_URLS = 50_000
@@ -54,6 +54,7 @@ class Probe:
     title: str = ""
     lang: str = ""                      # the language of the page: the first part of <html lang> ("fa" for fa-IR)
     alternates: dict = field(default_factory=dict)      # the translations the page declares: {"fa": address} (hreflang)
+    script: tuple = ()                  # (letters in Arabic script, in Latin script, all letters) of the main text; () when not read
 
     @property
     def kind(self) -> str:
@@ -144,6 +145,42 @@ def parse_page(text: str, base: str = "") -> tuple:
     return title, lang, alternates
 
 
+
+_CHROME = re.compile(r"<(script|style|noscript|svg|nav|header|footer|aside|form|template|iframe)\b[^>]*>.*?</\1\s*>",
+                     re.IGNORECASE | re.DOTALL)
+
+
+def main_text(page: str) -> str:
+    """The reading text of a page: what is inside <main> or <article> when the page has them, else the body, without
+    scripts, styles, menus, headers, footers and side bars; tags and entities gone."""
+    body = re.search(r"<body\b[^>]*>(.*)", page, re.IGNORECASE | re.DOTALL)
+    part = body.group(1) if body else page
+    for tag in ("main", "article"):
+        found = re.findall(rf"<{tag}\b[^>]*>(.*?)</{tag}\s*>", part, re.IGNORECASE | re.DOTALL)
+        if found and sum(len(f) for f in found) > 200:
+            part = "\n".join(found)
+            break
+    part = _CHROME.sub(" ", part)
+    part = re.sub(r"<!--.*?-->", " ", part, flags=re.DOTALL)
+    part = re.sub(r"<[^>]+>", " ", part)
+    return html.unescape(part)
+
+
+def script_counts(text: str) -> tuple:
+    """(letters in Arabic script, letters in Latin script, all letters) of a text. Persian is written in Arabic script."""
+    arabic = latin = total = 0
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        total += 1
+        o = ord(ch)
+        if 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F or 0xFB50 <= o <= 0xFDFF or 0xFE70 <= o <= 0xFEFF:
+            arabic += 1
+        elif o < 0x250 or 0x1E00 <= o <= 0x1EFF:
+            latin += 1
+    return arabic, latin, total
+
+
 def fetch_probe(url: str, timeout: float = TIMEOUT_S) -> Probe:
     """One GET without following redirects. Never raises."""
     req = urllib.request.Request(ascii_url(url), headers={
@@ -152,10 +189,11 @@ def fetch_probe(url: str, timeout: float = TIMEOUT_S) -> Probe:
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(req, timeout=timeout) as resp:
-            title, lang, alternates = (
-                parse_page(_decode(resp.read(MAX_BODY), resp.headers.get("Content-Type", "")), url)
-                if resp.status == 200 else ("", "", {}))
-            return Probe(resp.status, "", title, lang, alternates)
+            if resp.status != 200:
+                return Probe(resp.status, "", "", "", {})
+            page = _decode(resp.read(MAX_BODY), resp.headers.get("Content-Type", ""))
+            title, lang, alternates = parse_page(page, url)
+            return Probe(resp.status, "", title, lang, alternates, script_counts(main_text(page)))
     except urllib.error.HTTPError as e:
         return Probe(e.code, e.headers.get("Location", "") if e.headers else "", "")
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException, socket.timeout):

@@ -556,6 +556,36 @@ def missing_alert(code: str) -> str:
     return f"No {LANGUAGE_NAMES.get(code, code.upper())} version"
 
 
+def name_of(code: str) -> str:
+    return LANGUAGE_NAMES.get(code, code.upper())
+
+
+def untranslated_alert(code: str) -> str:
+    """On the row of a page whose version in language `code` exists but is not written in that language."""
+    return f"{name_of(code)} version not translated"
+
+
+def wrong_text_alert(code: str, other: str) -> str:
+    """On the row of a page of language `code`'s folder whose text is written in `other`."""
+    return f"{name_of(other)} text on {name_of(code)} page"
+
+
+SCRIPT_OF = {"fa": "arabic", "ar": "arabic", "ur": "arabic", "en": "latin", "tr": "latin", "de": "latin", "fr": "latin",
+             "es": "latin", "it": "latin", "nl": "latin", "pt": "latin"}      # languages whose script tells the text apart
+MIN_LETTERS = 60                       # a page with fewer letters in its main text is not judged
+
+
+def script_share(probe, code: str):
+    """The share of the letters of the page's main text that are in the script of language `code`; None when the page
+    was not read, has too little text, or the language has no known script."""
+    if probe is None or probe.kind != site_check.OK or not probe.script or code not in SCRIPT_OF:
+        return None
+    arabic, latin, total = probe.script
+    if total < MIN_LETTERS:
+        return None
+    return (arabic if SCRIPT_OF[code] == "arabic" else latin) / total
+
+
 def mirror_url(url: str, from_code: str, to_code: str, prefixes: dict) -> str:
     """The address the same page would have in the other language when each language has its own folder
     (/fa/slug/ for /slug/): the folder is swapped. "" when the address is not under the folder of its language."""
@@ -637,12 +667,41 @@ def pair_languages(ctx: Context, work: dict, result: ContentResult, log=print):
                 rec["lang_state"] = "missing"                # the folder answers with the other language's text
         elif pr.kind in (site_check.GONE_KIND, site_check.REDIRECT):
             rec["lang_state"] = "missing"
+    # a page in a language folder must be written in that language: the share of its letters in the script of the
+    # language is measured (language_min_share); a pair whose page of that folder is not is not a translation yet
+    probes = {k: p for k, p in known.items() if p is not None}
+    probes.update(fetched)
+    minimum = ctx.site.content.language_min_share
+    really, not_really = {}, {}
+    for rec in pages:
+        code = rec.get("lang")
+        rec["lang_real"] = None
+        if not code or not prefixes.get(code):
+            continue
+        share = script_share(rec.get("probe"), code)
+        if share is None:
+            continue
+        rec["lang_real"] = share >= minimum
+        bucket = really if rec["lang_real"] else not_really
+        bucket[code] = bucket.get(code, 0) + 1
+    for rec in pages:
+        if rec.get("lang_state") == "pair" and prefixes.get(rec["lang_other"]):
+            share = script_share(probes.get(content.url_key(rec["lang_target"])), rec["lang_other"])
+            if share is not None and share < minimum:
+                rec["lang_state"] = "untranslated"           # the page is there, in the folder, in the wrong language
     suggest_translations(pages)
     pairs, counts = set(), {"unreadable": 0}
     possible = set()
+    for code in prefixes:
+        if prefixes[code] and (really.get(code) or not_really.get(code)):
+            counts[f"really {name_of(code)}"] = really.get(code, 0)
+            counts[f"not {name_of(code)}"] = not_really.get(code, 0)
     for rec in pages:
         state = rec.get("lang_state")
-        if state == "pair":
+        if state == "untranslated":
+            rec["add_related"] = content.display_url(rec["lang_target"])
+            counts["untranslated"] = counts.get("untranslated", 0) + 1
+        elif state == "pair":
             rec["add_related"] = content.display_url(rec["lang_target"])
             pairs.add(frozenset((content.url_key(str(rec["row"][content.URL])), content.url_key(rec["lang_target"]))))
         elif state == "possible":
@@ -703,20 +762,34 @@ def suggest_translations(pages: list):
             rec["lang_state"], rec["lang_possible"] = "possible", found[id(rec)]
 
 
+_KEPT_ALERTS = [re.compile(re.escape(POSSIBLE_ALERT) + r"\S+"),
+                re.compile(r"No \w+ version"),
+                re.compile(r"\w+ version not translated"),
+                re.compile(r"\w+ text on \w+ page")]
+
+
 def language_alert(rec: dict, row: dict) -> str:
-    """The alert about a translation for a row: the missing version, or a possible translation. A row whose page could
-    not be read keeps the alert it had."""
-    if rec.get("lang_state") == "missing":
-        return missing_alert(rec["lang_other"])
-    if rec.get("lang_state") == "possible":
-        return POSSIBLE_ALERT + content.display_url(rec["lang_possible"])
-    if rec.get("lang_state") == "pair":
-        return ""
-    had = str(row.get("Alerts", ""))
-    kept = re.search(re.escape(POSSIBLE_ALERT) + r"\S+", had)
-    if kept:
-        return kept.group(0).rstrip(",")
-    return next((missing_alert(c) for c in LANGUAGE_NAMES if missing_alert(c) in had), "")
+    """The alerts about translations for a row: the missing, untranslated or possible version of the page, and the
+    wrong language of its own text. A row whose page could not be read keeps the alerts it had."""
+    state = rec.get("lang_state")
+    parts = []
+    if state == "missing":
+        parts.append(missing_alert(rec["lang_other"]))
+    elif state == "possible":
+        parts.append(POSSIBLE_ALERT + content.display_url(rec["lang_possible"]))
+    elif state == "untranslated":
+        parts.append(untranslated_alert(rec["lang_other"]))
+    if rec.get("lang_real") is False:
+        parts.append(wrong_text_alert(rec["lang"], rec["lang_other"]))
+    if state in ("missing", "possible", "untranslated", "pair"):
+        return ", ".join(parts)
+    had = str(row.get("Alerts", ""))                     # not read: nothing changes
+    kept = []
+    for rx in _KEPT_ALERTS:
+        m = rx.search(had)
+        if m:
+            kept.append(m.group(0).rstrip(","))
+    return ", ".join(kept)
 
 
 def needs_review(ctx: Context, rec: dict, row: dict, stats, title: str) -> bool:
@@ -844,6 +917,86 @@ def migrate_removed_pages(sheets, file_id: str, cfg, state: State, today: date, 
     return moved_total
 
 
+# --------------------------------------------------------------------------- #
+# Rows the owner took away
+# --------------------------------------------------------------------------- #
+
+ROW_SEEN, DROPPED_PAGE, DROPPED_IDEA = "rowseen", "dropped_page", "dropped_idea"
+
+
+def _marks(rows: list) -> dict:
+    """{mark: normalized secondary keywords} of the rows of one tab: "page:<address key>" for a page row, "idea:<keyword>"
+    for a row that is a keyword only (no address). Blank rows have no mark."""
+    out = {}
+    for r in rows:
+        url = str(r.get(content.URL, "")).strip()
+        kw = content.norm(r.get(content.KEY, ""))
+        if url:
+            out["page:" + content.url_key(url)] = ""
+        elif kw:
+            out["idea:" + kw] = "|".join(sorted({content.norm(x) for x in content.split_keywords(r.get("Secondary Keywords", ""))} - {"", kw}))
+    return out
+
+
+def note_dropped(state: State, tables: dict, today: date, log=print) -> tuple:
+    """Rows that the last refresh saw and the sheet does not have now were deleted by the owner (or merged away by a
+    reviewer): a page row's address, a keyword row's keyword and its secondary keywords are put on the removed list
+    and never added again. Rows that are only marked Removed or Redirected are still rows, so they are not on it.
+    A tab that is not in the file now, or that came back empty, is not judged (a read problem is not a deletion).
+    Returns ({page keys}, {keyword keys}) of the whole list."""
+    now = {}                                         # mark -> tab, for every row of every tab that was read
+    per_tab = {}
+    for name, (_, rows, _, _) in tables.items():
+        marks = _marks(rows)
+        per_tab[name] = len(marks)
+        for mark in marks:
+            now.setdefault(mark, name)
+    gone = 0
+    kept, drops = [], []
+    for r in state.rows:
+        if r[0] != ROW_SEEN:
+            kept.append(r)
+            continue
+        tab = r[2].split("\t", 1)[0]
+        if r[1] in now or tab not in tables or not per_tab.get(tab):
+            kept.append(r)                           # still there, or not judged
+            continue
+        kind, _, key = r[1].partition(":")
+        secondary = r[2].split("\t", 1)[1].split("|") if "\t" in r[2] else []
+        if kind == "page":
+            drops.append((DROPPED_PAGE, key, tab))
+        else:
+            drops += [(DROPPED_IDEA, k, tab) for k in [key] + [s for s in secondary if s]]
+        gone += 1
+    state.rows = kept
+    for kind, key, tab in drops:
+        state.set(kind, key, tab, today)
+    for mark in now:                                 # a row that is back is not on the list
+        kind, _, key = mark.partition(":")
+        state.delete(DROPPED_PAGE if kind == "page" else DROPPED_IDEA, key)
+    if gone:
+        log(f"  content: {gone} rows the owner took away are on the removed list")
+    return state.keys({DROPPED_PAGE}), state.keys({DROPPED_IDEA})
+
+
+def remember_rows(state: State, work: dict, today: date):
+    """The rows of every tab as this refresh leaves them, for the next refresh to compare with."""
+    tabs_done = set(work)
+    state.rows = [r for r in state.rows if not (r[0] == ROW_SEEN and r[2].split("\t", 1)[0] in tabs_done)]
+    for name, recs in work.items():
+        rows = []
+        for rec in recs:
+            if rec["blank"]:
+                continue
+            row = dict(rec["row"])
+            if rec["topic"]:
+                eff = _effective(rec)
+                row[content.KEY], row["Secondary Keywords"] = eff[content.KEY], eff["Secondary Keywords"]
+            rows.append(row)
+        for mark, secondary in _marks(rows).items():
+            state.rows.append([ROW_SEEN, mark, f"{name}\t{secondary}", today.isoformat()])
+
+
 def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: ContentResult,
             log=print):
     cfg = site.content
@@ -860,10 +1013,12 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
         if t.sitemap:                            # a page that has a row stays in its tab, even when it left the sitemap
             t.members |= {content.url_key(r.get(content.URL)) for r in rows if str(r.get(content.URL, "")).strip()}
 
+    dropped_pages, dropped_ideas = note_dropped(state, tables, today, log)
+
     # ---- the pages of the site: Search Console, the stored history, the sitemap -----------
     existing_keys = {content.url_key(r.get(content.URL)) for _, rows, _, _ in tables.values()
                      for r in rows if str(r.get(content.URL, "")).strip()}
-    removed_keys = state.keys({"removed"})
+    removed_keys = state.keys({"removed"}) | dropped_pages     # rows the tool removed, rows the owner took away
     candidates = [("search", s.url, s) for _, s in sorted(ctx.data.stats.items())
                   if s.impressions >= content.NEW_PAGE_MIN_IMPRESSIONS]
     candidates += [("history", u, None) for u in ctx.history_urls]
@@ -1084,9 +1239,10 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
 
     # ---- ideas marked Add become topic rows, then content gaps --------------------
     live = [rec for recs in work.values() for rec in recs if not rec.get("remove") and not rec.get("settled")]
-    present = _targeted(live)
+    present = _targeted(live) | _present([r for _, rows, _, _ in tables.values() for r in rows])   # a row marked Removed or merged keeps its keywords
     gap_tab = next((t for t in cfg.tabs if t.gaps and t.name in work), None)
-    already = state.keys({"gap", "dismissed", "idea"})
+    asked = state.keys({"gap", "dismissed", "idea"})           # what an idea marked Add is checked against
+    already = asked | dropped_ideas                            # ... and what a new gap is: nothing the owner took away comes back
 
     def add_topic(t, keyword, group, source):
         vals = topic_values(ctx, {content.KEY: keyword}, group)
@@ -1109,10 +1265,12 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             kw = str(idea.get("Keyword", "")).strip()
             k = content.norm(kw)
             if (str(idea.get("Decision", "")).strip().lower() == "add" and k
-                    and k not in already and k not in present):
+                    and k not in asked and k not in present):
                 add_topic(gap_tab, kw, [kw], "idea")
                 state.set("idea", k, ctx.today.isoformat(), ctx.today)
+                state.delete(DROPPED_IDEA, k)              # the owner asked for it again
                 present.add(k)
+                asked.add(k)
                 already.add(k)
                 result.ideas_added += 1
 
@@ -1139,11 +1297,14 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
             minimum=cfg.min_gap_impressions_90d, known=present, already=already,
             exclude_terms=cfg.gap_exclude_terms, page_words=page_words)
         for g in gaps:
+            if content.norm(g.keyword) in present or content.norm(g.keyword) in dropped_ideas:
+                continue                                   # a row has this keyword already, or the owner took it away
             add_topic(t, g.keyword, g.queries, "gap")
             for q in g.queries:
                 state.set("gap", content.norm(q), content.norm(g.keyword), ctx.today)
                 present.add(content.norm(q))
             already.update(content.norm(q) for q in g.queries)
+            asked.update(content.norm(q) for q in g.queries)
 
     # an idea row the owner deleted is not proposed again
     kept = _targeted([rec for recs in work.values() for rec in recs if not rec.get("remove")])
@@ -1233,6 +1394,8 @@ def refresh(sheets, file_id: str, site, ctx: Context, state: State, result: Cont
     result.urgent = [(k, a, t) for _, k, a, t in urgent[:TOP_URGENT]]
     result.refreshed = True
 
+    remember_rows(state, work, today)                  # what the next refresh compares the sheet with
+
     # ---- an import is done: remembered, never again (no log tab is made: each row's Notes and Alerts say what happened) --
     for spec, key, report in done_imports:
         state.set("import", key, ctx.today.isoformat(), ctx.today)
@@ -1253,7 +1416,7 @@ def update_ideas(sheets, file_id: str, site, data: Data, state: State, today: da
         return
     ideas_header, ideas = cs.table_of(cs.read_all(sheets, file_id, cs.IDEAS))
     # ideas on the sheet, and ideas that were written before and then deleted: not added again
-    existing = {content.norm(i.get("Keyword", "")) for i in ideas} | state.keys({"idea_seen"})
+    existing = {content.norm(i.get("Keyword", "")) for i in ideas} | state.keys({"idea_seen", DROPPED_IDEA})
     known = set()
     for t in site.content.tabs:
         if t.name in info:
