@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pulseo-technical     # never two technical runs at once; the weekly sync has its own group
+  group: gsc-pulse-sync       # the same group as the weekly sync: it writes the Index Status column into the content dashboards, which the sync refreshes
   cancel-in-progress: false
 
 jobs:

@@ -804,7 +804,7 @@ def technical_command(runs: list, smtp):
         sleep=time.sleep, final=final, page_rows=page_rows, sitemaps_api=sitemaps_api, inspector=inspector,
         mail=(lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None,
         daily=os.environ.get("TECHNICAL_MODE", "").strip().lower() == "daily")
-    print(f"technical: {'the small daily check (home page and robots.txt)' if deps.daily else 'the full weekly check'}")
+    print(f"technical: {'the small daily check (home page and robots.txt)' if deps.daily else 'the full weekly check (with the index watch)'}")
     before = {r.name for r in targets if r.status == "failed"}
     for line in technical_run.run_technical(targets, deps, print, on_error=lambda r, e: fail_site(r, e)):
         print(f"  technical: {line}")
