@@ -1,11 +1,13 @@
 name: PulseO technical health
 
-# The daily technical checks (health of every site, alerts by email only for a confirmed, new, worse or fixed problem).
-# It does NOT run by itself yet: the schedule below stays off until the owner approves it. Started by hand it sends no
-# email unless send_emails is ticked.
+# The technical checks of every site; an email only for a confirmed, new, worse or fixed problem. Approved by the owner:
+#   * the full check once a week, Monday early morning: home page, robots.txt, sitemaps, key pages, sitemaps in Search Console
+#   * a small check on the other days: only whether the home page is down and whether robots.txt blocks the whole site
+# Started by hand it sends no email unless send_emails is ticked.
 on:
-  # schedule:
-  #   - cron: "43 2 * * *"    # every day about 02:43 UTC (05:43 Istanbul), off the hour; GitHub may start it later
+  schedule:
+    - cron: "43 2 * * 1"             # the full check: Monday about 02:43 UTC (05:43 Istanbul), off the hour; GitHub may start it later
+    - cron: "23 2 * * 0,2,3,4,5,6"   # the small check: the other days about 02:23 UTC (05:23 Istanbul)
   workflow_dispatch:
     inputs:
       mode:
@@ -52,7 +54,8 @@ jobs:
           SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
           SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
           TECHNICAL_RUN: "true"
-          TECHNICAL_MODE: ${{ inputs.mode }}
+          # a scheduled run: the Monday one is the full check, the others are the small one; a run by hand takes its input
+          TECHNICAL_MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '43 2 * * 1' && 'full' || 'daily') || inputs.mode }}
           ONLY_SITE: ${{ inputs.only_site }}
           SEND_EMAILS: ${{ inputs.send_emails }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
