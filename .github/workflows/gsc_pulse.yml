@@ -82,7 +82,7 @@ on:
         required: false
         default: ""
       access_check:
-        description: "Read-only: for the files listed in the variable ACCESS_CHECK_IDS, say whether the tool's Google access can open them. Nothing is created, changed or sent"
+        description: "Read-only: for the files listed in the variable ACCESS_CHECK_IDS, say whether the tool's Google access can open them, and whether the Bing key can read each site (counts only). Nothing is created, changed or sent"
         required: false
         type: boolean
         default: false
@@ -175,6 +175,8 @@ jobs:
           ACCESS_CHECK: ${{ inputs.access_check }}
           ACCESS_CHECK_IDS: ${{ vars.ACCESS_CHECK_IDS }}
           ACCESS_CHECK_AUDIT: ${{ vars.ACCESS_CHECK_AUDIT }}
+          # the Bing key is in the run only for the read-only access check (until the Bing data is built in)
+          BING_API_KEY: ${{ inputs.access_check && secrets.BING_API_KEY || '' }}
           SITE_FOLDERS_SITE: ${{ inputs.site_folders_site }}
           FIX_KEYWORDS_APPLY: ${{ inputs.fix_keywords_apply }}
           CONTENT_COPY_SITE: ${{ inputs.content_copy_site }}

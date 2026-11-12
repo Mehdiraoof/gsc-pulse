@@ -46,6 +46,7 @@ except ImportError:
 
 import ai_client
 import auth
+import bing
 import content
 import content_accept
 import content_copy_test
@@ -583,6 +584,10 @@ def access_check_command(smtp=None, site_list=None):
     if site_list and os.environ.get("ACCESS_CHECK_AUDIT", "").strip().lower() in ("1", "true", "yes") and me_clients:
         for line in audit_dashboards(site_list, me_clients.drive, me_clients.sheets):
             print(f"  audit: {line}")
+    key = os.environ.get("BING_API_KEY", "").strip()
+    if key and site_list:                      # read-only: counts only
+        for line in bing.check_lines(bing.access_for("api_key", os.environ), site_list):
+            print(f"  bing check: {line}")
     address = service_account_email(raw or "")
     if address and smtp is not None:            # only when the run was started with send_emails: the log stays public
         notify_owner(smtp, "The address to share a sheet with",
@@ -1203,6 +1208,7 @@ def main():
     for s in site_list:                     # every id, even of disabled sites, is scrubbed
         _SENSITIVE.extend(s.sensitive_values())
     _SENSITIVE.extend(auth.secret_values(os.environ))       # the OAuth client and token
+    _SENSITIVE.append(os.environ.get("BING_API_KEY", "").strip())    # the Bing key (empty: scrubbed as nothing)
 
     # GSC data runs ~2-3 days behind, so stop 3 days ago to avoid half-empty days
     end_dt     = datetime.today() - timedelta(days=3)
