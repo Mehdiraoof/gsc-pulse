@@ -436,7 +436,11 @@ def check_keypages(ctx: Context, only=None) -> list:
     shown = ", ".join(f"{'no answer' if c == 0 else c} x{n}" for c, n in sorted(codes.items()))
     share = len(server) / total if total else 0
     out = [
-        make("key_status", status_bad,$1
+        make("key_status", status_bad, f"{len(status_bad)} of {total} key pages did not answer 200 ({shown})"),
+        make("key_noindex", noindex, f"{len(noindex)} of {total} key pages tell search engines not to index them"),
+        make("key_canonical", canon, f"{len(canon)} of {total} key pages have a canonical that points to another page"),
+        make("server_errors", server if share > ctx.cfg.server_error_share else [],
+             f"{len(server)} of {total} key pages failed with a server error or no answer"),
     ]
     if blocked:
         out.append(Result("key_blocked", True, note="blocked", pages=blocked, clicks=ctx.clicks_of(blocked), count=len(blocked),
