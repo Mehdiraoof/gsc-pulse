@@ -47,6 +47,7 @@ except ImportError:
 import ai_client
 import auth
 import bing
+import bing_data
 import content
 import content_accept
 import content_copy_test
@@ -335,6 +336,7 @@ class SiteRun:
     views_text: str = "off"
     content_text: str = "off"
     decks_text: str = "off"
+    bing_text: str = "off"
     gsc: object = None               # the Google clients this site is read and written with
     sheets: object = None
     drive: object = None
@@ -684,6 +686,38 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False, cleanup_g
     print()
 
 
+def sync_bing(run: SiteRun, accesses: dict, today: date, make_access=None):
+    """Phase 2c: the Bing tabs of one site's Reports sheet and the Bing columns of its content dashboard. Whatever goes wrong
+    here is said in the log and nothing else is touched: the site is never marked failed for it, and the phases that
+    came before it are finished already. `accesses` keeps one access per way of reaching Bing for the whole run."""
+    site = run.site
+    if not site.bing.enabled:
+        return
+    site_header(run, "Bing")
+    try:
+        if site.bing.auth not in accesses:
+            try:
+                accesses[site.bing.auth] = (make_access or bing.access_for)(site.bing.auth, os.environ)
+            except bing.BingError as e:
+                accesses[site.bing.auth] = e
+        access = accesses[site.bing.auth]
+        if isinstance(access, Exception):
+            run.bing_text = f"off ({access})"
+            print(f"bing: off ({access})\n")
+            return
+        result = bing_data.run_bing(run.sheets, site, access, today, print, drive=run.drive)
+        run.bing_text = result.text()
+        print(f"bing: {result.text()}")
+        if result.last_month:
+            label, clicks, impressions = result.last_month
+            print(f"  bing: {label}: {clicks} clicks, {impressions} impressions; {result.queries} queries and "
+                  f"{result.pages} pages in the data; {result.crawl_issues} crawl issues")
+    except Exception as e:  # noqa: BLE001  Bing never fails a site
+        run.bing_text = "skipped"
+        print(f"  bing: skipped ({scrub(describe_error(e))})")
+    print()
+
+
 def deck_rebuild_for(run: SiteRun, everything: bool, site_name: str, kind: str):
     """
     What to rebuild for this site: True (both decks, every site: the rebuild_decks input), a set
@@ -814,7 +848,8 @@ def print_summary(runs: list):
               f"history +{appended} | history: {run.history_text} | reports: {run.reports_text}"
               + (f" | views: {run.views_text}" if run.site.reports_sheet_id else "")
               + (f" | content: {run.content_text}" if run.site.content.enabled else "")
-              + (f" | decks: {run.decks_text}" if run.site.deck.enabled else ""))
+              + (f" | decks: {run.decks_text}" if run.site.deck.enabled else "")
+              + (f" | bing: {run.bing_text}" if run.bing_text != "off" else ""))
     print()
 
 
@@ -1431,6 +1466,12 @@ def main():
             sync_work(r, date.today())
         except Exception as e:                  # noqa: BLE001  the work list and the notes never fail a site's sync
             print(f"  work: skipped ({scrub(describe_error(e))})\n")
+
+    # ---- Phase 2c: Bing, after everything that is Google's (a Bing problem never reaches them) ------
+    bing_accesses = {}
+    for r in enabled:
+        if r.v1_done:
+            sync_bing(r, bing_accesses, date.today())
 
     # ---- Phase 3: Meta tab of every site -----------------------------------
     for r in enabled:

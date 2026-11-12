@@ -175,8 +175,8 @@ jobs:
           ACCESS_CHECK: ${{ inputs.access_check }}
           ACCESS_CHECK_IDS: ${{ vars.ACCESS_CHECK_IDS }}
           ACCESS_CHECK_AUDIT: ${{ vars.ACCESS_CHECK_AUDIT }}
-          # the Bing key is in the run only for the read-only access check (until the Bing data is built in)
-          BING_API_KEY: ${{ inputs.access_check && secrets.BING_API_KEY || '' }}
+          # the Bing key: read by the Bing phase of every run and by the access check
+          BING_API_KEY: ${{ secrets.BING_API_KEY }}
           SITE_FOLDERS_SITE: ${{ inputs.site_folders_site }}
           FIX_KEYWORDS_APPLY: ${{ inputs.fix_keywords_apply }}
           CONTENT_COPY_SITE: ${{ inputs.content_copy_site }}

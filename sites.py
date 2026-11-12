@@ -27,7 +27,7 @@ ALLOWED_FIELDS = ("name", "site_url", "auth", "sheet_id", "history_sheet_id", "r
                   "drive_folder_id", "page_types", "first_match_wins", "other_label", "other_deck_label", "opportunities",
                   "thresholds",
                   "weekly_segments",
-                  "content",
+                  "content", "bing",
                   "deck", "enabled")
 NAME_PATTERN   = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 LEGACY_NAME    = "site-1"
@@ -76,6 +76,7 @@ class Site:
     opportunities: dict = field(default_factory=dict)    # overrides of OPPORTUNITY_DEFAULTS (+ brand_terms)
     deck: "DeckConfig" = None
     content: "ContentConfig" = None                      # the content dashboard (v2.5)
+    bing: "BingConfig" = None                            # Bing Webmaster data
     enabled: bool = True
     auth: str = "robot"             # robot: the service account; me: the owner's own Google account
 
@@ -84,13 +85,16 @@ class Site:
         ids = [v for v in (self.site_url, self.sheet_id, self.history_sheet_id, self.drive_folder_id,
                            self.reports_sheet_id) if v]
         return (ids + [t["regex"] for t in self.page_types] + self.deck.sensitive_values()
-                + list(self.opportunities.get("brand_terms", [])) + self.content.sensitive_values())
+                + list(self.opportunities.get("brand_terms", [])) + self.content.sensitive_values()
+                + ([self.bing.site_url] if self.bing.site_url else []))
 
     def __post_init__(self):
         if self.deck is None:
             self.deck = DeckConfig()
         if self.content is None:
             self.content = ContentConfig()
+        if self.bing is None:
+            self.bing = BingConfig()
 
     def deck_label(self, segment: str) -> str:
         """What the client deck calls a segment: its page type's deck_label, else the label itself."""
@@ -599,6 +603,35 @@ def resolve_content_tabs(site) -> None:
         raise SitesConfigError(f"SITES_JSON site '{site.name}', content: no tab is left (check skip_types)")
 
 
+@dataclass
+class BingConfig:
+    """Bing Webmaster data of a site. On unless switched off; a run without the Bing key leaves it alone."""
+    enabled: bool = True
+    auth: str = "api_key"            # how the access is obtained (a key of PROVIDERS in bing.py)
+    site_url: str = ""               # the address of the site in Bing; empty: found in the account by domain
+
+
+def _parse_bing(value, where: str) -> BingConfig:
+    if value is None:
+        return BingConfig()
+    where = f"{where}, bing"
+    if not isinstance(value, dict):
+        raise SitesConfigError(f"{where}: must be a JSON object")
+    if set(value) - {"enabled", "auth", "site_url"}:
+        raise SitesConfigError(f"{where}: has an unknown field (allowed: enabled, auth, site_url)")
+    enabled = value.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise SitesConfigError(f"{where}: 'enabled' must be true or false")
+    import bing                                  # the providers are listed there
+    auth = value.get("auth", "api_key")
+    if auth not in bing.PROVIDERS:
+        raise SitesConfigError(f"{where}: 'auth' must be one of {', '.join(sorted(bing.PROVIDERS))}")
+    site_url = value.get("site_url", "")
+    if not isinstance(site_url, str) or len(site_url) > 300:
+        raise SitesConfigError(f"{where}: 'site_url' must be an address as text")
+    return BingConfig(enabled=enabled, auth=auth, site_url=site_url.strip())
+
+
 def _flag(entry: dict, key: str, where: str) -> bool:
     value = entry.get(key, False)
     if not isinstance(value, bool):
@@ -786,6 +819,7 @@ def parse_sites_json(raw: str) -> list:
                               if entry.get("other_deck_label") is not None else ""),
             deck=_parse_deck(entry.get("deck"), where),
             content=_parse_content(entry.get("content"), where),
+            bing=_parse_bing(entry.get("bing"), where),
             enabled=enabled,
         )
         if site.other_label.lower() in {t["name"].lower() for t in site.page_types} | {"all"}:
