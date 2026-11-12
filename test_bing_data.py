@@ -88,11 +88,15 @@ class FakeAccess(bing.Access):
 
 
 class FilterSheets(FakeSheets):
-    """Gives back the basic filter of a tab, as the real service does, and keeps the one that was set."""
+    """Gives back the basic filter of a tab as the real service does, keeps the one that was set, and inserts and moves
+    columns the way Sheets does (cells move with their column; a filter that spans the place grows)."""
 
     def __init__(self):
         super().__init__()
         self.filters = {}                       # sheet id -> filter
+
+    def _tab_of(self, book, sid):
+        return next(t for t in self.books[book].values() if t.sheet_id == sid)
 
     def get(self, spreadsheetId, fields=None):
         inner = super().get(spreadsheetId, fields)
@@ -114,6 +118,24 @@ class FilterSheets(FakeSheets):
                 if "setBasicFilter" in r:
                     f = r["setBasicFilter"]["filter"]
                     self.filters[f["range"]["sheetId"]] = f
+                elif "insertDimension" in r and r["insertDimension"]["range"]["dimension"] == "COLUMNS":
+                    rg = r["insertDimension"]["range"]
+                    t, a, n = self._tab_of(spreadsheetId, rg["sheetId"]), rg["startIndex"], rg["endIndex"] - rg["startIndex"]
+                    for row in t.data:
+                        if len(row) > a:
+                            row[a:a] = [""] * n
+                    t.col_count += n
+                    flt = self.filters.get(rg["sheetId"])
+                    if flt and a < flt["range"]["endColumnIndex"]:
+                        flt["range"]["endColumnIndex"] += n
+                elif "moveDimension" in r and r["moveDimension"]["source"]["dimension"] == "COLUMNS":
+                    src = r["moveDimension"]["source"]
+                    t, a, b, dest = self._tab_of(spreadsheetId, src["sheetId"]), src["startIndex"], src["endIndex"], r["moveDimension"]["destinationIndex"]
+                    for row in t.data:
+                        row.extend([""] * (max(b, dest) - len(row)))
+                        moved, rest = row[a:b], row[:a] + row[b:]
+                        at = dest - (b - a) if dest > a else dest
+                        row[:] = rest[:at] + moved + rest[at:]
             return out
         return Req(run)
 
@@ -306,33 +328,67 @@ class DashboardTests(Base):
         c = header.index(name)
         return r[c] if c < len(r) else ""
 
-    def test_the_two_columns_are_added_after_the_last_and_filled_by_address(self):
-        before_header = list(content.HEADERS)
+    def by_name(self, tab="Articles"):
+        header, rows = self.dash(tab)
+        return [{h: (r[i] if i < len(r) else "") for i, h in enumerate(header)} for r in rows]
+
+    def test_the_columns_are_put_after_the_last_google_performance_column_and_filled_by_address(self):
         result = self.run_bing(drive=object())
         header, rows = self.dash()
-        self.assertEqual(header[:42], before_header)
-        self.assertEqual(header[42:44], [bing_data.COL_CLICKS, bing_data.COL_IMPR])       # no export yet: no citations column
+        at = content.HEADERS.index("Ranking Queries") + 1
+        self.assertEqual(header, content.HEADERS[:at] + [bing_data.COL_CLICKS, bing_data.COL_IMPR] + content.HEADERS[at:])
         self.assertEqual([self.value(i, bing_data.COL_CLICKS) for i in range(5)], [8, 7, 0, "", ""])
         self.assertEqual([self.value(i, bing_data.COL_IMPR) for i in range(5)], [80, 70, 0, "", ""])
         self.assertEqual(result.dashboard, 2)                                # both tabs have the columns ...
         self.assertEqual(self.dash("Landing Pages")[1], [])                  # ... and the empty one stays empty
 
-    def test_the_owners_columns_are_not_touched(self):
-        before = [list(r) for r in self.dash()[1]]
+    def test_the_owners_columns_are_not_touched_though_they_move_to_the_right(self):
+        before = self.by_name()
         self.run_bing(drive=object())
-        header, rows = self.dash()
-        for old, new in zip(before, rows):
-            self.assertEqual(new[:42], old[:42] + [""] * (42 - len(old[:42])))
-        self.assertEqual(self.value(0, "Clicks (90d)"), 33)                  # Google's number in Google's column stays
-        self.assertEqual(self.value(0, content.TODO), "Keep")
+        after = self.by_name()
+        for old, new in zip(before, after):
+            for name in content.HEADERS:
+                self.assertEqual(new[name], old[name], name)
+        self.assertEqual(after[0]["Clicks (90d)"], 33)                       # Google's number in Google's column stays
+        self.assertEqual(after[0]["Secondary Keywords"], "")
+        self.assertEqual((after[0][content.TODO], after[0]["Notes/Checklist"]), ("Keep", "my note"))
 
-    def test_the_filter_and_grid_take_the_new_columns_in(self):
+    def test_the_filter_keeps_its_conditions_and_the_grid_grows(self):
         self.run_bing(drive=object())
-        sets = [r["setBasicFilter"]["filter"] for _, r in self.fs.requests if "setBasicFilter" in r]
-        self.assertEqual(len(sets), 1)                                      # a tab with no filter does not get one
-        self.assertEqual(sets[0]["range"]["endColumnIndex"], 44)
-        self.assertEqual(sets[0]["criteria"]["2"]["condition"]["type"], "TEXT_EQ")   # what the owner set is kept
+        sid = self.fs.books["DASH"]["Articles"].sheet_id
+        flt = self.fs.filters[sid]
+        self.assertEqual(flt["range"]["endColumnIndex"], 44)
+        self.assertEqual(flt["criteria"]["2"]["condition"]["type"], "TEXT_EQ")       # what the owner set is kept
         self.assertEqual(self.fs.books["DASH"]["Articles"].col_count, 44)
+        self.assertFalse([r for _, r in self.fs.requests if "setBasicFilter" in r])  # nothing was reset
+
+    def test_columns_an_earlier_version_put_at_the_end_are_moved_into_place(self):
+        t = self.fs.books["DASH"]["Articles"]
+        t.data[0] += [bing_data.COL_CLICKS, bing_data.COL_IMPR]
+        for r in t.data[1:]:
+            r += ["old", "old"]
+        t.col_count = 44
+        self.fs.filters[t.sheet_id]["range"]["endColumnIndex"] = 44
+        before = self.by_name()
+        self.run_bing(drive=object())
+        header, _ = self.dash()
+        at = content.HEADERS.index("Ranking Queries") + 1
+        self.assertEqual(header, content.HEADERS[:at] + [bing_data.COL_CLICKS, bing_data.COL_IMPR] + content.HEADERS[at:])
+        self.assertEqual([self.value(i, bing_data.COL_CLICKS) for i in range(5)], [8, 7, 0, "", ""])
+        for old, new in zip(before, self.by_name()):
+            for name in content.HEADERS:
+                self.assertEqual(new[name], old[name], name)
+        self.assertEqual(self.fs.books["DASH"]["Articles"].col_count, 44)
+        self.assertEqual(self.fs.filters[t.sheet_id]["range"]["endColumnIndex"], 44)
+
+    def test_a_tab_without_the_anchor_column_gets_them_at_the_end(self):
+        t = self.fs.books["DASH"]["Articles"]
+        t.data[0][content.HEADERS.index("Ranking Queries")] = "Ranking"
+        self.run_bing(drive=object())
+        header, _ = self.dash()
+        self.assertEqual(header[42:], [bing_data.COL_CLICKS, bing_data.COL_IMPR])
+        self.assertEqual(self.fs.filters[t.sheet_id]["range"]["endColumnIndex"], 44)
+        self.assertEqual([self.value(i, bing_data.COL_CLICKS) for i in range(3)], [8, 7, 0])
 
     def test_a_second_run_adds_no_column_and_changes_nothing(self):
         self.run_bing(drive=object())
@@ -340,11 +396,20 @@ class DashboardTests(Base):
         self.run_bing(drive=object())
         self.assertEqual(self.snapshot("DASH"), before)
 
-    def test_no_page_data_from_bing_adds_nothing_to_the_dashboard(self):
+    def test_no_page_from_bing_at_all_adds_nothing_to_the_dashboard(self):
         before = self.snapshot("DASH")
         result = self.run_bing(answers(GetPageStats=[]), drive=object())
         self.assertEqual(self.snapshot("DASH"), before)
         self.assertEqual(result.dashboard, 0)
+
+    def test_pages_older_than_90_days_still_give_the_columns_with_zeros(self):
+        """A site whose Bing data stopped long ago: Bing did answer, so the columns are there and say 0 for the last 90 days."""
+        result = self.run_bing(answers(GetPageStats=[qrow(date(2026, 6, 1), A, 90, 900, 4.0)]), drive=object())
+        self.assertEqual(result.dashboard, 2)
+        header, _ = self.dash()
+        self.assertIn(bing_data.COL_CLICKS, header)
+        self.assertEqual([self.value(i, bing_data.COL_CLICKS) for i in range(5)], [0, 0, 0, "", ""])
+        self.assertEqual([self.value(i, bing_data.COL_IMPR) for i in range(5)], [0, 0, 0, "", ""])
 
     def test_a_page_not_in_bing_gets_zero_but_only_when_bing_gave_pages(self):
         self.run_bing(drive=object())
@@ -355,8 +420,19 @@ class DashboardTests(Base):
         self.put_tab("Bing AI 2026-10 Pages", [["Cited page", "Citations"], [A + "#section", 12], [B, 3]])
         self.run_bing(drive=object())
         header, _ = self.dash()
-        self.assertEqual(header[42:45], [bing_data.COL_CLICKS, bing_data.COL_IMPR, bing_data.COL_AI])
+        at = content.HEADERS.index("Ranking Queries") + 1
+        self.assertEqual(header[at:at + 3], [bing_data.COL_CLICKS, bing_data.COL_IMPR, bing_data.COL_AI])
         self.assertEqual([self.value(i, bing_data.COL_AI) for i in range(5)], [12, 3, 0, "", ""])
+
+    def test_the_citations_column_added_later_goes_next_to_the_other_two(self):
+        self.run_bing(drive=object())
+        self.put_tab("Bing AI 2026-10 Pages", [["Cited page", "Citations"], [A, 12]])
+        self.run_bing(drive=object())
+        header, _ = self.dash()
+        at = header.index(bing_data.COL_CLICKS)
+        self.assertEqual(header[at:at + 3], [bing_data.COL_CLICKS, bing_data.COL_IMPR, bing_data.COL_AI])
+        self.assertEqual(self.value(0, bing_data.COL_AI), 12)
+        self.assertEqual(self.value(0, "Secondary Keywords"), "")
 
     def test_a_site_without_the_dashboard_or_own_access_is_left_alone(self):
         before = self.snapshot("DASH")

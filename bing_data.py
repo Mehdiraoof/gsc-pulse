@@ -497,38 +497,70 @@ def _column_count(sheets, file_id: str, sid: int) -> int:
     return 0
 
 
+ANCHOR = "Ranking Queries"                   # the last of Google's performance columns: the Bing columns follow it
+
+
+def _move(sid: int, source: int, destination: int) -> dict:
+    """Moves one column so that it ends at index `destination`."""
+    return {"moveDimension": {"source": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": source, "endIndex": source + 1},
+                              "destinationIndex": destination + 1 if source < destination else destination}}
+
+
 def add_columns(sheets, file_id: str, tab: str, sid: int, header: list, names: list) -> list:
-    """Puts the missing columns after the last one, styled like the other columns the tool writes, and makes the tab's
-    filter cover them (so a sort by the owner moves them with their rows). Returns the new header."""
-    missing = [n for n in names if n not in header]
-    if not missing:
-        return header
-    start = len(header)
-    new = header + missing
-    wide = _column_count(sheets, file_id, sid)
-    requests = []
-    if wide < len(new):
-        requests.append({"appendDimension": {"sheetId": sid, "dimension": "COLUMNS", "length": len(new) - wide}})
-    for c in range(start, len(new)):
-        requests.append(cs.header_cell(sid, c, c + 1, cs.GREY, cs.NAVY))
+    """Puts the Bing columns, in their order, right after the last of Google's performance columns (at the end when that
+    column is not in the tab). A column that is somewhere else (an earlier version put them at the end) is moved; one that
+    is in place is left. Inserting and moving keep every column's format, rules and filter with it. Styles what it adds
+    like the other columns the tool writes. Returns the new header."""
+    header = list(header)
+    before = len(header)
+    start = header.index(ANCHOR) + 1 if ANCHOR in header else before
+    grid = _column_count(sheets, file_id, sid)
+    requests, written, at_end = [], [], False
+    for i, name in enumerate(names):
+        target = start + i
+        if name in header:
+            at = header.index(name)
+            if at != target:
+                requests.append(_move(sid, at, target))
+                header.insert(target, header.pop(at))
+            continue
+        if target < len(header):                # in the middle: the grid grows by the column
+            requests.append({"insertDimension": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": target,
+                                                           "endIndex": target + 1}, "inheritFromBefore": False}})
+            grid += 1
+        else:                                    # after the last column
+            at_end = True
+            if grid <= target:
+                requests.append({"appendDimension": {"sheetId": sid, "dimension": "COLUMNS", "length": 1}})
+                grid += 1
+        header.insert(target, name)
+        written.append((target, name))
+        requests.append(cs.header_cell(sid, target, target + 1, cs.GREY, cs.NAVY))
         requests.append({"updateDimensionProperties": {
-            "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
+            "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": target, "endIndex": target + 1},
             "properties": {"pixelSize": 120}, "fields": "pixelSize"}})
-        requests.append(cs._fmt(sid, "backgroundColor", {"backgroundColor": cs.rgb(cs.TINT_GREY)}, r1=1, c1=c, c2=c + 1))
-    flt = _basic_filter(sheets, file_id, sid)
-    if flt and flt.get("range", {}).get("endColumnIndex") == start:          # the owner's filter, with its criteria, takes the new columns in
-        requests.append({"setBasicFilter": {"filter": dict(flt, range=dict(flt["range"], endColumnIndex=len(new)))}})
+        requests.append(cs._fmt(sid, "backgroundColor", {"backgroundColor": cs.rgb(cs.TINT_GREY)},
+                                r1=1, c1=target, c2=target + 1))
+    if not requests:
+        return header
+    if at_end:                                   # the owner's filter, with its conditions, takes the new last columns in
+        flt = _basic_filter(sheets, file_id, sid)
+        if flt and flt.get("range", {}).get("endColumnIndex") == before:
+            requests.append({"setBasicFilter": {"filter": dict(flt, range=dict(flt["range"], endColumnIndex=len(header)))}})
     history._write(sheets.spreadsheets().batchUpdate(spreadsheetId=file_id, body={"requests": requests}))
-    tabs.patch_cells(sheets, file_id, [(f"'{tab}'!{cs.letters(start)}1", [missing])])
-    return new
+    if written:
+        tabs.patch_cells(sheets, file_id, [(f"'{tab}'!{cs.letters(c)}1", [[n]]) for c, n in written])
+    return header
 
 
-def fill_dashboard(sheets, file_id: str, tab_names: list, page_stats: dict, citations: dict, log=print) -> int:
-    """The three Bing columns of every page-group tab, by page address. A column is only added when there is something
+def fill_dashboard(sheets, file_id: str, tab_names: list, page_stats: dict, citations: dict, have_pages: bool = False,
+                   log=print) -> int:
+    """The three Bing columns of every page-group tab, by page address. The Clicks and Impressions columns are added when
+    Bing gave any page at all (a page it does not list in the last 90 days gets 0); the citations column when an export came. A column is only added when there is something
     to put in it. A row without a page address, and a row that is settled (page gone), keeps what its cells hold.
     Returns the number of tabs written."""
     info = cs.sheet_info(sheets, file_id)
-    wanted = [n for n, have in ((COL_CLICKS, bool(page_stats)), (COL_IMPR, bool(page_stats)), (COL_AI, bool(citations)))
+    wanted = [n for n, have in ((COL_CLICKS, have_pages), (COL_IMPR, have_pages), (COL_AI, bool(citations)))
               if have]
     if not wanted:
         return 0
@@ -598,5 +630,5 @@ def run_bing(sheets, site, access, today: date, log=print, drive=None, sleep=tim
         if file_id:
             result.dashboard = fill_dashboard(
                 sheets, file_id, [t.name for t in site.content.tabs], page_totals(data.pages, today),
-                latest_page_citations(load_citations(sheets, rid)), log)
+                latest_page_citations(load_citations(sheets, rid)), have_pages=bool(data.pages), log=log)
     return result
