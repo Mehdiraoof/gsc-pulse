@@ -190,6 +190,47 @@ class HealthyDay(Base):
         self.assertTrue(any(name == "Key pages answer" and res == "skipped" for name, res in self.log_results()))
 
 
+class KeyPageRedirects(Base):
+
+    def test_a_slash_redirect_leads_to_the_same_page_which_is_the_one_checked(self):
+        self.web.pages[p(1)] = Fetched(301, {"location": p(1) + "/"}, "", 0.1)
+        self.web.pages[p(1) + "/"] = Fetched(200, {}, page_html(url=p(1) + "/"), 0.2)
+        self.go()
+        self.assertEqual(self.mails, [])
+        self.assertEqual(self.slept, [])
+
+    def test_the_page_a_slash_redirect_leads_to_is_checked_too(self):
+        self.web.pages[p(1)] = Fetched(301, {"location": p(1) + "/"}, "", 0.1)
+        self.web.pages[p(1) + "/"] = Fetched(200, {}, page_html(noindex=True, url=p(1) + "/"), 0.2)
+        self.go()
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages set to noindex")
+
+    def test_https_and_www_moves_are_the_same_page(self):
+        moved = Fetched(301, {}, "", 0.1)
+        moved.location = "https://www.example.test/a/p2"
+        self.web.pages[p(2)] = moved
+        self.web.pages["https://www.example.test/a/p2"] = Fetched(200, {}, page_html(url=p(2)), 0.2)
+        self.go()
+        self.assertEqual(self.mails, [])
+
+    def test_a_redirect_to_another_page_is_still_a_problem(self):
+        self.web.pages[p(1)] = Fetched(301, {"location": f"{HOME}/a/elsewhere"}, "", 0.1)
+        self.go()
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages not answering 200")
+        self.assertIn("301 x1", self.mails[0][1])
+
+    def test_a_redirect_that_goes_round_in_circles_is_a_problem(self):
+        self.web.pages[p(1)] = Fetched(301, {"location": p(1)}, "", 0.1)
+        self.go()
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages not answering 200")
+
+    def test_addresses_with_a_query_string_are_not_key_pages(self):
+        rows = [{"keys": [f"{HOME}/a/p1?x=1"], "clicks": 900}, {"keys": [p(1)], "clicks": 5}, {"keys": [p(2)], "clicks": 4}]
+        urls, clicks = technical_run.key_page_set(self.site, HOME, rows)
+        self.assertEqual(urls, [p(1), p(2)])
+        self.assertEqual(clicks[HOME + "/a/p1"], 905)                  # its clicks still count for the page
+
+
 class PlantedProblems(Base):
 
     def plant(self):

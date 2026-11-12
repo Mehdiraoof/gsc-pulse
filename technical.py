@@ -385,6 +385,21 @@ def check_sitemaps(ctx: Context, robots_text) -> list:
     return out
 
 
+REDIRECTS = (301, 302, 303, 307, 308)
+
+
+def fetch_page(ctx: Context, url: str) -> Fetched:
+    """One key page. A redirect that only adds or removes a slash, or moves to https or www, leads to the same page: the
+    page it leads to is the one that is checked. A redirect to another page stays what it is: a change."""
+    f = ctx.fetch(url, False)
+    for _ in range(2):
+        target = urllib.parse.urljoin(url, f.location or f.headers.get("location", "")) if f.status in REDIRECTS else ""
+        if not target or target == url or content.url_key(target) != content.url_key(url):
+            break
+        url, f = target, ctx.fetch(target, False)
+    return f
+
+
 def check_keypages(ctx: Context, only=None) -> list:
     """The key pages (or, in the second round, only those that failed): answer, noindex, canonical, server errors."""
     urls = [u for u in ctx.key_urls if only is None or u in only]

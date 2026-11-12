@@ -160,7 +160,9 @@ def key_page_set(site, origin: str, rows: list) -> tuple:
         url = row["keys"][0]
         k = content.url_key(url)
         clicks[k] = clicks.get(k, 0) + int(row.get("clicks", 0))
-    ranked = sorted({content.url_key(r["keys"][0]): r["keys"][0] for r in rows}.items(), key=lambda kv: -clicks[kv[0]])
+    # a page address with a query string (filters, store views, tracking) is not a page to watch; its clicks still count
+    ranked = sorted({content.url_key(r["keys"][0]): r["keys"][0] for r in rows if "?" not in r["keys"][0]}.items(),
+                    key=lambda kv: -clicks[kv[0]])
     urls, seen = [], set()
     for k, url in ranked[:technical.KEY_PAGES]:
         urls.append(url)
