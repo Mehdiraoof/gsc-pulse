@@ -28,6 +28,8 @@ import technical
 from technical import TechState
 
 OVERVIEW, HEALTH, ROBOTS, STATE = "Overview", "Health Log", "Robots Versions", "_state"
+BLOCKED = "Checker Blocked"
+BLOCKED_HEADER = ["Address", "Note"]
 OVERVIEW_HEADER = ["Check", "Status", "Detail", "Open since", "Clicks (28 days)", "Last checked (UTC)"]
 HEALTH_HEADER = ["Date", "Time (UTC)", "Check", "Result", "Detail", "Pages", "Clicks (28 days)"]
 ROBOTS_HEADER = ["Date", "Time (UTC)", "robots.txt"]
@@ -84,7 +86,7 @@ def ensure_tabs(sheets, file_id: str):
         else:
             _add_tab(sheets, file_id, OVERVIEW, OVERVIEW_HEADER)
         titles[OVERVIEW] = None
-    for name, header, hidden in ((HEALTH, HEALTH_HEADER, False), (ROBOTS, ROBOTS_HEADER, False), (STATE, STATE_HEADER, True)):
+    for name, header, hidden in ((HEALTH, HEALTH_HEADER, False), (ROBOTS, ROBOTS_HEADER, False), (BLOCKED, BLOCKED_HEADER, False), (STATE, STATE_HEADER, True)):
         if name not in titles:
             _add_tab(sheets, file_id, name, header, hidden)
 
@@ -103,7 +105,7 @@ def health_rows(log: list, now: datetime) -> list:
     return [[day, clock, technical.name_of(l.key), l.result, l.detail, pages_text(l.pages), l.clicks or ""] for l in log]
 
 
-ORDER = ("home", "robots", "robots_block", "robots_changed", "sitemap", "sitemap_drop", "key_status", "key_noindex",
+ORDER = ("home", "robots", "robots_block", "robots_changed", "sitemap", "sitemap_drop", "key_status", "key_blocked", "key_noindex",
          "key_canonical", "server_errors", "sitemaps_api")
 
 
@@ -114,6 +116,8 @@ def entry_of(r, now: datetime) -> dict:
         status = "Not checked"
     elif r.note == "changed":
         status = "Changed"
+    elif r.note == "blocked":
+        status = "Blocked for checker only"
     elif r.note == "not confirmed":
         status = "OK (one failed check, not confirmed)"
     else:
@@ -204,6 +208,7 @@ def prepare(run, deps: Deps, now: datetime, log) -> Work:
         except Exception as e:                        # noqa: BLE001  without the clicks the checks still run, on the configured pages
             log(f"technical: {run.name}: the clicks could not be read ({type(e).__name__})")
     urls, clicks = key_page_set(site, origin, rows)
+    blocked = {content.url_key(r[0]) for r in tabs.read_rows(run.sheets, file_id, BLOCKED, "B") if r and str(r[0]).strip()}
     if deps.daily:
         urls = []                                   # the small daily check does not look at the key pages
     try:
@@ -214,7 +219,7 @@ def prepare(run, deps: Deps, now: datetime, log) -> Work:
         site=site, origin=origin, key_urls=urls, clicks=clicks, fetch=deps.fetch, get=deps.get,
         sitemaps_api=(lambda: deps.sitemaps_api(run)) if deps.sitemaps_api else None,
         prev_robots=state.get("robots", "text"), prev_counts=prev_counts,
-        extra_sitemaps=list(site.content.extra_sitemaps), daily=deps.daily)
+        extra_sitemaps=list(site.content.extra_sitemaps), daily=deps.daily, blocked=blocked)
     first = technical.check_all(ctx)
     return Work(run, label, file_id, state, ctx, first, created=created)
 

@@ -244,6 +244,8 @@ FAMILIES = {
                      "Compare the sitemap with the last one you know: find what removed the pages (a plugin, a filter, a failed build)."),
     "key_status": ("Key pages answer", "Key pages not answering 200",
                    "Open these pages: check for deleted pages, redirects or errors after a recent change."),
+    "key_blocked": ("Key pages blocked for checker", "Key pages blocked for the checker only",
+                     "These pages are live but refuse the checker (403); look at them with the index inspection instead."),
     "key_noindex": ("Key pages noindex", "Key pages set to noindex",
                     "Check the robots meta tag and the X-Robots-Tag header of these pages: a noindex keeps them out of Google."),
     "key_canonical": ("Key pages canonical", "Key pages point to another canonical",
@@ -289,6 +291,7 @@ class Context:
     prev_counts: dict = field(default_factory=dict)  # {sitemap address: number of pages} of the last good run
     extra_sitemaps: list = field(default_factory=list)
     daily: bool = False                            # the small daily check: the home page and robots.txt only
+    blocked: set = field(default_factory=set)      # content.url_key of the key pages that are known to refuse the checker only
     # filled while the checks run, saved afterwards
     robots_text: str = None
     sitemap_counts: dict = field(default_factory=dict)
@@ -403,7 +406,8 @@ def fetch_page(ctx: Context, url: str) -> Fetched:
 
 def check_keypages(ctx: Context, only=None) -> list:
     """The key pages (or, in the second round, only those that failed): answer, noindex, canonical, server errors."""
-    urls = [u for u in ctx.key_urls if only is None or u in only]
+    blocked = [u for u in ctx.key_urls if content.url_key(u) in ctx.blocked]       # listed by the owner: live, but refuse the checker
+    urls = [u for u in ctx.key_urls if u not in blocked and (only is None or u in only)]
     if not ctx.key_urls:
         return [Result(k, skipped=True, detail="no key pages known") for k in ("key_status", "key_noindex", "key_canonical", "server_errors")]
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
@@ -423,7 +427,7 @@ def check_keypages(ctx: Context, only=None) -> list:
             noindex.append(url)
         if facts.canonical and content.url_key(facts.canonical) != content.url_key(url):
             canon.append(url)
-    total = len(ctx.key_urls)
+    total = len(ctx.key_urls) - len(blocked)
 
     def make(key, bad, detail, count=None):
         return Result(key, not bad, pages=list(bad), clicks=ctx.clicks_of(bad), count=len(bad) if count is None else count,
@@ -431,13 +435,13 @@ def check_keypages(ctx: Context, only=None) -> list:
 
     shown = ", ".join(f"{'no answer' if c == 0 else c} x{n}" for c, n in sorted(codes.items()))
     share = len(server) / total if total else 0
-    return [
-        make("key_status", status_bad, f"{len(status_bad)} of {total} key pages did not answer 200 ({shown})"),
-        make("key_noindex", noindex, f"{len(noindex)} of {total} key pages tell search engines not to index them"),
-        make("key_canonical", canon, f"{len(canon)} of {total} key pages have a canonical that points to another page"),
-        make("server_errors", server if share > ctx.cfg.server_error_share else [],
-             f"{len(server)} of {total} key pages failed with a server error or no answer"),
+    out = [
+        make("key_status", status_bad,$1
     ]
+    if blocked:
+        out.append(Result("key_blocked", True, note="blocked", pages=blocked, clicks=ctx.clicks_of(blocked), count=len(blocked),
+                          detail=f"{len(blocked)} key pages are listed as blocked for the checker only: not checked here"))
+    return out
 
 
 def check_sitemaps_api(ctx: Context) -> list:
@@ -525,6 +529,9 @@ def confirm(first: Round, second: Round = None, ctx: Context = None) -> tuple:
             final.append(r)
         elif r.note == "changed":
             log.append(LogLine(r.key, "changed", r.detail))
+            final.append(r)
+        elif r.note == "blocked":
+            log.append(LogLine(r.key, "blocked for checker only", r.detail, r.pages, r.clicks))
             final.append(r)
         elif r.ok:
             log.append(LogLine(r.key, "ok", r.detail))

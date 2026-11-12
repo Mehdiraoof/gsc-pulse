@@ -190,6 +190,64 @@ class HealthyDay(Base):
         self.assertTrue(any(name == "Key pages answer" and res == "skipped" for name, res in self.log_results()))
 
 
+class CheckerBlocked(Base):
+    """Key pages that are live but refuse the checker (403) are listed in the Checker Blocked tab: not checked, not alerted."""
+
+    def block(self, *addresses):
+        tab = self.fs.books[self.file_id()]["Checker Blocked"]
+        self.fs.write_cells(tab, 2, 1, [[a, "live and indexed; refuses the checker"] for a in addresses])
+
+    def test_the_tab_is_made_with_the_sheet(self):
+        self.go()
+        self.assertEqual(self.tab("Checker Blocked"), [["Address", "Note"]])
+
+    def test_a_listed_page_is_not_fetched_not_alerted_and_said_in_the_log_and_overview(self):
+        self.go()
+        self.block(p(3))
+        self.web.pages[p(3)] = Fetched(403, {}, "", 0.1)
+        asked = len(self.web.calls)
+        self.go()
+        self.assertEqual(self.mails, [])
+        self.assertEqual(self.slept, [])                                       # nothing failed: no second check
+        self.assertNotIn(p(3), self.web.calls[asked:])
+        self.assertIn(("Key pages blocked for checker", "blocked for checker only"), self.log_results())
+        overview = {r[0]: r[1] for r in self.tab("Overview")[4:] if len(r) > 1}
+        self.assertEqual(overview["Key pages blocked for checker"], "Blocked for checker only")
+        self.assertEqual(overview["Key pages answer"], "OK")
+        self.assertEqual(self.state().open(), {})
+
+    def test_the_other_pages_are_still_watched(self):
+        self.go()
+        self.block(p(3))
+        self.web.pages[p(3)] = Fetched(403, {}, "", 0.1)
+        self.web.pages[p(4)] = Fetched(404, {}, "", 0.1)
+        self.go()
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages not answering 200")
+        self.assertIn("1 of 19 key pages", self.mails[0][1])                 # the listed page is not counted
+        self.assertNotIn("/a/p3", self.mails[0][1])
+
+    def test_an_address_written_another_way_still_matches(self):
+        self.go()
+        self.block("http://www.example.test/a/p3/")
+        self.web.pages[p(3)] = Fetched(403, {}, "", 0.1)
+        self.go()
+        self.assertEqual(self.mails, [])
+
+    def test_a_problem_found_before_the_page_was_listed_goes_quietly(self):
+        self.web.pages[p(3)] = Fetched(403, {}, "", 0.1)
+        self.go(mail=False)                                                    # found by a run that told nobody
+        self.assertIn("key_status", self.state().open())
+        self.block(p(3))
+        self.go()
+        self.assertEqual(self.mails, [])
+        self.assertEqual(self.state().open(), {})
+
+    def test_a_page_that_is_not_listed_and_gives_403_is_still_a_problem(self):
+        self.web.pages[p(3)] = Fetched(403, {}, "", 0.1)
+        self.go()
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages not answering 200")
+
+
 class SmallDailyCheck(Base):
     """On the days between the weekly full checks only the home page and robots.txt are looked at."""
 
