@@ -27,6 +27,7 @@ from datetime import date, timedelta
 
 import aio_import
 import bing
+import bing_ai
 import content
 import content_sheet as cs
 import history
@@ -39,6 +40,7 @@ import tabs
 WEEKLY, MONTHLY = "Bing Weekly", "Bing Monthly"
 KEYWORDS, PAGES = "Bing Keywords", "Bing Pages"
 CRAWL, CITATIONS = "Bing Crawl", "Bing AI Citations"
+STATUS = "Bing Status"
 
 COL_CLICKS, COL_IMPR, COL_AI = "Bing Clicks 90d", "Bing Impr. 90d", "Bing AI Citations"
 DASHBOARD_COLUMNS = (COL_CLICKS, COL_IMPR, COL_AI)
@@ -59,6 +61,7 @@ PERIOD_NOTE = "Period (month; Bing's weekly data)"
 KEYWORDS_HEADER = [PERIOD_NOTE] + reports.KEYWORDS_HEADER[1:]
 PAGES_HEADER = [PERIOD_NOTE] + reports.PAGES_HEADER[1:]
 CITATIONS_HEADER = ["Period", "Kind", "Item", "Citations", "Citations prev", "Citations diff", "Path"]
+STATUS_HEADER = ["Item", "Value"]
 
 STAT_FIELDS = (("CrawledPages", "Crawled Pages"), ("CrawlErrors", "Crawl Errors"), ("InIndex", "In Index"),
                ("InLinks", "In Links"), ("Code2xx", "Code 2xx"), ("Code301", "Code 301"), ("Code302", "Code 302"),
@@ -69,7 +72,7 @@ CRAWL_HEADER = (["Kind", "Date or Page"] + [label for _, label in STAT_FIELDS] +
 CRAWL_LAST = cs.letters(len(CRAWL_HEADER) - 1)
 
 TABS = [(WEEKLY, WEEKLY_HEADER), (MONTHLY, MONTHLY_HEADER), (KEYWORDS, KEYWORDS_HEADER), (PAGES, PAGES_HEADER),
-        (CRAWL, CRAWL_HEADER), (CITATIONS, CITATIONS_HEADER)]
+        (CRAWL, CRAWL_HEADER), (CITATIONS, CITATIONS_HEADER), (STATUS, STATUS_HEADER)]
 
 
 @dataclass
@@ -87,7 +90,9 @@ class BingResult:
     problems: list = field(default_factory=list)      # calls that failed or tabs that could not be read
     last_month: tuple = None               # (label, clicks, impressions) of the newest complete month
     no_data: bool = False
-    ai_problems: list = field(default_factory=list)
+    ai_problems: list = field(default_factory=list)   # export files that could not be imported (with the file name: for the Bing Status tab only)
+    ai_notes: list = field(default_factory=list)      # other things to know about the export files
+    ai_files: int = 0                      # files in the export folder
 
     def text(self) -> str:
         if self.no_data and not self.ai_months:
@@ -130,6 +135,9 @@ class BingData:
     issues: list = field(default_factory=list)       # dicts as Bing gives them
     problems: list = field(default_factory=list)
     got: set = field(default_factory=set)            # the datasets Bing answered (an empty answer counts)
+    address: str = ""                                 # the address of the site that was read (as the Bing account writes it)
+    verified: bool = False
+    listed: list = field(default_factory=list)       # every address of this site in the account
 
     @property
     def empty(self) -> bool:
@@ -160,27 +168,57 @@ def stats_of(rows: list) -> list:
     return out
 
 
+def freshest(access, candidates: list, sleep=time.sleep) -> tuple:
+    """Of several entries of one site (http / https, with / without www), the one whose traffic is newest (the newest day
+    with clicks or impressions, then the most impressions): Bing keeps the data under the address it crawls. Returns the
+    entry and the traffic rows already read for it. An entry whose traffic cannot be read is passed over."""
+    best, best_key, best_rows = candidates[0], None, {}
+    for entry in candidates:
+        sleep(CALL_PAUSE_S)
+        try:
+            rows = bing.rows(access.get("GetRankAndTrafficStats", siteUrl=entry["Url"]))
+        except bing.BingError:
+            continue
+        day = bing.last_day(rows, True) or date.min
+        key = (day, sum(_int(r.get("Impressions")) for r in rows))
+        if best_key is None or key > best_key:
+            best, best_key, best_rows = entry, key, {"traffic": rows}
+    return best, best_rows
+
+
 def fetch(access, site, log=print, sleep=time.sleep) -> BingData:
+
     """Everything Bing says about one site. A call that fails is recorded and the others still run; the site not
     being in the account is a BingError (nothing to read)."""
     data = BingData()
     user_sites = bing.rows(access.get("GetUserSites"))
     wanted = site.bing.site_url or site.site_url
-    entry = bing.match_site(user_sites, wanted)
-    if not entry:
-        raise bing.BingError("the site is not in the Bing account")
+    candidates = bing.matching_sites(user_sites, wanted)
+    if site.bing.site_url:                       # the owner named the address: exactly that one, as the account writes it
+        candidates = [e for e in candidates if bing.same_address(e.get("Url"), site.bing.site_url)]
+    if not candidates:
+        raise bing.BingError("the site is not in the Bing account" if not site.bing.site_url
+                             else "the address named in the configuration is not in the Bing account")
+    data.listed = [str(e.get("Url", "")) for e in candidates]
+    entry, rows_read = candidates[0], {}
+    if len(candidates) > 1:                      # http and https, with and without www, are different entries in Bing
+        entry, rows_read = freshest(access, candidates, sleep)
     url = entry["Url"]
+    data.address, data.verified = url, bool(entry.get("IsVerified"))
     if not entry.get("IsVerified"):
         data.problems.append("the site is not verified in the Bing account")
     for name, method in (("traffic", "GetRankAndTrafficStats"), ("queries", "GetQueryStats"),
                          ("pages", "GetPageStats"), ("crawl", "GetCrawlStats"), ("issues", "GetCrawlIssues")):
-        sleep(CALL_PAUSE_S)
-        try:
-            rows = bing.rows(access.get(method, siteUrl=url))
-        except bing.BingError as e:
-            data.problems.append(f"{name}: {e}")
-            log(f"  bing: {name} could not be read ({e})")
-            continue
+        if name in rows_read:
+            rows = rows_read[name]
+        else:
+            sleep(CALL_PAUSE_S)
+            try:
+                rows = bing.rows(access.get(method, siteUrl=url))
+            except bing.BingError as e:
+                data.problems.append(f"{name}: {e}")
+                log(f"  bing: {name} could not be read ({e})")
+                continue
         data.got.add(name)
         if name == "traffic":
             data.traffic = traffic_of(rows)
@@ -195,9 +233,39 @@ def fetch(access, site, log=print, sleep=time.sleep) -> BingData:
     return data
 
 
-# --------------------------------------------------------------------------- #
+def newest(data: "BingData") -> tuple:
+    """(newest day with clicks or impressions, newest day of any traffic row, newest week of the query data, of the page data);
+    None where Bing gave nothing."""
+    positive = [d for d, (c, n) in data.traffic.items() if c or n]
+    return (max(positive) if positive else None, max(data.traffic) if data.traffic else None,
+            max((d for d, *_ in data.queries), default=None), max((d for d, *_ in data.pages), default=None))
+
+
+def write_status(sheets, reports_id: str, data: "BingData", today: date, result: "BingResult" = None, folder: str = ""):
+    """The Bing Status tab: which address of the site was read, which others the account lists, and how fresh Bing's data is.
+    The tab is rewritten whole every run; it is only for the owner to read."""
+    day = lambda d: d.isoformat() if d else "none"
+    positive, any_day, queries, pages = newest(data)
+    rows = [["Address read", data.address or "none"],
+            ["How it is written", bing.address_form(data.address) if data.address else ""],
+            ["Verified in the Bing account", "yes" if data.verified else "no"],
+            ["Addresses of this site in the account", " | ".join(data.listed)],
+            ["Newest day with clicks or impressions", day(positive)],
+            ["Newest day in the traffic data", day(any_day)],
+            ["Newest week with query data", day(queries)],
+            ["Newest week with page data", day(pages)],
+            ["Checked", today.isoformat()]]
+    if result is not None:
+        rows.append(["Bing AI export folder", folder or "not set up in this run"])
+        rows.append(["Files in that folder / months stored", f"{result.ai_files} files / {result.ai_months} months"])
+        rows += [["AI export: not imported", t] for t in result.ai_problems] + [["AI export: note", t] for t in result.ai_notes]
+    tabs.rewrite(sheets, reports_id, STATUS, STATUS_HEADER, rows)
+
+
+
+# ---------------------------------------------------------------------------- #
 # Numbers of a period
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
 
 def sum_traffic(traffic: dict, first: date, last: date) -> tuple:
     clicks = impr = 0
@@ -333,7 +401,6 @@ def write_crawl(sheets, reports_id: str, data: BingData, today: date, result: Bi
 # AI citations: the monthly export of Bing's AI performance report
 # --------------------------------------------------------------------------- #
 
-CIT_TAB = re.compile(r"Bing AI (\d{4})-(\d{2}) (Pages|Queries)")
 CIT_WORDS = ("citation", "cited", "count", "mention")
 QUERY_WORDS = ("quer", "ground", "prompt", "search", "phrase", "keyword", "question")
 
@@ -411,32 +478,28 @@ def citation_rows(stored: dict) -> list:
     return rows
 
 
-def run_citations(sheets, reports_id: str, today: date, result: BingResult, log=print):
-    """Reads the export tabs the owner copied into the Reports sheet ("Bing AI 2026-10 Pages" and "... Queries"),
-    stores them in Bing AI Citations and deletes the copies once stored. A tab that cannot be read stays as it is and
-    is named in the log. No export for a month is no problem."""
-    titles, _ = history.grid_info(sheets, reports_id)
-    found, parsed = {}, {}
-    for title in sorted(titles):
-        if not title.startswith("Bing AI ") or title == CITATIONS:
-            continue
-        m = CIT_TAB.fullmatch(title)
-        if not m or not 1 <= int(m.group(2)) <= 12:
-            result.ai_problems.append(f'the tab "{title}" was not imported: its name must look like '
-                                      f'"Bing AI 2026-10 Pages" or "Bing AI 2026-10 Queries"')
-            continue
-        found[(f"{m.group(1)}-{m.group(2)}", m.group(3))] = title
-    for (label, kind), title in sorted(found.items()):
+def import_exports(sheets, reports_id: str, exports: list, today: date, result: BingResult, log=print):
+    """Stores the export files of the site's Drive folder (bing_ai.Export) in the Bing AI Citations tab, month over month. The
+    files stay where they are; reading them again changes nothing (a month and kind that is read again replaces what was
+    stored for it; a later file of the same month and kind wins). A file that cannot be read is said in the Bing Status tab,
+    by name, and in the log, without it. No file for a month is no problem."""
+    parsed = {}
+    result.ai_files = len(exports)
+    for ex in sorted(exports, key=lambda e: e.modified):
+        label, guessed = bing_ai.month_of(ex.name, ex.modified)
+        kind = bing_ai.kind_of(ex.name, ex.values)
         try:
-            data, skipped = parse_citations(tabs.read_tab(sheets, reports_id, title), kind)
+            data, skipped = parse_citations(ex.values, kind)
         except aio_import.AioImportError as e:
-            result.ai_problems.append(f'the tab "{title}" was not imported: {e}')
+            result.ai_problems.append(f'"{ex.name}" was not imported: {e}')
             continue
+        if (label, kind) in parsed:
+            result.ai_notes.append(f'"{ex.name}" replaces an earlier file of the same month and kind ({label} {kind})')
+        if guessed:
+            result.ai_notes.append(f'"{ex.name}": its name has no month, so {label} was taken (the month before the file was changed)')
         parsed[(label, kind)] = data
-        if skipped:
-            log(f"  bing AI {label}: {skipped} rows of the {kind} tab were not data rows and were skipped")
-    for problem in result.ai_problems:
-        log(f"  bing AI: {problem}")
+    if exports:
+        log(f"  bing AI: {len(exports)} files in the folder, {len(parsed)} lists read, {len(result.ai_problems)} not imported")
     if parsed:
         stored = load_citations(sheets, reports_id)
         replaced = {(label, "Page" if kind == "Pages" else "Query") for label, kind in parsed}
@@ -444,10 +507,7 @@ def run_citations(sheets, reports_id: str, today: date, result: BingResult, log=
         for (label, kind), data in parsed.items():
             for item, n in data.items():
                 stored[(label, "Page" if kind == "Pages" else "Query", item)] = n
-        tabs.rewrite(sheets, reports_id, CITATIONS, CITATIONS_HEADER, citation_rows(stored))     # stored first ...
-        tabs.delete_tabs(sheets, reports_id, [titles[found[k]] for k in parsed if titles.get(found[k]) is not None])
-        for label in sorted({label for label, _ in parsed}):
-            log(f"  bing AI {label}: imported {sum(len(d) for (lb, _), d in parsed.items() if lb == label)} rows")
+        tabs.rewrite(sheets, reports_id, CITATIONS, CITATIONS_HEADER, citation_rows(stored))
     result.ai_months = len({k[0] for k in load_citations(sheets, reports_id)})
 
 
@@ -598,7 +658,7 @@ def fill_dashboard(sheets, file_id: str, tab_names: list, page_stats: dict, cita
 # One site
 # --------------------------------------------------------------------------- #
 
-def run_bing(sheets, site, access, today: date, log=print, drive=None, sleep=time.sleep) -> BingResult:
+def run_bing(sheets, site, access, today: date, log=print, drive=None, sleep=time.sleep, exports=None, folder: str = "") -> BingResult:
     """The Bing tabs of the site's Reports sheet and the Bing columns of its content dashboard. `access` is a bing.Access
     (the data code does not care how it was obtained). Raises only what is wrong with the sheets; a Bing error is
     recorded in the result and everything that does not need Bing still runs."""
@@ -621,9 +681,20 @@ def run_bing(sheets, site, access, today: date, log=print, drive=None, sleep=tim
     titles, _ = history.grid_info(sheets, rid)
     for name, header in TABS:
         tabs.ensure_tab(sheets, rid, titles, name, header)
-    run_citations(sheets, rid, today, result, log)
+    if exports is not None:                      # the files of the site's Bing AI export folder (a callable; it may raise)
+        try:
+            import_exports(sheets, rid, exports(), today, result, log)
+        except Exception as e:  # noqa: BLE001  an export that cannot be read never stops the Bing data
+            result.ai_problems.append(f"the export folder could not be read ({type(e).__name__})")
+            log(f"  bing AI: the export folder could not be read ({type(e).__name__})")
+    result.ai_months = len({k[0] for k in load_citations(sheets, rid)})
     write_periods(sheets, rid, data, site, today, result, log)
     write_crawl(sheets, rid, data, today, result)
+    if data.address:
+        write_status(sheets, rid, data, today, result, folder)
+        positive, _, queries, pages = newest(data)
+        log(f"  bing: address read: {bing.address_form(data.address)} ({len(data.listed)} listed in the account); "
+            f"newest day with clicks or impressions {positive or 'none'}, newest week of queries {queries or 'none'}, of pages {pages or 'none'}")
 
     if drive is not None and site.content.enabled and site.auth == "me":
         file_id = provision.existing_content_file(drive, sheets, site)

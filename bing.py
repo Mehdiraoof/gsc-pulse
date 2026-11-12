@@ -122,13 +122,33 @@ def host_of(site_url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
-def match_site(user_sites: list, site_url: str) -> dict:
-    """The entry of the account's site list ({Url, IsVerified, ...}) that is this site, by domain; {} when none.
-    An address with https is preferred over http, a verified one over one that is not."""
+def matching_sites(user_sites: list, site_url: str) -> list:
+    """Every entry of the account's site list ({Url, IsVerified, ...}) that is this site by domain (http and https, with
+    and without www are different entries in Bing), the most likely first: verified, then https, then the shortest."""
     host = host_of(site_url)
     found = [s for s in user_sites if isinstance(s, dict) and host_of(str(s.get("Url", ""))) == host]
     found.sort(key=lambda s: (not s.get("IsVerified"), not str(s.get("Url", "")).startswith("https"), len(str(s.get("Url", "")))))
+    return found
+
+
+def match_site(user_sites: list, site_url: str) -> dict:
+    """The entry that is this site, by domain; {} when none (the first of matching_sites)."""
+    found = matching_sites(user_sites, site_url)
     return found[0] if found else {}
+
+
+def address_form(url: str) -> str:
+    """How an address is written, without the address: "https, without www"."""
+    text = (url or "").strip().lower()
+    scheme = "https" if text.startswith("https://") else "http" if text.startswith("http://") else "no scheme"
+    host = urllib.parse.urlsplit(text).netloc or text.split("/")[0]
+    return f"{scheme}, {'with' if host.startswith('www.') else 'without'} www"
+
+
+def same_address(a: str, b: str) -> bool:
+    """The same address, exactly as Bing writes it: scheme, www and host must match; a slash at the end does not matter."""
+    norm = lambda u: (str(u or "").strip().lower().rstrip("/"))
+    return norm(a) == norm(b)
 
 
 # --------------------------------------------------------------------------- #
@@ -163,9 +183,26 @@ CHECK_CALLS = (("traffic", "GetRankAndTrafficStats"), ("queries", "GetQueryStats
                ("crawl stats", "GetCrawlStats"), ("crawl issues", "GetCrawlIssues"))
 
 
+def _num(value) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def last_day(answer_rows: list, positive: bool = False):
+    """The newest date in the rows of an answer; with `positive` only a day that has clicks or impressions. None when none."""
+    days = [parse_date(r.get("Date")) for r in answer_rows
+            if not positive or _num(r.get("Clicks")) > 0 or _num(r.get("Impressions")) > 0]
+    days = [d for d in days if d]
+    return max(days) if days else None
+
+
 def check_lines(access: Access, site_list: list, today=None) -> list:
-    """One line per site: is it in the Bing account and verified, and can the key read its traffic, query, page and crawl
-    data. Counts only: no site address, no query, no page. Nothing is changed."""
+    """For every site, every address of it that the Bing account lists (http and https, with and without www are
+    different entries): how it is written, whether it is verified, and what the key can read from it (rows and the newest
+    day of the traffic, query and page data). Counts, forms and dates only: no site address, no query, no page. Nothing
+    is changed."""
     today = today or datetime.now(timezone.utc).date()
     try:
         user_sites = rows(access.get("GetUserSites"))
@@ -173,21 +210,26 @@ def check_lines(access: Access, site_list: list, today=None) -> list:
         return [f"the site list could not be read ({e})"]
     lines = [f"the account lists {len(user_sites)} sites, {sum(1 for s in user_sites if s.get('IsVerified'))} verified"]
     for site in site_list:
-        entry = match_site(user_sites, site.site_url)
-        if not entry:
+        entries = matching_sites(user_sites, site.site_url)
+        if not entries:
             lines.append(f"{site.name}: not in the Bing account")
             continue
-        parts = [f"in the account, {'verified' if entry.get('IsVerified') else 'NOT verified'}"]
-        for label, method in CHECK_CALLS:
-            try:
-                got = rows(access.get(method, siteUrl=entry["Url"]))
-            except BingError as e:
-                parts.append(f"{label}: failed ({e})")
-                continue
-            text = f"{label}: {len(got)} rows"
-            if method == "GetRankAndTrafficStats" and got:
-                last = [r for r in got if (parse_date(r.get("Date")) or today) >= today - timedelta(days=30)]
-                text += f" (last 30 days: {sum(int(r.get('Clicks') or 0) for r in last)} clicks, {sum(int(r.get('Impressions') or 0) for r in last)} impressions)"
-            parts.append(text)
-        lines.append(f"{site.name}: " + "; ".join(parts))
+        lines.append(f"{site.name}: {len(entries)} address{'es' if len(entries) != 1 else ''} of this site in the account")
+        for i, entry in enumerate(entries, start=1):
+            parts = [f"{address_form(entry['Url'])}, {'verified' if entry.get('IsVerified') else 'NOT verified'}"]
+            for label, method in CHECK_CALLS:
+                try:
+                    got = rows(access.get(method, siteUrl=entry["Url"]))
+                except BingError as e:
+                    parts.append(f"{label}: failed ({e})")
+                    continue
+                text = f"{label}: {len(got)} rows"
+                if method in ("GetRankAndTrafficStats", "GetQueryStats", "GetPageStats") and last_day(got):
+                    text += f", newest {last_day(got)}"
+                if method == "GetRankAndTrafficStats" and got:
+                    last = [r for r in got if (parse_date(r.get("Date")) or today) >= today - timedelta(days=30)]
+                    text += (f", newest day with clicks or impressions {last_day(got, True)}, last 30 days: "
+                             f"{sum(_num(r.get('Clicks')) for r in last)} clicks, {sum(_num(r.get('Impressions')) for r in last)} impressions")
+                parts.append(text)
+            lines.append(f"{site.name} address {i}: " + "; ".join(parts))
     return lines

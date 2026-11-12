@@ -97,6 +97,27 @@ class SiteTests(unittest.TestCase):
         self.assertEqual(bing.match_site(SITES, "sc-domain:missing.test"), {})
         self.assertEqual(bing.host_of("https://www.Example.test:8080/x"), "example.test")
 
+    def test_every_entry_of_a_site_is_listed_the_likeliest_first(self):
+        found = bing.matching_sites(SITES, "sc-domain:example.test")
+        self.assertEqual([s["Url"] for s in found], ["https://www.example.test/", "http://example.test/"])
+        self.assertEqual(bing.matching_sites(SITES, "sc-domain:missing.test"), [])
+
+    def test_how_an_address_is_written_and_whether_two_are_the_same(self):
+        self.assertEqual(bing.address_form("https://www.example.test/"), "https, with www")
+        self.assertEqual(bing.address_form("http://example.test"), "http, without www")
+        self.assertEqual(bing.address_form("example.test"), "no scheme, without www")
+        self.assertTrue(bing.same_address("https://www.example.test/", "https://WWW.example.test"))
+        self.assertFalse(bing.same_address("https://www.example.test/", "https://example.test/"))
+        self.assertFalse(bing.same_address("http://example.test/", "https://example.test/"))
+
+    def test_the_newest_day_of_an_answer(self):
+        rows = [{"Date": "/Date(1793000000000)/", "Clicks": 0, "Impressions": 0},
+                {"Date": "/Date(1792000000000)/", "Clicks": 2, "Impressions": 9}]
+        self.assertEqual(bing.last_day(rows), date(2026, 10, 26))
+        self.assertEqual(bing.last_day(rows, positive=True), date(2026, 10, 14))
+        self.assertIsNone(bing.last_day([]))
+        self.assertIsNone(bing.last_day([{"Query": "no date"}]))
+
     def test_bing_dates(self):
         self.assertEqual(bing.parse_date("/Date(1316156400000-0700)/"), date(2011, 9, 16))
         self.assertEqual(bing.parse_date("2026-10-03T00:00:00-07:00"), date(2026, 10, 3))
@@ -114,12 +135,15 @@ class CheckTests(unittest.TestCase):
     def test_counts_only_for_each_site(self):
         lines = self.lines(good())
         self.assertEqual(lines[0], "the account lists 3 sites, 2 verified")
-        self.assertIn("site-1: in the account, verified", lines[1])
-        self.assertIn("queries: 3 rows", lines[1])
-        self.assertIn("pages: 1 rows", lines[1])
-        self.assertIn("crawl stats: 5 rows", lines[1])
-        self.assertIn("crawl issues: 2 rows", lines[1])
-        self.assertEqual(lines[2], "site-2: not in the Bing account")
+        self.assertEqual(lines[1], "site-1: 2 addresses of this site in the account")
+        self.assertIn("site-1 address 1: https, with www, verified", lines[2])
+        self.assertIn("site-1 address 2: http, without www, verified", lines[3])
+        self.assertIn("queries: 3 rows", lines[2])
+        self.assertIn("pages: 1 rows", lines[2])
+        self.assertIn("crawl stats: 5 rows", lines[2])
+        self.assertIn("crawl issues: 2 rows", lines[2])
+        self.assertIn("newest day with clicks or impressions 2026-", lines[2])
+        self.assertEqual(lines[4], "site-2: not in the Bing account")
         text = "\n".join(lines)
         for secret in ("example.test", KEY, "https://"):
             self.assertNotIn(secret, text)
@@ -127,7 +151,7 @@ class CheckTests(unittest.TestCase):
     def test_a_failed_call_is_said_not_raised(self):
         replies = good()
         replies["GetQueryStats"] = answer({"ErrorCode": 5, "Message": "Quota"}, 400)
-        line = self.lines(replies)[1]
+        line = self.lines(replies)[2]
         self.assertIn("queries: failed (GetQueryStats: HTTP 400 (Quota 5))", line)
         self.assertIn("pages: 1 rows", line)
 
@@ -141,8 +165,8 @@ class CheckTests(unittest.TestCase):
             def get(self, method, **params):
                 return {"GetUserSites": SITES}.get(method, [{"Query": "q"}])
         lines = self.lines({}, access=FakeOAuth())
-        self.assertIn("site-1: in the account, verified", lines[1])
-        self.assertIn("queries: 1 rows", lines[1])
+        self.assertIn("site-1 address 1: https, with www, verified", lines[2])
+        self.assertIn("queries: 1 rows", lines[2])
 
 
 class LogTests(unittest.TestCase):

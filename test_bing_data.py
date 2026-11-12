@@ -11,6 +11,7 @@ from unittest import mock
 
 import aio_import
 import bing
+import bing_ai
 import bing_data
 import content
 import gsc_pulse
@@ -82,6 +83,8 @@ class FakeAccess(bing.Access):
     def get(self, method, **params):
         self.calls.append(method)
         reply = self.replies[method]
+        if callable(reply):
+            reply = reply(params)                       # an answer that depends on the address asked about
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -148,10 +151,14 @@ class Base(unittest.TestCase):
         self.fs.add_book("REP")
         self.site = make_site(sheet_id="DASH")
         self.logs = []
+        self.exports = []
 
-    def run_bing(self, replies=None, today=TODAY, site=None, drive=None):
+    def put_export(self, name, rows, modified=date(2026, 11, 2)):
+        self.exports.append(bing_ai.Export(name, modified, rows))
+
+    def run_bing(self, replies=None, today=TODAY, site=None, drive=None, exports=True):
         return bing_data.run_bing(self.fs, site or self.site, FakeAccess(replies or answers()), today, self.logs.append,
-                                  drive=drive, sleep=lambda s: None)
+                                  drive=drive, sleep=lambda s: None, exports=(lambda: list(self.exports)) if exports else None)
 
     def tab(self, name, book="REP"):
         return self.fs.books[book][name].data
@@ -416,8 +423,8 @@ class DashboardTests(Base):
         self.assertEqual(self.value(2, bing_data.COL_CLICKS), 0)
 
     def test_citations_of_the_newest_month_fill_the_third_column(self):
-        self.put_tab("Bing AI 2026-09 Pages", [["Cited page", "Citations"], [A, 1]])
-        self.put_tab("Bing AI 2026-10 Pages", [["Cited page", "Citations"], [A + "#section", 12], [B, 3]])
+        self.put_export("2026-09 cited pages.csv", [["Cited page", "Citations"], [A, 1]])
+        self.put_export("2026-10 cited pages.csv", [["Cited page", "Citations"], [A + "#section", 12], [B, 3]])
         self.run_bing(drive=object())
         header, _ = self.dash()
         at = content.HEADERS.index("Ranking Queries") + 1
@@ -426,7 +433,7 @@ class DashboardTests(Base):
 
     def test_the_citations_column_added_later_goes_next_to_the_other_two(self):
         self.run_bing(drive=object())
-        self.put_tab("Bing AI 2026-10 Pages", [["Cited page", "Citations"], [A, 12]])
+        self.put_export("2026-10 cited pages.csv", [["Cited page", "Citations"], [A, 12]])
         self.run_bing(drive=object())
         header, _ = self.dash()
         at = header.index(bing_data.COL_CLICKS)
@@ -440,25 +447,95 @@ class DashboardTests(Base):
         self.assertEqual(self.snapshot("DASH"), before)
 
 
+FRESH, STALE = "http://example.test/", "https://www.example.test/"
+VARIANTS = [{"Url": STALE, "IsVerified": True}, {"Url": FRESH, "IsVerified": True}]
+
+
+def by_address(fresh_rows, stale_rows):
+    return lambda params: fresh_rows if params.get("siteUrl") == FRESH else stale_rows
+
+
+class AddressTests(Base):
+    """http and https, with and without www, are different entries in the Bing account: the one with the newest data is read."""
+
+    OLD = daily(date(2026, 5, 3), date(2026, 8, 30), lambda d: (1, 5))
+    NEW = daily(date(2026, 5, 3), date(2026, 11, 6), traffic_fn)
+
+    def test_the_entry_with_the_newest_traffic_is_read(self):
+        result = self.run_bing(answers(GetUserSites=VARIANTS, GetRankAndTrafficStats=by_address(self.NEW, self.OLD)))
+        status = dict(self.rows(bing_data.STATUS)[i][:2] for i in range(len(self.rows(bing_data.STATUS))))
+        self.assertEqual(status["Address read"], FRESH)
+        self.assertEqual(status["How it is written"], "http, without www")
+        self.assertEqual(status["Addresses of this site in the account"], f"{STALE} | {FRESH}")
+        self.assertEqual(status["Newest day with clicks or impressions"], "2026-11-06")
+        self.assertTrue(self.rows(bing_data.MONTHLY))
+        self.assertFalse(result.no_data)
+
+    def test_the_other_way_round_too(self):
+        self.run_bing(answers(GetUserSites=VARIANTS, GetRankAndTrafficStats=by_address(self.OLD, self.NEW)))
+        status = {r[0]: r[1] for r in self.rows(bing_data.STATUS)}
+        self.assertEqual(status["Address read"], STALE)
+        self.assertEqual(status["Newest day with clicks or impressions"], "2026-11-06")
+
+    def test_an_address_named_in_the_configuration_is_read_exactly(self):
+        self.site.bing.site_url = STALE
+        self.run_bing(answers(GetUserSites=VARIANTS, GetRankAndTrafficStats=by_address(self.NEW, self.OLD)))
+        status = {r[0]: r[1] for r in self.rows(bing_data.STATUS)}
+        self.assertEqual(status["Address read"], STALE)
+        self.assertEqual(status["Newest day with clicks or impressions"], "2026-08-30")
+
+    def test_a_configured_address_that_is_not_in_the_account_is_said(self):
+        self.site.bing.site_url = "https://nowhere.test/"
+        result = self.run_bing(answers(GetUserSites=VARIANTS))
+        self.assertTrue(result.no_data)
+        self.assertTrue(any("address named in the configuration" in line for line in self.logs))
+
+    def test_one_entry_is_read_without_asking_about_the_others(self):
+        access = FakeAccess(answers())
+        bing_data.run_bing(self.fs, self.site, access, TODAY, self.logs.append, sleep=lambda s: None)
+        self.assertEqual(access.calls.count("GetRankAndTrafficStats"), 1)
+
+    def test_an_entry_that_cannot_be_read_is_passed_over(self):
+        def sometimes(params):
+            if params.get("siteUrl") == STALE:
+                raise bing.BingError("GetRankAndTrafficStats: HTTP 500")
+            return self.NEW
+        self.run_bing(answers(GetUserSites=VARIANTS, GetRankAndTrafficStats=sometimes))
+        self.assertEqual({r[0]: r[1] for r in self.rows(bing_data.STATUS)}["Address read"], FRESH)
+
+    def test_the_log_says_the_form_and_the_dates_never_the_address(self):
+        self.run_bing(answers(GetUserSites=VARIANTS, GetRankAndTrafficStats=by_address(self.NEW, self.OLD)))
+        line = next(l for l in self.logs if "address read:" in l)
+        self.assertIn("http, without www", line)
+        self.assertIn("2 listed", line)
+        self.assertIn("2026-11-06", line)
+        self.assertNotIn("example.test", "\n".join(self.logs))
+
+    def test_the_status_tab_says_where_the_export_folder_is(self):
+        self.run_bing()
+        self.assertEqual({r[0]: r[1] for r in self.rows(bing_data.STATUS)}["Bing AI export folder"], "not set up in this run")
+        bing_data.run_bing(self.fs, self.site, FakeAccess(answers()), TODAY, self.logs.append, sleep=lambda s: None,
+                           exports=lambda: [], folder="https://drive.example/folders/F1")
+        self.assertEqual({r[0]: r[1] for r in self.rows(bing_data.STATUS)}["Bing AI export folder"], "https://drive.example/folders/F1")
+
+
 class CitationTests(Base):
 
-    def test_a_copied_export_is_stored_and_its_tabs_are_removed(self):
-        self.put_tab("Bing AI 2026-10 Pages", [["Cited pages", "Citations", "Date"], [A, 12, "2026-10-03"], [B + "#x", 3, "2026-10-04"]])
-        self.put_tab("Bing AI 2026-10 Queries", [["Grounding query", "Citations"], ["how to  plant", 7], ["garden shoes", 4]])
+    def test_an_export_file_is_stored(self):
+        self.put_export("2026-10 cited pages.csv", [["Cited pages", "Citations", "Date"], [A, 12, "2026-10-03"], [B + "#x", 3, "2026-10-04"]])
+        self.put_export("2026-10 grounding queries.csv", [["Grounding query", "Citations"], ["how to  plant", 7], ["garden shoes", 4]])
         result = self.run_bing()
         rows = self.rows(bing_data.CITATIONS)
         self.assertEqual([r[:4] for r in rows],
                          [["2026-10", "Page", A, 12], ["2026-10", "Page", B, 3],
                           ["2026-10", "Query", "how to plant", 7], ["2026-10", "Query", "garden shoes", 4]])
         self.assertEqual(rows[0][6], "/article/a")
-        self.assertNotIn("Bing AI 2026-10 Pages", self.fs.books["REP"])
-        self.assertNotIn("Bing AI 2026-10 Queries", self.fs.books["REP"])
-        self.assertEqual(result.ai_months, 1)
+        self.assertEqual((result.ai_months, result.ai_files), (1, 2))
 
     def test_a_second_month_shows_the_change(self):
-        self.put_tab("Bing AI 2026-09 Pages", [["URL", "Citations"], [A, 5]])
+        self.put_export("2026-09 cited pages.csv", [["URL", "Citations"], [A, 5]])
         self.run_bing()
-        self.put_tab("Bing AI 2026-10 Pages", [["URL", "Citations"], [A, 12], [B, 3]])
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 12], [B, 3]])
         self.run_bing()
         by = {(r[0], r[2]): r for r in self.rows(bing_data.CITATIONS)}
         self.assertEqual(by[("2026-10", A)][3:6], [12, 5, 7])
@@ -466,9 +543,9 @@ class CitationTests(Base):
         self.assertEqual(by[("2026-09", A)][3:6], [5, "", ""])
 
     def test_the_same_month_again_replaces_it(self):
-        self.put_tab("Bing AI 2026-10 Pages", [["URL", "Citations"], [A, 12]])
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 12]])
         self.run_bing()
-        self.put_tab("Bing AI 2026-10 Pages", [["URL", "Citations"], [A, 20], [B, 1]])
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 20], [B, 1]])
         self.run_bing()
         self.assertEqual([(r[2], r[3]) for r in self.rows(bing_data.CITATIONS)], [(A, 20), (B, 1)])
 
@@ -477,19 +554,44 @@ class CitationTests(Base):
         self.assertEqual(self.rows(bing_data.CITATIONS), [])
         self.assertEqual((result.ai_months, result.ai_problems), (0, []))
 
-    def test_a_tab_that_cannot_be_read_stays_and_the_others_go_on(self):
-        self.put_tab("Bing AI 2026-10 Pages", [["URL", "Citations"], [A, 12]])
-        self.put_tab("Bing AI 2026-10 Queries", [["Notes"], ["nothing here"]])
-        self.put_tab("Bing AI October Pages", [["URL", "Citations"], [A, 1]])
+    def test_a_file_that_cannot_be_read_is_named_in_the_status_tab_not_in_the_log(self):
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 12]])
+        self.put_export("2026-10 grounding queries.csv", [["Notes"], ["nothing here"]])
+        self.put_export("cited pages for Oct.csv", [["URL", "Citations"], [A, 1]], modified=date(2026, 11, 3))
         result = self.run_bing()
-        self.assertIn("Bing AI 2026-10 Queries", self.fs.books["REP"])
-        self.assertIn("Bing AI October Pages", self.fs.books["REP"])
-        self.assertNotIn("Bing AI 2026-10 Pages", self.fs.books["REP"])
-        self.assertEqual(len(result.ai_problems), 2)
-        self.assertTrue(any("October" in line for line in self.logs))
+        self.assertEqual(len(result.ai_problems), 1)
+        self.assertEqual(len(result.ai_notes), 2)                       # a later file of the same month, and a name without a month
+        self.assertEqual([(r[2], r[3]) for r in self.rows(bing_data.CITATIONS) if r[1] == "Page"], [(A, 1)])
+        status = {r[0] + "|" + r[1] for r in self.rows(bing_data.STATUS) if r[0].startswith("AI export")}
+        self.assertTrue(any("2026-10 grounding queries.csv" in t and "not imported" in t for t in status))
+        self.assertTrue(any("cited pages for Oct.csv" in t for t in status))
+        self.assertFalse(any("queries.csv" in line or "cited pages" in line for line in self.logs))
+
+    def test_a_folder_that_cannot_be_read_stops_nothing(self):
+        def broken():
+            raise RuntimeError("no access")
+        result = bing_data.run_bing(self.fs, self.site, FakeAccess(answers()), TODAY, self.logs.append, sleep=lambda s: None,
+                                    exports=broken)
+        self.assertEqual(len(result.ai_problems), 1)
+        self.assertTrue(self.rows(bing_data.MONTHLY))                   # the rest of the Bing data is there
+        self.assertFalse(any("no access" in line for line in self.logs))
+
+    def test_a_run_without_a_folder_leaves_the_stored_citations_as_they_are(self):
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 12]])
+        self.run_bing()
+        result = self.run_bing(exports=False)
+        self.assertEqual(self.rows(bing_data.CITATIONS)[0][:4], ["2026-10", "Page", A, 12])
+        self.assertEqual(result.ai_months, 1)
+
+    def test_reading_the_same_files_again_changes_nothing(self):
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 12]])
+        self.run_bing()
+        first = [list(r) for r in self.rows(bing_data.CITATIONS)]
+        self.run_bing()
+        self.assertEqual(self.rows(bing_data.CITATIONS), first)
 
     def test_the_import_runs_when_bing_is_down(self):
-        self.put_tab("Bing AI 2026-10 Pages", [["URL", "Citations"], [A, 12]])
+        self.put_export("2026-10 cited pages.csv", [["URL", "Citations"], [A, 12]])
         down = bing.BingError("GetUserSites: HTTP 503")
         result = self.run_bing(answers(GetUserSites=down))
         self.assertEqual(self.rows(bing_data.CITATIONS)[0][:4], ["2026-10", "Page", A, 12])

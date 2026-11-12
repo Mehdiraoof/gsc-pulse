@@ -47,6 +47,7 @@ except ImportError:
 import ai_client
 import auth
 import bing
+import bing_ai
 import bing_data
 import content
 import content_accept
@@ -687,6 +688,34 @@ def sync_content(gsc_service, run: SiteRun, smtp, force: bool = False, cleanup_g
     print()
 
 
+def bing_export_reader(run: SiteRun):
+    """(where the folder is, a function that reads the files in it) for the Bing AI export folder of a site that runs with the
+    owner's own access: (\"\", None) for any other. The folder is made next to the site's other sheets and shared, read only,
+    with the service account (the owner's own Google permission only sees files the tool made, so the files the owner drops
+    are read as the service account). Nothing here prints the folder, its address or the account."""
+    site = run.site
+    if run.drive is None or site.auth != "me":
+        return "", None
+    label = site.deck.site_label or site.name
+    folder_id, _ = bing_ai.folder_for(run.drive, site, label)
+    _SENSITIVE.append(folder_id)
+    where = f"https://drive.google.com/drive/folders/{folder_id}"
+    raw = os.environ.get("GSC_SERVICE_ACCOUNT_JSON")
+    if not raw:
+        return where + " (not read: no service account in this run)", None
+    try:
+        info = json.loads(raw)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=bing_ai.READ_SCOPES)
+        reader = (build("drive", "v3", credentials=creds), build("sheets", "v4", credentials=creds))
+    except (ValueError, KeyError):
+        return where + " (not read: the service account key could not be used)", None
+    email = str(info.get("client_email", ""))
+    _SENSITIVE.append(email)
+    if not bing_ai.share_with(run.drive, folder_id, email):
+        print("  bing AI: the export folder could not be shared with the service account (share it by hand, Viewer)")
+    return where, lambda: bing_ai.read_folder(reader[0], reader[1], folder_id, print)
+
+
 def sync_bing(run: SiteRun, accesses: dict, today: date, make_access=None):
     """Phase 2c: the Bing tabs of one site's Reports sheet and the Bing columns of its content dashboard. Whatever goes wrong
     here is said in the log and nothing else is touched: the site is never marked failed for it, and the phases that
@@ -709,7 +738,13 @@ def sync_bing(run: SiteRun, accesses: dict, today: date, make_access=None):
             run.bing_text = f"off ({access})"
             print(f"bing: off ({access})\n")
             return
-        result = bing_data.run_bing(run.sheets, site, access, today, print, drive=run.drive)
+        try:
+            folder, exports = bing_export_reader(run)
+        except Exception as e:  # noqa: BLE001  the export folder never stops the Bing data
+            folder, exports = "", None
+            print(f"  bing AI: the export folder is not available ({scrub(describe_error(e))})")
+        result = bing_data.run_bing(run.sheets, site, access, today, print, drive=run.drive,
+                                    exports=exports, folder=folder)
         run.bing_text = result.text()
         print(f"bing: {result.text()}")
         if result.last_month:
