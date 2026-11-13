@@ -13,12 +13,10 @@ from test_wp_publish import png
 
 
 def busy_png(width=1200, height=300) -> bytes:
+    """A picture with a lot of colours (noise): a big PNG."""
+    import os
     from PIL import Image
-    image = Image.new("RGB", (width, height))
-    pixels = image.load()
-    for x in range(width):
-        for y in range(height):
-            pixels[x, y] = ((x * 7) % 256, (y * 3) % 256, (x + y) % 256)
+    image = Image.frombytes("RGB", (width, height), os.urandom(width * height * 3))
     out = io.BytesIO()
     image.save(out, format="PNG")
     return out.getvalue()

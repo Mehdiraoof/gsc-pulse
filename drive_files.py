@@ -15,7 +15,7 @@ RETRIES = 5
 def upload_file(drive, folder_id: str, name: str, data: bytes, mime: str = "image/png") -> tuple:
     """(file id, link to open it) of a new file `name` in the folder. A file of the same name is not touched: Drive allows two."""
     media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
-    made = drive.files().create(body={"name": name, "parents": [folder_id]}, media_body=media,
+    made = drive.files().create(body={"name": name, "mimeType": mime, "parents": [folder_id]}, media_body=media,
                                 fields="id").execute(num_retries=RETRIES)
     return made["id"], f"https://drive.google.com/file/d/{made['id']}/view"
 
