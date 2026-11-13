@@ -45,12 +45,5 @@ jobs:
           SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
           INFOGRAPHIC_SAMPLES: "true"
           INFOGRAPHIC_SITE: ${{ inputs.site }}
-          INFOGRAPHIC_OUT: samples
         run: python gsc_pulse.py
 
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: infographic-samples
-          path: samples/
-          retention-days: 3

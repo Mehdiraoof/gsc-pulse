@@ -1,0 +1,79 @@
+"""The real rendering of infographics: the font for Persian cards, the size limit, the two sample cards, and putting a file into a
+Drive folder. The browser itself is not started here (the workflow does that); a fake renderer stands in."""
+
+import io
+import unittest
+from unittest import mock
+
+import drive_files
+import infographic
+from test_history import FakeSheets
+from test_own_access import FakeDrive
+from test_wp_publish import png
+
+
+def busy_png(width=1200, height=300) -> bytes:
+    from PIL import Image
+    image = Image.new("RGB", (width, height))
+    pixels = image.load()
+    for x in range(width):
+        for y in range(height):
+            pixels[x, y] = ((x * 7) % 256, (y * 3) % 256, (x + y) % 256)
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
+class Cards(unittest.TestCase):
+
+    def test_a_persian_card_loads_vazirmatn_and_an_english_one_does_not(self):
+        fa = infographic.build_html(dict(infographic.SAMPLES["fa"]), infographic.Brand(language="fa"))
+        en = infographic.build_html(dict(infographic.SAMPLES["en"]), infographic.Brand(language="en"))
+        self.assertIn(infographic.VAZIRMATN_CSS, fa)
+        self.assertNotIn("vazirmatn@", en.lower())
+        self.assertIn('dir="rtl"', fa)
+        self.assertIn("چگونه یک بذر بکاریم", fa)
+
+    def test_the_two_samples_can_be_drawn(self):
+        for language, spec in infographic.SAMPLES.items():
+            self.assertEqual(infographic.valid(spec), "", language)
+            self.assertEqual(infographic.template_name(spec["template"]), "steps")
+
+    def test_a_picture_with_fewer_colours_is_smaller_and_stays_a_png_of_the_same_width(self):
+        big = busy_png()
+        small = infographic.shrink_png(big, colours=16)
+        self.assertEqual(infographic.png_size(small)[0], 1200)
+        self.assertLess(len(small), len(big))
+
+    def test_render_card_gives_back_what_the_renderer_made_when_it_is_within_the_limit(self):
+        class Fake:
+            def __init__(self, data):
+                self.data, self.calls = data, 0
+
+            def render(self, page, width):
+                self.calls += 1
+                return self.data
+        ok = Fake(png(size=20_000))
+        self.assertEqual(infographic.render_card(ok, "<html>"), ok.data)
+        self.assertEqual(ok.calls, 1)
+
+    def test_without_pillow_the_picture_is_returned_as_it_is(self):
+        with mock.patch.dict("sys.modules", {"PIL": None}):
+            self.assertEqual(infographic.shrink_png(b"abc"), b"abc")
+
+
+class DriveFiles(unittest.TestCase):
+
+    def test_a_file_goes_into_the_folder_and_its_link_is_given(self):
+        drive = FakeDrive(FakeSheets())
+        folder = drive.files().create(body={"name": "Drafts", "mimeType": "application/vnd.google-apps.folder"}).execute()["id"]
+        file_id, link = drive_files.upload_file(drive, folder, "sample-infographic-en.png", png())
+        self.assertEqual(link, f"https://drive.google.com/file/d/{file_id}/view")
+        self.assertEqual(drive.files_[file_id]["parents"], [folder])
+        self.assertEqual(drive.files_[file_id]["content"][:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(drive_files.files_named(drive, folder, "sample-infographic-en.png"), [file_id])
+        self.assertEqual(drive_files.files_named(drive, folder, "other.png"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

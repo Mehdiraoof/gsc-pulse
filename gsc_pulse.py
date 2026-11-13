@@ -940,6 +940,34 @@ def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_onl
     print()
 
 
+def infographic_samples_command(site_list: list):
+    """Renders one English and one Persian sample card for real (a headless browser), with the placeholder colours, checks them
+    (a PNG 1200 px wide, under 150 KB) and puts them into the Drafts folder of one site (INFOGRAPHIC_SITE). Counts and sizes only
+    in the log; nothing goes to WordPress and nothing is kept anywhere but in that folder."""
+    import drive_files
+    import infographic
+    name = os.environ.get("INFOGRAPHIC_SITE", "").strip().lower()
+    site = next((s for s in site_list if s.name.lower() == name), None)
+    if site is None:
+        raise GscPulseError("infographic samples: INFOGRAPHIC_SITE is not a name from the configuration")
+    try:
+        clients = auth.build_me_clients(os.environ, build)
+    except auth.AuthError as e:
+        raise GscPulseError(f"infographic samples: {e}") from None
+    label = site.deck.site_label or site.name
+    folder = site.content.drafts_folder_id or provision.content_folders(clients.drive, site, label)["drafts"]
+    _SENSITIVE.append(folder)
+    renderer = infographic.ChromiumRenderer()
+    for language in ("en", "fa"):
+        brand = infographic.Brand(name=label, language=language)               # the placeholder colours
+        data = infographic.render_card(renderer, infographic.build_html(dict(infographic.SAMPLES[language]), brand))
+        problem = infographic.check_png(data)
+        width, height = infographic.png_size(data)
+        print(f"  infographic sample {language}: {len(data) // 1000} KB, {width} x {height}, {problem or 'within the limits'}")
+        drive_files.upload_file(clients.drive, folder, f"sample-infographic-{language}.png", data)
+        print(f"  infographic sample {language}: saved in the Drafts folder")
+
+
 def wordpress_publish_command(runs: list):
     """Publishing: the approved rows of the content dashboards (To Do To WordPress, Apply update) go to WordPress as drafts and
     updates. A DRY RUN unless WORDPRESS_PUBLISH_WRITE is "yes": it then only says how many rows would be sent. Never scheduled,
@@ -1445,6 +1473,11 @@ def main():
     for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
         for kind in ("weekly", "monthly"):
             _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients_for(kind), os.environ))
+
+    # ---- Two sample infographics rendered for real and put into a Drafts folder: its own command ---------------------
+    if os.environ.get("INFOGRAPHIC_SAMPLES", "").strip().lower() in ("1", "true", "yes"):
+        infographic_samples_command(site_list)
+        return
 
     # ---- A read-only check of the WordPress installs (GET requests only): its own command ----------------------------
     if os.environ.get("WORDPRESS_CHECK", "").strip().lower() in ("1", "true", "yes"):
