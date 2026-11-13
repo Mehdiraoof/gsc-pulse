@@ -68,6 +68,7 @@ import reports
 import site_check
 import views
 import weekly_brief
+import wp_check
 import history
 import index_watch
 import keyword_fix
@@ -1392,6 +1393,15 @@ def main():
     for s in site_list:                     # an address kept in a secret (env:NAME) must not be printed either
         for kind in ("weekly", "monthly"):
             _SENSITIVE.extend(mailer.resolve_recipients(s.deck.recipients_for(kind), os.environ))
+
+    # ---- A read-only check of the WordPress installs (GET requests only): its own command ----------------------------
+    if os.environ.get("WORDPRESS_CHECK", "").strip().lower() in ("1", "true", "yes"):
+        for s in site_list:
+            for install in wp_check.installs_for(s, os.environ):
+                _SENSITIVE.extend(v for v in (install.user, install.password) if v)
+        for line in wp_check.check_lines(site_list, os.environ):
+            print(f"  wordpress check: {line}")
+        return
 
     # ---- A read-only check of what the tool's Google access can open: its own command ---------------------------
     if os.environ.get("ACCESS_CHECK", "").strip().lower() in ("1", "true", "yes"):

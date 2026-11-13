@@ -1,0 +1,40 @@
+name: PulseO WordPress check
+
+# Read only: GET requests to the WordPress REST API of the installs named below, with the Application Password of the
+# account made for PulseO. It writes nothing and prints counts only. Started by hand; there is no schedule.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check the WordPress installs
+        env:
+          PYTHONUNBUFFERED: "1"
+          SITES_JSON: ${{ secrets.SITES_JSON }}
+          SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
+          WORDPRESS_CHECK: "true"
+          WORDPRESS_SITES: "site-1,site-4"          # the two WordPress sites; the others are written by people
+          WP_SITE1_USER: ${{ secrets.WP_SITE1_USER }}
+          WP_SITE1_APP_PASSWORD: ${{ secrets.WP_SITE1_APP_PASSWORD }}
+          WP_SITE4_EN_USER: ${{ secrets.WP_SITE4_EN_USER }}
+          WP_SITE4_EN_APP_PASSWORD: ${{ secrets.WP_SITE4_EN_APP_PASSWORD }}
+          WP_SITE4_FA_USER: ${{ secrets.WP_SITE4_FA_USER }}
+          WP_SITE4_FA_APP_PASSWORD: ${{ secrets.WP_SITE4_FA_APP_PASSWORD }}
+        run: python gsc_pulse.py
