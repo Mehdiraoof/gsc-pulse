@@ -444,6 +444,20 @@ class KeyPageFindings(IndexBase):
         self.go()
         self.assertEqual(self.mails, [])
 
+    def test_unknown_to_google_is_not_an_answer_to_trust_for_a_page_with_clicks(self):
+        self.answers[content.url_key(p(9))] = ins(p(9), verdict="NEUTRAL", coverage="URL is unknown to Google",
+                                                  indexing="INDEXING_STATE_UNSPECIFIED", google_canonical="")
+        self.go()
+        self.assertEqual(self.mails, [])
+        self.assertEqual(self.state().open(), {})
+        self.assertEqual(index_watch.status_text({index_watch.VERDICT: "NEUTRAL", index_watch.COVERAGE: "URL is unknown to Google"}),
+                         "Unknown to Google (not confirmed)")
+
+    def test_the_quota_line_counts_the_requests_really_made(self):
+        self.limit = 25
+        self.go()
+        self.assertIn("25 of the 1500 allowed today used", self.overview()["URL Inspection use"][2])
+
     def test_a_page_google_could_not_say_anything_about_is_not_a_problem(self):
         self.answers[content.url_key(p(8))] = Inspection(p(8), ok=True)
         self.go()

@@ -390,6 +390,7 @@ class DropdownTests(base.Base):
     def test_the_new_choices_exist(self):
         self.assertIn("Draft", content.TODOS)
         self.assertIn("Review", content.TODOS)
+        self.assertIn("Localize", content.TODOS)                 # the Persian localization task: kept in the dropdown on every refresh
         self.assertIn("Drafted", content.STATUSES)
         self.assertLess(content.STATUSES.index("Ordered"), content.STATUSES.index("Drafted"))
         self.assertLess(content.STATUSES.index("Drafted"), content.STATUSES.index("Published"))

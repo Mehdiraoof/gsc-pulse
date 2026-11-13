@@ -66,7 +66,7 @@ def is_settled(row: dict) -> bool:
     return str(row.get(STATUS, "")).strip().lower() in SETTLED_STATUSES
 
 
-TODOS = ["Brief", "Write", "Draft", "Review", "Update", "Rewrite", "Optimization", "Merge", "Redirect", "Keep", "Prune"]
+TODOS = ["Brief", "Write", "Draft", "Review", "Update", "Rewrite", "Optimization", "Merge", "Redirect", "Keep", "Prune", "Localize"]
 PRIORITIES = ["Urgent", "High", "Moderate", "Low"]
 INTENTS = ["Informational", "Commercial", "Navigational", "Transactional"]
 KEYWORD_TYPES = ["General", "Seasonal", "Local", "Time-Sensitive"]

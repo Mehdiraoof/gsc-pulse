@@ -207,7 +207,7 @@ class Watch:
         self.pending = []
         return (index_watch.report_results(self.table, self.key_urls, self.pages, self.sitemap_urls, self.rnd, self.today,
                                            self.clicks_of)
-                + [index_watch.run_result(self.rnd, self.used_before, self.budget, len(self.table.recs), self.daily_max)])
+                + [index_watch.run_result(self.rnd, self.used_before, self.inspector.used, len(self.table.recs), self.daily_max)])
 
     def recheck(self, failing: dict) -> list:
         """The second look, after the wait: the pages the three key findings named are inspected again and the three findings

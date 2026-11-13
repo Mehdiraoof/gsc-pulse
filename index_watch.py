@@ -208,7 +208,9 @@ def is_indexed(rec: dict) -> bool:
 
 
 def is_known(rec: dict) -> bool:
-    return bool(rec.get(VERDICT))
+    """Did Google say something about the page? "URL is unknown to Google" is not an answer to trust for a page that has
+    clicks: it comes from an address written differently from the one Google keeps, so it is left out of every finding."""
+    return bool(rec.get(VERDICT)) and "unknown to google" not in rec.get(COVERAGE, "").lower()
 
 
 def canonical_differs(url: str, google: str) -> bool:
@@ -460,9 +462,9 @@ def report_results(table: Table, key_urls: list, content_pages: list, sitemap_ur
     ]
 
 
-def run_result(rnd: Round, used_before: int, budget: int, total: int, daily_max: int) -> Result:
-    """One information row: what was asked today and what is left of the day's quota."""
-    detail = (f"{rnd.answered} of {rnd.asked} planned pages inspected ({rnd.failed} failed), {used_before + rnd.asked} of the "
+def run_result(rnd: Round, used_before: int, used_now: int, total: int, daily_max: int) -> Result:
+    """One information row: what was asked today and what is left of the day's quota (the requests really made)."""
+    detail = (f"{rnd.answered} of {rnd.asked} planned pages inspected ({rnd.failed} failed), {used_before + used_now} of the "
               f"{daily_max} allowed today used, {total} pages in the Index Status tab")
     if rnd.stopped:
         detail += f"; stopped: {rnd.stopped}"
@@ -509,6 +511,8 @@ def read_content_pages(sheets, file_id: str, tab_names: list, log=print) -> list
 
 def status_text(rec) -> str:
     """What the dashboard column says: Indexed, Not indexed: <the reason Google gives>, or Not checked yet."""
+    if rec and "unknown to google" in rec.get(COVERAGE, "").lower():
+        return "Unknown to Google (not confirmed)"
     if not rec or not is_known(rec):
         return "Not checked yet"
     return "Indexed" if is_indexed(rec) else f"Not indexed: {rec.get(COVERAGE) or rec.get(VERDICT)}"
