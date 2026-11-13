@@ -671,6 +671,7 @@ class TheDashboardInTheRun(Base):
         self.site.reports_sheet_id = "REP"
         self.runs = [self.make_run(self.site)]
         self.asked, self.answers, self.limit = [], {}, None
+        self.clock_time, self.tick = [0.0], 0
 
     def deps(self, mail=True, mail_error=None, daily=False):
         d = super().deps(mail, mail_error, daily)
