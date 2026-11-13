@@ -63,4 +63,10 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          WP_SITE1_USER: ${{ secrets.WP_SITE1_USER }}                       # read only: the weekly look for notes left in published posts
+          WP_SITE1_APP_PASSWORD: ${{ secrets.WP_SITE1_APP_PASSWORD }}
+          WP_SITE4_EN_USER: ${{ secrets.WP_SITE4_EN_USER }}
+          WP_SITE4_EN_APP_PASSWORD: ${{ secrets.WP_SITE4_EN_APP_PASSWORD }}
+          WP_SITE4_FA_USER: ${{ secrets.WP_SITE4_FA_USER }}
+          WP_SITE4_FA_APP_PASSWORD: ${{ secrets.WP_SITE4_FA_APP_PASSWORD }}
         run: python gsc_pulse.py

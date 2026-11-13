@@ -55,6 +55,7 @@ class Deps:
     content_pages: object = None    # (run) -> [index_watch.ContentPage]; None: read from the site's content dashboard
     fill_dashboard: object = None   # (run, table) -> number of tabs written; None: the site's content dashboard
     clock: object = time.monotonic  # the clock the waiting for the second check is measured with
+    markers: object = None          # (run) -> [(post id, link)] of the posts published in the last 30 days that still hold a box "Remove before publishing"; None: not looked at
 
 
 # --------------------------------------------------------------------------- #
@@ -114,7 +115,7 @@ def health_rows(log: list, now: datetime) -> list:
 
 ORDER = ("home", "robots", "robots_block", "robots_changed", "sitemap", "sitemap_drop", "key_status", "key_blocked", "key_noindex",
          "key_canonical", "server_errors", "sitemaps_api", "idx_run", "idx_key_index", "idx_key_canonical", "idx_key_rich",
-         "idx_new_content", "idx_sitemap_not_indexable", "idx_dropped", "idx_rich_errors")
+         "idx_new_content", "idx_sitemap_not_indexable", "idx_dropped", "idx_rich_errors", "wp_marker")
 
 
 def entry_of(r, now: datetime) -> dict:
@@ -242,6 +243,13 @@ def default_fill(run, table) -> int:
     return index_watch.fill_dashboard(run.sheets, file_id, [t.name for t in run.site.content.tabs], table) if file_id else 0
 
 
+def marker_result(found: list) -> technical.Result:
+    return technical.Result(
+        "wp_marker", not found, pages=[link for _, link in found if link], count=len(found),
+        detail=(f"{len(found)} published posts still hold a box \"Remove before publishing\"" if found
+                else "no published post holds a box \"Remove before publishing\""))
+
+
 def start_watch(run, deps: Deps, ctx: technical.Context, state: TechState, file_id: str, rows: list, final_day, now: datetime,
                 log) -> "Watch | None":
     """The first round of the index watch: what to look at today, the answers, the findings. None when the watch is off (the
@@ -343,6 +351,14 @@ def prepare(run, deps: Deps, now: datetime, log) -> Work:
         work.watch = start_watch(run, deps, ctx, state, file_id, rows, final_day, now, log)
     except Exception as e:                            # noqa: BLE001  the index watch never stops the health checks
         log(f"technical: {run.name}: the index watch could not be made ({type(e).__name__})")
+    if deps.markers is not None and not deps.daily:        # the weekly look at what WordPress has published (read only)
+        try:
+            found = deps.markers(run)
+        except Exception as e:                            # noqa: BLE001  not looked at: no conclusion, no alert
+            found = None
+            log(f"technical: {run.name}: the published posts could not be looked at ({type(e).__name__})")
+        if found is not None:
+            first.results.append(marker_result(found))
     if work.watch:
         first.results += work.watch.results
         for r in first.results:
@@ -356,6 +372,15 @@ def confirm_work(w: Work, deps: Deps, today: date):
     failing = technical.failing_of(w.first)
     if failing:
         w.second = technical.check_all(w.ctx, only=failing)
+    if "wp_marker" in failing and deps.markers is not None:      # the second look at WordPress, after the wait
+        try:
+            second_look = deps.markers(w.run)
+        except Exception:                                  # noqa: BLE001  not looked at the second time: not confirmed, no alert
+            second_look = None
+        if second_look is not None:
+            if w.second is None:
+                w.second = technical.Round([], {}, None, {})
+            w.second.results.append(marker_result(second_look))
     again = {k: v for k, v in failing.items() if k.startswith("idx_key_")}
     if w.watch and again:                             # Google is asked again about the key pages it named
         if w.second is None:

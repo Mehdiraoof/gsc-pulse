@@ -248,6 +248,58 @@ class CheckerBlocked(Base):
         self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages not answering 200")
 
 
+class NotesLeftInPosts(Base):
+    """The weekly look at what WordPress has published: a box "Remove before publishing" that is still there is told."""
+
+    def setUp(self):
+        super().setUp()
+        self.found = []
+
+    def run_with(self, **kw):
+        deps = self.deps(**kw)
+        deps.markers = lambda run: self.found if not callable(self.found) else self.found()
+        return self.go(deps=deps)
+
+    def test_nothing_published_with_a_box_says_nothing(self):
+        self.run_with()
+        self.assertEqual(self.mails, [])
+        self.assertIn(("Notes left in published posts", "ok"), self.log_results())
+
+    def test_a_published_post_with_a_box_is_told_once_after_a_second_look(self):
+        self.found = [(101, "https://example.test/post-a/"), (102, "https://example.test/post-b/")]
+        self.run_with()
+        subject, body = self.mails[0]
+        self.assertEqual(subject, "Site alert · Example · A published post still holds a note \"Remove before publishing\"")
+        self.assertIn("2 published posts still hold", body)
+        self.assertIn("/post-a/", body)
+        self.assertEqual(self.slept, [1800])
+        self.run_with()
+        self.assertEqual(self.mails, [])
+        self.found = []
+        self.run_with()
+        self.assertEqual(self.mails[0][0], "Fixed · Example · A published post still holds a note \"Remove before publishing\"")
+
+    def test_a_note_that_is_gone_at_the_second_look_is_not_told(self):
+        answers = [[(101, "https://example.test/post-a/")], []]
+        self.found = lambda: answers.pop(0) if len(answers) > 1 else answers[0]
+        self.run_with()
+        self.assertEqual(self.mails, [])
+        self.assertIn(("Notes left in published posts", "not confirmed"), self.log_results())
+
+    def test_a_site_without_a_wordpress_login_is_not_looked_at(self):
+        deps = self.deps()
+        deps.markers = lambda run: None
+        self.go(deps=deps)
+        self.assertNotIn("Notes left in published posts", [n for n, _ in self.log_results()])
+
+    def test_the_small_daily_check_does_not_look(self):
+        self.found = [(1, "https://example.test/x/")]
+        deps = self.deps(daily=True)
+        deps.markers = lambda run: self.found
+        self.go(deps=deps)
+        self.assertEqual(self.mails, [])
+
+
 class SmallDailyCheck(Base):
     """On the days between the weekly full checks only the home page and robots.txt are looked at."""
 

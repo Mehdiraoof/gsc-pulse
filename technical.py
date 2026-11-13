@@ -256,6 +256,8 @@ FAMILIES = {
     "idx_dropped": ("Pages dropped from the index", "Pages dropped from the index", ""),
     "idx_rich_errors": ("Rich result errors (other pages)", "Rich result errors", ""),
     "idx_run": ("URL Inspection use", "URL Inspection", ""),
+    "wp_marker": ("Notes left in published posts", "A published post still holds a note \"Remove before publishing\"",
+                  "Open these posts in WordPress and remove the coloured box that starts with \"Remove before publishing\" (or its Persian form)."),
     "key_blocked": ("Key pages blocked for checker", "Key pages blocked for the checker only",
                      "These pages are live but refuse the checker (403); look at them with the index inspection instead."),
     "key_noindex": ("Key pages noindex", "Key pages set to noindex",

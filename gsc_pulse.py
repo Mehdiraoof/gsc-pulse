@@ -791,6 +791,20 @@ def technical_command(runs: list, smtp):
     def sitemaps_api(run):
         return run.gsc.sitemaps().list(siteUrl=run.site.site_url).execute(num_retries=2).get("sitemap", [])
 
+    def markers(run):
+        """The posts of the WordPress installs of this site (read only) that were published in the last 30 days and still hold a box
+        "Remove before publishing". None when the site has no WordPress login saved."""
+        import wp_api
+        import wp_publish
+        installs = [i for i in wp_check.installs_for(run.site, os.environ) if i.user and i.password]
+        if not installs:
+            return None
+        found = []
+        for i in installs:
+            _SENSITIVE.extend([i.user, i.password])
+            found += wp_publish.posts_with_marker(wp_api.Wp(i), date.today())
+        return found
+
     inspection_credentials = []                      # the owner's credentials for URL Inspection, made once and only when needed
 
     def inspector(run):
@@ -810,7 +824,7 @@ def technical_command(runs: list, smtp):
                                      factory=lambda: build("searchconsole", "v1", credentials=creds))
 
     deps = technical_run.Deps(
-        sleep=time.sleep, final=final, page_rows=page_rows, sitemaps_api=sitemaps_api, inspector=inspector,
+        sleep=time.sleep, final=final, page_rows=page_rows, sitemaps_api=sitemaps_api, inspector=inspector, markers=markers,
         mail=(lambda subject, body: notify_owner_or_raise(smtp, subject, body)) if smtp else None,
         daily=os.environ.get("TECHNICAL_MODE", "").strip().lower() == "daily")
     print(f"technical: {'the small daily check (home page and robots.txt)' if deps.daily else 'the full weekly check (with the index watch)'}")
