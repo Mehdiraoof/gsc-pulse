@@ -44,9 +44,10 @@ def install(fake):
 def draft(lang="en", slot=True, changes=False, extra=""):
     page = fake_site.draft_html(lang, HOME)
     inject = (f"<p>{SLOT}</p>" if slot else "") + extra
+    page = page.replace("<h2", inject + "<h2", 1)                       # in the body, before the first section: not after the quality check
     if changes:
-        inject += f"<h2>{CHANGES_EN}</h2><ul><li>Added the price table</li><li>Rewrote the intro</li></ul>"
-    return page.replace("</body>", inject + "</body>")
+        page = page.replace("</body>", f"<h2>{CHANGES_EN}</h2><ul><li>Added the price table</li><li>Rewrote the intro</li></ul></body>")
+    return page
 
 
 class Base(unittest.TestCase):
