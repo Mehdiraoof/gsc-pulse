@@ -55,6 +55,8 @@ class FakeInspector:
             self.used += 1
             self.case.clock_time[0] += self.case.tick                          # time the questions take
             self.case.asked.append(url)
+            if url in self.case.exact:                                          # an answer for one exact way of writing the address
+                return self.case.exact[url]
             answer = self.case.answers.get(content.url_key(url))
             if isinstance(answer, list):
                 answer = answer.pop(0) if len(answer) > 1 else answer[0]
@@ -67,7 +69,7 @@ class IndexBase(Base):
         super().setUp()
         self.asked, self.answers, self.limit, self.pages, self.rows_before = [], {}, None, [], []
         self.fill_calls = []
-        self.clock_time, self.tick = [0.0], 0
+        self.clock_time, self.tick, self.exact = [0.0], 0, {}
         patcher = mock.patch.object(index_watch, "WORKERS", 1)           # one at a time: the order of the questions is the plan
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -464,6 +466,82 @@ class KeyPageFindings(IndexBase):
         self.assertEqual(self.mails, [])
 
 
+UNKNOWN = "URL is unknown to Google"
+
+
+def unknown(url) -> Inspection:
+    return ins(url, verdict="NEUTRAL", coverage=UNKNOWN, indexing="INDEXING_STATE_UNSPECIFIED", google_canonical="")
+
+
+class AddressForms(IndexBase):
+    """Google only knows the exact way an address is written: a page it calls unknown is asked about again in the other forms."""
+
+    PERSIAN = f"{HOME}/نمونه-صفحه/"
+
+    def test_the_ways_one_address_can_be_written(self):
+        encoded = f"{HOME}/%D8%B5-x/"
+        plain = f"{HOME}/ص-x/"
+        self.assertEqual(index_watch.forms_of(encoded), [
+            ("as given", encoded), ("decoded", plain), ("as given, slash toggled", encoded[:-1]),
+            ("decoded, slash toggled", plain[:-1])])
+        self.assertEqual([n for n, _ in index_watch.forms_of(plain)],
+                         ["as given", "encoded", "as given, slash toggled", "encoded, slash toggled"])
+        self.assertEqual(index_watch.forms_of(f"{HOME}/"), [("as given", f"{HOME}/")])
+        self.assertEqual(index_watch.forms_of(f"{HOME}/a/p1"), [("as given", f"{HOME}/a/p1"), ("as given, slash toggled", f"{HOME}/a/p1/")])
+
+    def key_page(self, url=None):
+        url = url or self.PERSIAN
+        self.rows.append({"keys": [url], "clicks": 500, "impressions": 900})
+        self.web.pages[url] = technical.Fetched(200, {}, "<html></html>", 0.1)
+        return url
+
+    def test_the_form_that_works_is_found_noted_and_used_from_then_on(self):
+        url = self.key_page()
+        encoded = index_watch.forms_of(url)[1][1]
+        self.exact[url] = unknown(url)
+        self.exact[encoded] = ins(encoded)
+        self.go()
+        self.assertEqual(self.mails, [])
+        row = {r["Address"]: r for r in self.index_rows()}[content.display_url(url)]
+        self.assertEqual((row["Verdict"], row["Inspected as"]), ("PASS", "encoded"))
+        self.assertEqual([a for a in self.asked if a in (url, encoded)], [url, encoded])
+        self.asked.clear()
+        self.go()                                                                 # the next week: the form that worked first
+        self.assertEqual([a for a in self.asked if a in (url, encoded)], [encoded])
+
+    def test_the_slash_variant_is_tried_too(self):
+        url = self.key_page(f"{HOME}/a/p9x")
+        self.exact[url] = unknown(url)
+        self.exact[url + "/"] = ins(url + "/")
+        self.go()
+        row = {r["Address"]: r for r in self.index_rows()}[url]
+        self.assertEqual((row["Verdict"], row["Inspected as"]), ("PASS", "as given, slash toggled"))
+
+    def test_when_no_form_works_it_stays_unknown_and_every_form_was_tried_once(self):
+        url = self.key_page(f"{HOME}/a/p9y")
+        self.exact[url] = unknown(url)
+        self.exact[url + "/"] = unknown(url + "/")
+        self.go()
+        self.assertEqual(self.asked.count(url), 1)
+        self.assertEqual(self.asked.count(url + "/"), 1)
+        row = {r["Address"]: r for r in self.index_rows()}[url]
+        self.assertEqual((row["Coverage"], row["Inspected as"]), (UNKNOWN, ""))
+        self.assertEqual(self.mails, [])                                         # and it is not a finding
+
+    def test_a_page_of_the_sitemap_rotation_is_asked_in_one_form_only(self):
+        s = f"{HOME}/s/4"
+        self.exact[s] = unknown(s)
+        self.go()
+        self.assertEqual(self.asked.count(s), 1)
+        self.assertEqual(self.asked.count(s + "/"), 0)
+
+    def test_an_error_stops_the_other_forms(self):
+        url = self.key_page(f"{HOME}/a/p9z")
+        self.exact[url] = Inspection(url, ok=False, error="HTTP 500")
+        self.go()
+        self.assertEqual(self.asked.count(url + "/"), 0)
+
+
 class OwnerFindings(IndexBase):
     """Findings that are for the owner to read: in the Overview and the Health Log, never an email, never an open problem."""
 
@@ -685,7 +763,7 @@ class TheDashboardInTheRun(Base):
         self.site.reports_sheet_id = "REP"
         self.runs = [self.make_run(self.site)]
         self.asked, self.answers, self.limit = [], {}, None
-        self.clock_time, self.tick = [0.0], 0
+        self.clock_time, self.tick, self.exact = [0.0], 0, {}
 
     def deps(self, mail=True, mail_error=None, daily=False):
         d = super().deps(mail, mail_error, daily)

@@ -27,6 +27,7 @@ a quota answer or repeated errors stop the run for that site. Nothing here print
 import json
 import re
 import threading
+import urllib.parse
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -41,10 +42,10 @@ from technical import Result
 TAB = "Index Status"
 HEADER = ["Address", "Verdict", "Coverage", "Indexing", "Robots.txt", "Page fetch", "Last crawl", "Google canonical",
           "Declared canonical", "Canonical differs", "Rich results", "Why checked", "First seen", "Last checked",
-          "Last changed", "Clicks (28 days)"]
-LAST_COL = "P"
+          "Last changed", "Clicks (28 days)", "Inspected as"]
+LAST_COL = "Q"
 (ADDRESS, VERDICT, COVERAGE, INDEXING, ROBOTS, FETCH, CRAWL, GOOGLE, DECLARED, DIFFERS, RICH, WHY, FIRST, CHECKED, CHANGED,
- CLICKS) = HEADER
+ CLICKS, FORM) = HEADER
 COL_INDEX = "Index Status"                       # the content dashboard column
 
 WHY_KEY, WHY_BLOCKED = "Key page", "Key page (blocked for the checker)"
@@ -245,6 +246,7 @@ class Table:
         """Writes the rows that changed in place and appends the new ones."""
         updates = [(f"'{TAB}'!A{self.rows[k]}:{LAST_COL}{self.rows[k]}", [[self.recs[k].get(h, "") for h in HEADER]])
                    for k in sorted(self.dirty, key=lambda k: self.rows[k])]
+        updates.append((f"'{TAB}'!{LAST_COL}1", [[HEADER[-1]]]))           # a tab made before the last column existed gets its title
         for i in range(0, len(updates), WRITE_CHUNK):
             tabs.patch_cells(sheets, file_id, updates[i:i + WRITE_CHUNK])
         tabs.append(sheets, file_id, TAB, [[self.recs[k].get(h, "") for h in HEADER] for k in self.new])
@@ -254,13 +256,65 @@ class Table:
         self.dirty, self.new = set(), []
 
 
-def new_record(url: str, ins: Inspection, prev: dict, why: str, clicks: int, today: date) -> dict:
+# --------------------------------------------------------------------------- #
+# The ways an address can be written
+# --------------------------------------------------------------------------- #
+
+GIVEN = "as given"
+RETRY_WHY = ("Key page", "Key page (blocked for the checker)", "New or updated content", "Published, not indexed yet")
+
+
+def forms_of(url: str) -> list:
+    """[(name, address)]: the ways one page address can be written, the one Search Console gave first, then the percent-encoded
+    and the plain-letter form, then each of them with the slash at the end added or taken away. Google only knows the exact
+    form it keeps, so a page can be unknown to it in one form and known in another (Persian addresses, for one)."""
+    parts = urllib.parse.urlsplit(url)
+    plain = urllib.parse.unquote(parts.path)
+    encoded = urllib.parse.quote(plain, safe="/:@!$&'()*+,;=-._~")
+    out = []
+
+    def add(name, path):
+        address = urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+        if all(address != a for _, a in out):
+            out.append((name, address))
+
+    add(GIVEN, parts.path)
+    add("encoded", encoded)
+    add("decoded", plain)
+    for name, path in list(((GIVEN, parts.path), ("encoded", encoded), ("decoded", plain))):
+        if path not in ("", "/"):
+            add(f"{name}, slash toggled", path[:-1] if path.endswith("/") else path + "/")
+    return out
+
+
+def _trusted(ins: "Inspection") -> bool:
+    return bool(ins.verdict) and "unknown to google" not in ins.coverage.lower()
+
+
+def ask_forms(inspector, url: str, why: str, remembered: str = "") -> tuple:
+    """(the answer, the form that worked). The key pages and the content pages are asked in the form that worked last time,
+    then in the others one after the other when Google says the address is unknown; the rest of the pages in one form only."""
+    forms = forms_of(url) if why in RETRY_WHY else [(GIVEN, url)]
+    forms.sort(key=lambda f: f[0] != remembered)                       # the form that worked before comes first
+    first = None
+    for name, address in forms:
+        ins = inspector.inspect(address)
+        ins.url = url
+        if not ins.ok:
+            return ins, ""
+        first = first or ins
+        if _trusted(ins):
+            return ins, name
+    return first, ""
+
+
+def new_record(url: str, ins: Inspection, prev: dict, why: str, clicks: int, today: date, form: str = "") -> dict:
     rec = {ADDRESS: content.display_url(url), VERDICT: ins.verdict, COVERAGE: ins.coverage, INDEXING: ins.indexing,
            ROBOTS: ins.robots, FETCH: ins.fetch, CRAWL: _day(ins.last_crawl), GOOGLE: content.display_url(ins.google_canonical),
            DECLARED: content.display_url(ins.user_canonical),
            DIFFERS: "yes" if canonical_differs(url, ins.google_canonical) else ("no" if ins.google_canonical else ""),
            RICH: rich_text(ins.rich), WHY: why, FIRST: (prev or {}).get(FIRST) or today.isoformat(),
-           CHECKED: today.isoformat(), CLICKS: clicks or ""}
+           CHECKED: today.isoformat(), CLICKS: clicks or "", FORM: form or (prev or {}).get(FORM, "")}
     changed = prev is None or signature(prev) != signature(rec)
     rec[CHANGED] = today.isoformat() if changed else (prev.get(CHANGED) or today.isoformat())
     return rec
@@ -349,15 +403,16 @@ def inspect_pages(inspector, planned: list, table: Table, clicks_of, today: date
     if not planned:
         return rnd
     with ThreadPoolExecutor(max_workers=workers or WORKERS) as pool:
-        answers = list(pool.map(lambda item: inspector.inspect(item[0]), planned))
-    for (url, why), ins in zip(planned, answers):
+        answers = list(pool.map(lambda item: ask_forms(inspector, item[0], item[1], (table.get(item[0]) or {}).get(FORM, "")),
+                                planned))
+    for (url, why), (ins, form) in zip(planned, answers):
         rnd.reasons[why] += 1
         if not ins.ok:
             rnd.failed += 1
             continue
         rnd.answered += 1
         prev = table.get(url)
-        rec = new_record(url, ins, prev, why, clicks_of([url]), today)
+        rec = new_record(url, ins, prev, why, clicks_of([url]), today, form)
         k = key_of(url)
         if prev and is_indexed(prev) and is_known(rec) and not is_indexed(rec):
             rnd.dropped.add(k)
