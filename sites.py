@@ -19,6 +19,7 @@ the problem, because logs of a public repository are visible to anyone.
 """
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -149,6 +150,11 @@ class DeckConfig:
     accent_color: str = ""                               # overrides the clicks series colour
     logo_url: str = ""
     ai_summary: bool = False
+
+    def weekly_deck_on(self, env=None) -> bool:
+        """Is the weekly deck built? Not when the run says WEEKLY_DECKS=off: one weekly email for all sites replaces it."""
+        env = os.environ if env is None else env
+        return bool(self.weekly) and str(env.get("WEEKLY_DECKS", "")).strip().lower() != "off"
 
     def recipients_for(self, kind: str) -> list:
         """The addresses of the 'weekly' or 'monthly' deck: its own list, else `recipients`."""

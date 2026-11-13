@@ -67,6 +67,7 @@ import provision
 import reports
 import site_check
 import views
+import weekly_brief
 import history
 import index_watch
 import keyword_fix
@@ -923,6 +924,19 @@ def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_onl
     print()
 
 
+def sync_weekly_brief(runs: list, smtp, gate: str = ""):
+    """The one weekly email for all sites (it replaces the weekly decks). In the sync (gate "") only its row for the owner's
+    plan is written; at the deck checks it is sent: at the first check when the text is ready, at the second check (and the
+    Tuesday catch-up) with the text, or with the facts as they are. Whatever goes wrong here is said and nothing else stops."""
+    print("── Weekly email " + "─" * 28)
+    try:
+        line = weekly_brief.run_weekly_brief([r for r in runs if r.status != "failed"], smtp, date.today(), gate, print)
+    except Exception as e:  # noqa: BLE001  the weekly email never fails a run
+        print(f"  weekly brief: skipped ({scrub(describe_error(e))})\n")
+        return
+    print(f"  weekly brief: {line}\n")
+
+
 def write_meta(sheets_service, run: SiteRun, start_date: str, end_date: str, days: int):
     """Phase 3: the Meta tab, which needs the history result."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1493,6 +1507,7 @@ def main():
                 print()
             if r.status == "pending":
                 r.status = "ok"
+        sync_weekly_brief(enabled, owner_smtp, check_round or "second")
         print_summary(runs)
         failed = [r.name for r in runs if r.status == "failed"]
         if failed:
@@ -1572,6 +1587,9 @@ def main():
             sync_work(r, date.today())
         except Exception as e:                  # noqa: BLE001  the work list and the notes never fail a site's sync
             print(f"  work: skipped ({scrub(describe_error(e))})\n")
+
+    # ---- Phase 2b2: the row of the one weekly email (the facts of all sites; nothing is sent here) ------
+    sync_weekly_brief(enabled, None, "")
 
     # ---- Phase 2c: Bing, after everything that is Google's (a Bing problem never reaches them) ------
     bing_accesses = {}

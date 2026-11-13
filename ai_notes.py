@@ -31,6 +31,7 @@ LAST_COL = "H"
 COL = {name: i for i, name in enumerate(HEADER)}
 WAITING, READY = "waiting", "ready"
 WEEKLY_SUMMARY, OUR_WORK_INTRO, CLIENT_SLIDES = "weekly_summary", "our_work_intro", "client_slides"
+WEEKLY_BRIEF = "weekly_brief"                 # the one weekly email for all sites: its row is in the Index sheet, not in a Reports sheet
 SLOTS = {"weekly": (WEEKLY_SUMMARY,), "monthly": (OUR_WORK_INTRO, CLIENT_SLIDES)}
 LANGUAGE_NAMES = {"en": "English", "fa": "Persian (Farsi)"}
 
@@ -167,3 +168,12 @@ def parse_weekly_summary(text: str):
             (steps if into_steps else bullets).append(b.group(1).strip())
     bullets, steps = bullets[:6], steps[:3]
     return (bullets, steps) if bullets else None
+
+
+def weekly_brief_input(facts: str, week_text: str) -> str:
+    """The instruction and the facts of the one weekly email for all sites (the Input of the weekly_brief row). The facts keep
+    their own lines and links; the text only adds a short opening."""
+    return (f"Write the body of one weekly email to the owner of these sites, for the week of {week_text}. {RULES} "
+            "Start with two or three short plain sentences: what changed most and what needs attention first. "
+            "Then keep every line of the facts below exactly as written, with its link, under its heading. "
+            "Do not add a greeting line with a name and do not sign it.\n\nFacts:\n" + facts)

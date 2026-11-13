@@ -146,7 +146,7 @@ def prepare_notes(drive, sheets, site, today: date, queries=None, log=print) -> 
     wanted = []
     label = cfg.site_label
     lang = cfg.language
-    if cfg.weekly and cfg.ai_summary:
+    if cfg.weekly_deck_on() and cfg.ai_summary:
         rep = dd.load_weekly(sheets, site.reports_sheet_id, site)
         if rep is not None:
             wanted.append(ai_notes.Slot("weekly", rep.period, ai_notes.WEEKLY_SUMMARY,

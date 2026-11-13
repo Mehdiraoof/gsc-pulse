@@ -163,6 +163,7 @@ jobs:
           AI_MODEL: ${{ inputs.ai_model }}
           EMAIL_TEST_SUMMARY: ${{ inputs.email_test_summary }}
           SEND_EMAILS: ${{ inputs.send_emails }}
+          WEEKLY_DECKS: "off"          # no weekly deck: one weekly email for all sites replaces it
           AI_HANDOFF: ${{ vars.AI_HANDOFF }}
           # the key exists in the run only when a content test is asked for: a real-site run cannot call the AI
           GEMINI_API_KEY: ${{ inputs.create_content_test != '' && secrets.GEMINI_API_KEY || '' }}
@@ -235,6 +236,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           AI_HANDOFF: on
           SEND_EMAILS: ${{ inputs.send_emails }}
+          WEEKLY_DECKS: "off"          # no weekly deck: one weekly email for all sites replaces it
           DECK_PHASE: build
           WAIT_FOR_TEXTS_MINUTES: ${{ inputs.wait_minutes }}
           # which scheduled check this is: the first sends only complete decks, the others send with what is ready

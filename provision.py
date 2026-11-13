@@ -272,3 +272,11 @@ def technical_file(drive, sheets, site, label: str, log=print):
     else:
         tabs.patch_cells(sheets, index_id, [(f"'{INDEX_TAB}'!H{row_no}", [[file_id]])])
     return file_id, True
+
+
+def existing_technical_file(drive, sheets, site) -> str:
+    """The id of the site's Technical sheet if there is one (the Index); '' when there is none. Never makes one."""
+    index_id = _open_index(drive, sheets)
+    rows = tabs.read_rows(sheets, index_id, INDEX_TAB, INDEX_LAST)
+    _, row = _row_of(rows, site.name)
+    return row[7] if len(row) > 7 else ""

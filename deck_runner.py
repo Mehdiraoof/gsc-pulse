@@ -118,7 +118,7 @@ def run_decks(sheets, reports_id: str, site, smtp, env, rebuild: bool = False, l
     tabs.ensure_tab(sheets, reports_id, titles, STATE_TAB, STATE_HEADER)
     state = read_state(sheets, reports_id)
     for kind in ("monthly", "weekly"):
-        if not getattr(cfg, kind):
+        if not getattr(cfg, kind) or (kind == "weekly" and not cfg.weekly_deck_on(env)):
             continue
         # the owner (SMTP_USER) always gets the deck; other people are in To, the owner in Bcc
         to, bcc = mailer.split_recipients(
@@ -211,7 +211,7 @@ def pending_texts(sheets, reports_id: str, site) -> list:
     state = read_state(sheets, reports_id)
     out = []
     for kind in ("monthly", "weekly"):
-        if not getattr(cfg, kind):
+        if not getattr(cfg, kind) or (kind == "weekly" and not cfg.weekly_deck_on()):
             continue
         report = (dd.load_monthly if kind == "monthly" else dd.load_weekly)(sheets, reports_id, site)
         if report is None or state.get(STATE_KEY[kind], (0, ""))[1] == report.period:
@@ -227,7 +227,7 @@ def mark_synced(sheets, reports_id: str, site):
     cfg = site.deck
     state = read_state(sheets, reports_id)
     for kind in ("monthly", "weekly"):
-        if not getattr(cfg, kind):
+        if not getattr(cfg, kind) or (kind == "weekly" and not cfg.weekly_deck_on()):
             continue
         report = (dd.load_monthly if kind == "monthly" else dd.load_weekly)(sheets, reports_id, site)
         if report is not None and state.get(SYNC_KEY[kind], (0, ""))[1] != report.period:
