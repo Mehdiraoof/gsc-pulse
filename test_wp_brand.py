@@ -113,7 +113,7 @@ class Rows(unittest.TestCase):
         self.assertEqual(colours["#8d6bff"], "yes")
         self.assertEqual({v for k, v in colours.items() if k != "#8d6bff"}, {""})
         self.assertTrue(all(r[1] == "all" for r in rows))                           # an install without a language
-        self.assertEqual([r[2] for r in rows][:3], ["Site title", "Logo", "Site icon"])
+        self.assertEqual([r[2] for r in rows][:3], ["Brand name", "Logo", "Site icon"])
 
     def test_a_given_colour_that_is_not_in_the_install_is_added_as_a_row(self):
         rows = wp_brand.rows_for(INSTALL, {"colours": []}, "#123456")
@@ -123,6 +123,52 @@ class Rows(unittest.TestCase):
     def test_the_language_of_a_folder_install_is_the_install_label(self):
         rows = wp_brand.rows_for(INSTALL_FA, {"colours": [("x", "#111111")]})
         self.assertTrue(all(r[1] == "FA" for r in rows))
+
+    def test_the_brand_name_is_one_row_for_each_install_and_proposes_the_title_of_the_install(self):
+        rows = wp_brand.rows_for(INSTALL_FA, {"title": "Name FA", "colours": []})
+        names = [r for r in rows if r[2] == "Brand name"]
+        self.assertEqual(len(names), 1)
+        self.assertEqual((names[0][1], names[0][3], names[0][4]), ("FA", "Name FA", ""))      # a proposal: not used until yes
+        self.assertEqual(wp_brand.rows_for(INSTALL, {"colours": []})[0][3], "")
+
+
+class Names(unittest.TestCase):
+
+    def setUp(self):
+        patch_time(self)
+        self.fs = FakeSheets()
+        self.fs.add_book("DASH", {"Articles": (20, 10)})
+
+    def tab(self):
+        return self.fs.books["DASH"][wp_brand.TAB].data
+
+    def test_a_proposed_name_is_not_used_until_the_owner_writes_yes(self):
+        wp_brand.write_rows(self.fs, "DASH", wp_brand.rows_for(INSTALL_FA, {"title": "Name FA", "colours": []}))
+        self.assertEqual(wp_brand.approved_name(self.fs, "DASH", "site-x", "fa"), "")
+        next(r for r in self.tab()[1:] if r[2] == "Brand name")[self.tab()[0].index("Use")] = "yes"
+        self.assertEqual(wp_brand.approved_name(self.fs, "DASH", "site-x", "fa"), "Name FA")
+
+    def test_each_install_has_its_own_name_and_an_all_row_is_the_fallback(self):
+        wp_brand.write_rows(self.fs, "DASH", [["site-x", "all", "Brand name", "Shared", "yes", ""],
+                                              ["site-x", "FA", "Brand name", "نام فارسی", "yes", ""],
+                                              ["site-y", "EN", "Brand name", "Other site", "yes", ""]])
+        self.assertEqual(wp_brand.approved_name(self.fs, "DASH", "site-x", "fa"), "نام فارسی")
+        self.assertEqual(wp_brand.approved_name(self.fs, "DASH", "site-x", "en"), "Shared")
+        self.assertEqual(wp_brand.approved_name(self.fs, "DASH", "site-x"), "Shared")
+        self.assertEqual(wp_brand.approved_name(self.fs, "DASH", "site-z", "en"), "")
+
+    def test_a_name_the_owner_edited_is_not_proposed_again_on_the_next_check(self):
+        rows = wp_brand.rows_for(INSTALL_FA, {"title": "Name FA", "colours": []})
+        wp_brand.write_rows(self.fs, "DASH", rows)
+        next(r for r in self.tab()[1:] if r[2] == "Brand name")[3] = "My own name"
+        self.assertEqual(wp_brand.write_rows(self.fs, "DASH", rows), 0)
+        self.assertEqual([r[3] for r in self.tab()[1:] if r[2] == "Brand name"], ["My own name"])
+
+    def test_the_name_goes_into_the_brand_of_the_card(self):
+        base = infographic.Brand(name="Default", language="fa")
+        self.assertEqual(wp_brand.apply(base, [], "نام فارسی").name, "نام فارسی")
+        self.assertEqual(wp_brand.apply(base, ["#112233"]).name, "Default")
+        self.assertEqual(wp_brand.apply(base, [], "").primary, base.primary)
 
 
 class Sheet(unittest.TestCase):

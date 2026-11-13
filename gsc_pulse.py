@@ -1041,7 +1041,8 @@ def wordpress_publish_command(runs: list):
             if install is None:
                 return None
             wp = wp_api.Wp(install)
-            brand = wp_brand.apply(infographic.brand_for(site, language), wp_brand.approved(r.sheets, dash_id, site.name, language))
+            brand = wp_brand.apply(infographic.brand_for(site, language), wp_brand.approved(r.sheets, dash_id, site.name, language),
+                                  wp_brand.approved_name(r.sheets, dash_id, site.name, language))
             return wp_publish.Target(wp, site_check.origin_of(site.site_url) + (site.content.languages.get(language, "") if site.content.languages else ""),
                                      language, brand, renderer,
                                      (lambda name, data, language=language: save_copy(language, name, data)))

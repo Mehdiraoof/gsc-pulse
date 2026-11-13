@@ -65,6 +65,12 @@ def e(text: str) -> str:
 
 NUMBER = re.compile(r"\d[\d.,]*")
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+TO_PERSIAN = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def digits(text, brand) -> str:
+    """The text with Persian digits on a Persian card (everywhere: title, points, numbers, step numbers, footer); unchanged otherwise."""
+    return str(text).translate(TO_PERSIAN) if brand.rtl else str(text)
 
 
 def numbers_of(text: str) -> set:
@@ -91,7 +97,7 @@ VAZIRMATN_CSS = "https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-fa
 def _page(spec: dict, brand: Brand, body: str) -> str:
     direction = "rtl" if brand.rtl else "ltr"
     font_import = f'@import url("{VAZIRMATN_CSS}");' if brand.rtl else ""        # the browser fetches Vazirmatn when it is not installed
-    logo = f'<img src="{e(brand.logo_data_uri)}" style="height:44px">' if brand.logo_data_uri else f'<span>{e(brand.name)}</span>'
+    logo = f'<div class="top"><img src="{e(brand.logo_data_uri)}" style="height:44px"></div>' if brand.logo_data_uri else ""      # the name is in the footer only
     return f"""<!doctype html><html lang="{brand.language}" dir="{direction}"><head><meta charset="utf-8"><style>
 {font_import}
 *{{box-sizing:border-box}} body{{margin:0;background:{brand.background};font-family:{brand.font}}}
@@ -104,8 +110,8 @@ h1{{margin:0 0 34px;font-size:54px;line-height:1.25;color:{brand.primary}}}
 .con{{border-inline-start:10px solid #c0392b}} .chip{{display:inline-block;margin:6px 10px 6px 0;padding:10px 22px;border-radius:30px;
 background:{brand.accent};color:#fff;font-size:34px;font-weight:700}} .price{{font-weight:700;color:{brand.primary};white-space:nowrap}}
 .foot{{margin-top:24px;font-size:22px;color:#6b7785}}
-</style></head><body><div id="card"><div class="top">{logo}</div><h1>{e(spec['title'])}</h1>{body}
-<div class="foot">{e(brand.name)}</div></div></body></html>"""
+</style></head><body><div id="card">{logo}<h1>{e(spec['title'])}</h1>{body}
+<div class="foot">{e(digits(brand.name, brand))}</div></div></body></html>"""
 
 
 def _split(point: str, sep: str) -> tuple:
@@ -114,7 +120,7 @@ def _split(point: str, sep: str) -> tuple:
 
 
 def steps(spec, brand):
-    return "".join(f'<div class="row"><div class="n">{i}</div><div class="col">{e(p)}</div></div>' for i, p in enumerate(spec["points"], 1))
+    return "".join(f'<div class="row"><div class="n">{digits(i, brand)}</div><div class="col">{e(p)}</div></div>' for i, p in enumerate(spec["points"], 1))
 
 
 def comparison(spec, brand):
@@ -146,7 +152,7 @@ def checklist(spec, brand):
 
 
 def takeaways(spec, brand):
-    return "".join(f'<div class="row"><div class="n">{i}</div><div class="col"><b>{e(p)}</b></div></div>' for i, p in enumerate(spec["points"], 1))
+    return "".join(f'<div class="row"><div class="n">{digits(i, brand)}</div><div class="col"><b>{e(p)}</b></div></div>' for i, p in enumerate(spec["points"], 1))
 
 
 def facts(spec, brand):
@@ -158,8 +164,17 @@ BUILDERS = {"steps": steps, "comparison": comparison, "pros_cons": pros_cons, "p
             "takeaways": takeaways, "facts": facts}
 
 
+def _localised(spec: dict, brand: Brand) -> dict:
+    """A copy of the plan whose texts have Persian digits when the card is Persian."""
+    if not brand.rtl:
+        return spec
+    return dict(spec, title=digits(spec.get("title", ""), brand), numbers=digits(spec.get("numbers", ""), brand),
+                points=[digits(p, brand) for p in spec.get("points", [])])
+
+
 def build_html(spec: dict, brand: Brand) -> str:
     """The card as HTML. 3 to 6 points are drawn (a plan with fewer than 3 or more than 6 is rejected by `valid`)."""
+    spec = _localised(spec, brand)
     return _page(spec, brand, BUILDERS[template_name(spec.get("template", ""))](spec, brand))
 
 

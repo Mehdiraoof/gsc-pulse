@@ -4,7 +4,8 @@ PulseO: what a WordPress install says about the brand of its site (read only)
 During the WordPress access check the install is asked, with GET requests only, for the three things the infographic cards can
 use: the logo, the site icon and the theme colours. Nothing found is used on its own: each finding is listed in the Brand tab of the
 site's content dashboard, and a colour is used on a card only after the owner writes "yes" in its Use column. The first colour
-marked yes is the main colour, the second the accent. A colour the owner gave in words (BRAND_GIVEN, "site-1=#8d6bff") is listed
+marked yes is the main colour, the second the accent. The brand name shown in the footer of the cards is a row of the same tab for each
+install (its Found text is the name; the install's own site title is the first proposal): the Persian install can have its own name. A colour the owner gave in words (BRAND_GIVEN, "site-1=#8d6bff") is listed
 with Use already "yes". The log of the run holds counts only: no address, no colour of a named site, no file name.
 
 Where each thing is read from:
@@ -25,6 +26,7 @@ import wp_check
 TAB = "Brand"
 HEADER = ["Site", "Install", "Item", "Found", "Use", "Note"]
 MAX_COLOURS = 10
+NAME_NOTE = "The name shown in the footer of the cards of this install. Change the text if it should be another, then write yes in Use."
 HEX = re.compile(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?\b")
 VARIABLE = re.compile(r"(--(?:wp--preset--color--|e-global-color-|ast-global-color-|global-palette|theme-color|brand|primary|accent|main|"
                       r"color-primary|color-accent|color-main)[\w-]*)\s*:\s*([^;}{]+)", re.I)
@@ -98,8 +100,7 @@ def discover(install: wp_check.Install, opener=wp_check.default_opener) -> dict:
 def rows_for(install: wp_check.Install, found: dict, given: str = "") -> list:
     """The rows of the Brand tab for one install: [Site, Install, Item, Found, Use, Note]."""
     rows, label = [], install.label or "all"
-    if found.get("title"):
-        rows.append([install.site, label, "Site title", found["title"], "", ""])
+    rows.append([install.site, label, "Brand name", found.get("title") or "", "", NAME_NOTE])
     rows.append([install.site, label, "Logo", found.get("logo") or "not found", "", "Shown for you; the cards do not use a logo yet."])
     rows.append([install.site, label, "Site icon", found.get("icon") or "not found", "", "Shown for you; the cards do not use it."])
     have = {value for _, value in found.get("colours", [])}
@@ -134,8 +135,9 @@ def write_rows(sheets, file_id: str, rows: list) -> int:
     column is the owner's. Returns the number of rows added."""
     titles, _ = history.grid_info(sheets, file_id)
     tabs.ensure_tab(sheets, file_id, titles, TAB, HEADER)
-    have = {tuple(str(c) for c in r[:4]) for r in cs.read_all(sheets, file_id, TAB)[1:]}
-    fresh = [r for r in rows if tuple(str(c) for c in r[:4]) not in have]
+    key = lambda r: tuple(str(c) for c in (r[:3] if len(r) > 2 and r[2] == "Brand name" else r[:4]))      # noqa: E731  the owner edits a name
+    have = {key(r) for r in cs.read_all(sheets, file_id, TAB)[1:]}
+    fresh = [r for r in rows if key(r) not in have]
     if fresh:
         tabs.append(sheets, file_id, TAB, fresh)
     return len(fresh)
@@ -160,9 +162,31 @@ def approved(sheets, file_id: str, site_name: str, label: str = "") -> list:
     return out
 
 
-def apply(brand, colours: list):
-    """The brand with the colours the owner approved: the first is the main colour, the second the accent. No colour: unchanged."""
+def approved_name(sheets, file_id: str, site_name: str, label: str = "") -> str:
+    """The brand name the owner marked yes for an install (the row of the install itself before a row for "all"); "" when none."""
+    try:
+        values = cs.read_all(sheets, file_id, TAB)
+    except Exception:  # noqa: BLE001  no Brand tab yet
+        return ""
+    own = (label or "all").lower()
+    found = {}
+    for r in values[1:]:
+        r = list(r) + [""] * (6 - len(r))
+        if (str(r[0]).strip().lower() == site_name.lower() and str(r[2]).strip().lower() == "brand name"
+                and str(r[4]).strip().lower() in ("yes", "y", "true") and str(r[3]).strip()):
+            found.setdefault(str(r[1]).strip().lower() or "all", str(r[3]).strip())
+    return found.get(own) or found.get("all") or ""
+
+
+def apply(brand, colours: list, name: str = ""):
+    """The brand with what the owner approved: the colours (the first is the main colour, the second the accent) and the name.
+    Nothing approved: unchanged."""
     import dataclasses
-    if not colours:
-        return brand
-    return dataclasses.replace(brand, primary=colours[0], **({"accent": colours[1]} if len(colours) > 1 else {}))
+    changes = {}
+    if colours:
+        changes["primary"] = colours[0]
+        if len(colours) > 1:
+            changes["accent"] = colours[1]
+    if name:
+        changes["name"] = name
+    return dataclasses.replace(brand, **changes) if changes else brand

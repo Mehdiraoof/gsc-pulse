@@ -32,6 +32,33 @@ class Cards(unittest.TestCase):
         self.assertIn('dir="rtl"', fa)
         self.assertIn("چگونه یک بذر بکاریم", fa)
 
+    def text_of(self, page):
+        import re
+        return re.sub(r"<[^>]+>", " ", re.sub(r"<style>.*?</style>", "", page, flags=re.S))
+
+    def test_a_persian_card_has_persian_digits_everywhere_and_an_english_card_keeps_its_own(self):
+        spec = dict(infographic.SAMPLES["fa"], title="۳ روش (3 ways) 2026", numbers="4 مرحله; 120 تومان",
+                    points=["قدم 1", "قدم 2", "قدم 3"])
+        for template in ("steps", "takeaways", "facts", "price_table"):
+            fa = infographic.build_html(dict(spec, template=template), infographic.Brand(name="نام 7", language="fa"))
+            self.assertNotRegex(self.text_of(fa), r"[0-9]", template)
+        steps = infographic.build_html(dict(spec, template="steps"), infographic.Brand(language="fa"))
+        for digit in "۱۲۳":
+            self.assertIn(f'<div class="n">{digit}</div>', steps)
+        en = infographic.build_html(dict(infographic.SAMPLES["en"], title="3 ways"), infographic.Brand(language="en"))
+        self.assertIn('<div class="n">1</div>', en)
+        self.assertIn("3 ways", en)
+
+    def test_the_brand_name_is_shown_once_in_the_footer_only(self):
+        for language in ("en", "fa"):
+            for logo in ("", "data:image/png;base64,AAAA"):
+                page = infographic.build_html(dict(infographic.SAMPLES[language]),
+                                              infographic.Brand(name="Zebra Brand", language=language, logo_data_uri=logo))
+                self.assertEqual(self.text_of(page).count("Zebra Brand"), 1, (language, bool(logo)))
+                self.assertIn('<div class="foot">Zebra Brand</div>', page)
+        plain = infographic.build_html(dict(infographic.SAMPLES["en"]), infographic.Brand(name="Zebra Brand"))
+        self.assertNotIn('<div class="top">', plain)                 # no logo: no bar at the top
+
     def test_the_two_samples_can_be_drawn(self):
         for language, spec in infographic.SAMPLES.items():
             self.assertEqual(infographic.valid(spec), "", language)
