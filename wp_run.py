@@ -50,7 +50,7 @@ class Report:
 
 def doc_language(source: str, default: str = "en") -> str:
     """The language a document is written in: Persian when most of its letters are in Arabic script."""
-    text = re.sub(r"<[^>]+>", " ", source or "")
+    text = re.sub(r"\[[^\]]*\]", " ", re.sub(r"<[^>]+>", " ", source or ""))          # not the slots in brackets: their words are Latin
     arabic, latin = len(ARABIC.findall(text)), len(LATIN.findall(text))
     if arabic + latin < 40:
         return default
