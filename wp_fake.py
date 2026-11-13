@@ -55,13 +55,15 @@ class FakeWordPress:
     def __call__(self, method, url, headers, body=None):
         parts = urllib.parse.urlsplit(url)
         query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
-        route = parts.path[len("/wp-json"):] if parts.path.startswith("/wp-json") else query.pop("rest_route", "")
+        own = urllib.parse.urlsplit(self.base)                              # an install can live in a folder (/fa)
+        path = parts.path[len(own.path.rstrip("/")):] if parts.path.startswith(own.path.rstrip("/")) else parts.path
+        route = path[len("/wp-json"):] if path.startswith("/wp-json") else query.pop("rest_route", "")
         payload = {}
         if body and headers.get("Content-Type", "").startswith("application/json"):
             payload = json.loads(body.decode())
         self.requests.append({"method": method, "route": route, "payload": payload, "query": query, "headers": dict(headers),
                               "size": len(body or b"")})
-        if not parts.netloc or f"{parts.scheme}://{parts.netloc}" != self.base.rstrip("/"):
+        if not parts.netloc or f"{parts.scheme}://{parts.netloc}" != f"{own.scheme}://{own.netloc}":
             return 0, {}, b""
         if not headers.get("Authorization"):
             return 401, {}, self._j({"code": "rest_forbidden"})
