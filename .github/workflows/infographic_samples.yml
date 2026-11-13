@@ -1,0 +1,56 @@
+name: PulseO infographic samples
+
+# Renders one English and one Persian infographic card for real (headless Chromium, the Vazirmatn font), with the placeholder
+# colours, and puts them into the Drafts folder of one site so the owner can look at them. Nothing goes to WordPress. Manual only.
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: "The site whose Drafts folder gets the two pictures (a name from SITES_JSON)"
+        required: true
+        default: "site-4"
+
+permissions:
+  contents: read
+
+jobs:
+  samples:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install the browser and the Persian font
+        run: |
+          pip install playwright
+          sudo apt-get update
+          sudo apt-get install -y fonts-vazirmatn || echo "no system package for Vazirmatn: the card loads it from its own address"
+          playwright install --with-deps chromium
+
+      - name: Render the two sample cards
+        env:
+          PYTHONUNBUFFERED: "1"
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
+          SITES_JSON: ${{ secrets.SITES_JSON }}
+          SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
+          INFOGRAPHIC_SAMPLES: "true"
+          INFOGRAPHIC_SITE: ${{ inputs.site }}
+          INFOGRAPHIC_OUT: samples
+        run: python gsc_pulse.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: infographic-samples
+          path: samples/
+          retention-days: 3

@@ -82,7 +82,8 @@ def _build_content(conv, target: Target, slug: str, article_text: str, extra_not
         data = b""
         if not why:
             try:
-                data = target.renderer.render(infographic.build_html(spec, target.brand or infographic.Brand(language=target.language)))
+                data = infographic.render_card(target.renderer,
+                                               infographic.build_html(spec, target.brand or infographic.Brand(language=target.language)))
             except Exception as e:  # noqa: BLE001  a picture that cannot be made is left as its box
                 why = f"the renderer failed ({type(e).__name__})"
             why = why or infographic.check_png(data)

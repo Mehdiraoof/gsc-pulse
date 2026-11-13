@@ -85,10 +85,15 @@ def keep_numbers_in_article(spec: dict, article_text: str) -> tuple:
 # The templates
 # --------------------------------------------------------------------------- #
 
+VAZIRMATN_CSS = "https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css"
+
+
 def _page(spec: dict, brand: Brand, body: str) -> str:
     direction = "rtl" if brand.rtl else "ltr"
+    font_import = f'@import url("{VAZIRMATN_CSS}");' if brand.rtl else ""        # the browser fetches Vazirmatn when it is not installed
     logo = f'<img src="{e(brand.logo_data_uri)}" style="height:44px">' if brand.logo_data_uri else f'<span>{e(brand.name)}</span>'
     return f"""<!doctype html><html lang="{brand.language}" dir="{direction}"><head><meta charset="utf-8"><style>
+{font_import}
 *{{box-sizing:border-box}} body{{margin:0;background:{brand.background};font-family:{brand.font}}}
 #card{{width:{WIDTH}px;padding:56px 64px;background:{brand.background};color:{brand.text}}}
 .top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:34px;color:{brand.primary};font-size:26px;font-weight:700}}
@@ -206,7 +211,40 @@ class ChromiumRenderer:
             browser = p.chromium.launch()
             try:
                 page = browser.new_page(viewport={"width": width, "height": 800})
-                page.set_content(page_html)
+                page.set_content(page_html, wait_until="networkidle")
+                page.evaluate("document.fonts.ready")             # the fonts are there before the picture is taken
                 return page.locator("#card").screenshot(type="png")
             finally:
                 browser.close()
+
+
+def shrink_png(data: bytes, colours: int = 96) -> bytes:
+    """The same picture with a palette of fewer colours (flat cards lose nothing the eye can see): for a PNG that is over the size
+    limit. Needs Pillow (python-pptx brings it); the picture is returned as it is when Pillow is not there."""
+    try:
+        import io
+        from PIL import Image
+    except ImportError:
+        return data
+    image = Image.open(io.BytesIO(data)).convert("RGB").quantize(colors=colours, method=Image.Quantize.MEDIANCUT)
+    out = io.BytesIO()
+    image.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+def render_card(renderer, page_html: str) -> bytes:
+    """The card as a PNG within the limits: shrunk once when it is over the size limit. Check the result with check_png."""
+    data = renderer.render(page_html, WIDTH)
+    if png_size(data)[0] == WIDTH and len(data) > MAX_BYTES:
+        data = shrink_png(data)
+    return data
+
+
+SAMPLES = {
+    "en": {"template": "steps", "title": "How to plant a seed", "numbers": "4 steps",
+           "points": ["Prepare the soil and make a small hole", "Place the seed and cover it lightly", "Water it gently every day",
+                      "Keep it in the light and wait"]},
+    "fa": {"template": "steps", "title": "چگونه یک بذر بکاریم", "numbers": "۴ مرحله",
+           "points": ["خاک را آماده کنید و یک گودال کوچک بکنید", "بذر را بگذارید و روی آن را کم بپوشانید",
+                      "هر روز کم کم آب بدهید", "آن را در نور نگه دارید و صبر کنید"]},
+}
