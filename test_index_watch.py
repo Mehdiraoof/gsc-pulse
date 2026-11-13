@@ -53,6 +53,7 @@ class FakeInspector:
                 self.stopped = "quota reached"
                 return Inspection(url, ok=False, error=self.stopped)
             self.used += 1
+            self.case.clock_time[0] += self.case.tick                          # time the questions take
             self.case.asked.append(url)
             answer = self.case.answers.get(content.url_key(url))
             if isinstance(answer, list):
@@ -66,6 +67,7 @@ class IndexBase(Base):
         super().setUp()
         self.asked, self.answers, self.limit, self.pages, self.rows_before = [], {}, None, [], []
         self.fill_calls = []
+        self.clock_time, self.tick = [0.0], 0
         patcher = mock.patch.object(index_watch, "WORKERS", 1)           # one at a time: the order of the questions is the plan
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -76,6 +78,7 @@ class IndexBase(Base):
         d.content_pages = lambda run: list(self.pages)
         d.page_rows = lambda run, last: self.rows if last == date(2026, 11, 10) else self.rows_before
         d.fill_dashboard = lambda run, table: self.fill_calls.append(table) or 0
+        d.clock = lambda: self.clock_time[0]
         return d
 
     def index_rows(self, label="Example"):
@@ -379,6 +382,19 @@ class KeyPageFindings(IndexBase):
         self.assertIn(("Key pages in Google's index", "failed (first check)"), results)
         self.assertIn(("Key pages in Google's index", "confirmed problem"), results)
         self.assertEqual(self.state().open()["idx_key_index"]["alerted"], "2026-11-12")
+
+    def test_the_rest_of_the_watch_is_done_while_the_second_check_waits(self):
+        self.tick = 1                                                           # every question takes a second
+        self.answers[content.url_key(p(3))] = not_indexed(p(3))
+        self.go()
+        # 20 key pages come before the wait; the 30 sitemap pages after it begins are part of the wait
+        self.assertEqual(self.slept, [1800 - 30])
+        self.assertEqual(self.mails[0][0], "Site alert · Example · Key pages not in Google's index")
+
+    def test_the_key_pages_are_asked_before_the_rest(self):
+        self.go()
+        self.assertEqual(self.asked[:20], [p(i) for i in range(1, 21)])
+        self.assertEqual(len(self.asked), 50)
 
     def test_a_page_that_is_in_the_index_the_second_time_alerts_nobody(self):
         self.answers[content.url_key(p(3))] = [not_indexed(p(3)), ins(p(3))]

@@ -34,7 +34,7 @@ concurrency:
 jobs:
   technical:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90     # a failed check is made again after the wait (30 minutes by default)
+    timeout-minutes: 150    # the index watch of four sites takes about an hour; the wait for the second check (30 minutes) runs alongside
     steps:
       - uses: actions/checkout@v7
 

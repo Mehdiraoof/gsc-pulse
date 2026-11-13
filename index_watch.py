@@ -53,7 +53,7 @@ WHY_DROP, WHY_ROTATION = "Lost impressions", "Sitemap rotation"
 
 QUOTA_PER_DAY, QUOTA_PER_MINUTE = 2000, 600
 INTERVAL_S = 0.2                                 # 300 requests a minute at most: half of the per-minute quota
-WORKERS = 4
+WORKERS = 8                                      # a request takes about two seconds; the pacing below is what keeps the rate down
 MAX_ERRORS = 3                                   # this many answers in a row that are errors stop the run for the site
 NEW_DAYS, UNINDEXED_AFTER_DAYS = 30, 14
 DROP_SHARE, DROP_MIN_IMPRESSIONS = 0.5, 100
@@ -338,10 +338,12 @@ class Round:
     reasons: Counter = field(default_factory=Counter)
 
 
-def inspect_pages(inspector, planned: list, table: Table, clicks_of, today: date, workers: int = None) -> Round:
+def inspect_pages(inspector, planned: list, table: Table, clicks_of, today: date, workers: int = None,
+                  into: "Round" = None) -> Round:
     """Asks about the planned pages and writes the answers into the table. A page that could not be asked about keeps what
-    the table had."""
-    rnd = Round(asked=len(planned))
+    the table had. `into` adds to the counts of an earlier round (the key pages first, the rest later)."""
+    rnd = into if into is not None else Round()
+    rnd.asked += len(planned)
     if not planned:
         return rnd
     with ThreadPoolExecutor(max_workers=workers or WORKERS) as pool:

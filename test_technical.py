@@ -111,7 +111,7 @@ class Base(unittest.TestCase):
             fetch=self.web.fetch, get=self.web.get, sleep=self.slept.append, now=lambda: self.now,
             final=lambda run: date(2026, 11, 10), page_rows=lambda run, last: self.rows,
             sitemaps_api=lambda run: self.api if not isinstance(self.api, Exception) else (_ for _ in ()).throw(self.api),
-            mail=send if mail else None, daily=daily)
+            mail=send if mail else None, daily=daily, clock=lambda: 0.0)
 
     def go(self, mail=True, mail_error=None, runs=None, advance=True, deps=None, daily=False):
         """One daily run (the next day, unless told otherwise). Returns the lines the run prints for its summary."""

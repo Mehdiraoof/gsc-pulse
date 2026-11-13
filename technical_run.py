@@ -16,6 +16,7 @@ Nothing is written to a site. The Reports sheets, the decks and the dashboards a
 """
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
@@ -53,6 +54,7 @@ class Deps:
     inspector: object = None        # (run) -> index_watch.Inspector, or None: the index watch is not made in this run
     content_pages: object = None    # (run) -> [index_watch.ContentPage]; None: read from the site's content dashboard
     fill_dashboard: object = None   # (run, table) -> number of tabs written; None: the site's content dashboard
+    clock: object = time.monotonic  # the clock the waiting for the second check is measured with
 
 
 # --------------------------------------------------------------------------- #
@@ -191,7 +193,21 @@ class Watch:
     clicks_of: object
     today: date
     used_before: int
+    pending: list = field(default_factory=list)       # the pages for the second part of the watch (everything but the key pages)
+    pages: list = field(default_factory=list)         # the content dashboard pages
+    sitemap_urls: list = field(default_factory=list)
+    budget: int = 0
+    daily_max: int = 0
     results: list = field(default_factory=list)
+
+    def finish(self) -> list:
+        """The second part, done while the second check of the health checks waits: the rest of the planned pages are inspected
+        and the findings for the owner (and the line about the use of the quota) are made."""
+        index_watch.inspect_pages(self.inspector, self.pending, self.table, self.clicks_of, self.today, into=self.rnd)
+        self.pending = []
+        return (index_watch.report_results(self.table, self.key_urls, self.pages, self.sitemap_urls, self.rnd, self.today,
+                                           self.clicks_of)
+                + [index_watch.run_result(self.rnd, self.used_before, self.budget, len(self.table.recs), self.daily_max)])
 
     def recheck(self, failing: dict) -> list:
         """The second look, after the wait: the pages the three key findings named are inspected again and the three findings
@@ -254,11 +270,12 @@ def start_watch(run, deps: Deps, ctx: technical.Context, state: TechState, file_
             dropped = []
     blocked = [u for u in ctx.key_urls if content.url_key(u) in ctx.blocked]
     planned = index_watch.plan(ctx.key_urls, blocked, pages, dropped, ctx.sitemap_urls, table, today, budget)
-    rnd = index_watch.inspect_pages(inspector, planned, table, ctx.clicks_of, today)
-    watch = Watch(table, inspector, rnd, ctx.key_urls, ctx.clicks_of, today, used_before)
-    watch.results = (index_watch.key_results(table, ctx.key_urls, rnd, ctx.clicks_of)
-                     + index_watch.report_results(table, ctx.key_urls, pages, ctx.sitemap_urls, rnd, today, ctx.clicks_of)
-                     + [index_watch.run_result(rnd, used_before, budget, len(table.recs), daily_max)])
+    early = [item for item in planned if item[1] in (index_watch.WHY_KEY, index_watch.WHY_BLOCKED)]
+    rnd = index_watch.inspect_pages(inspector, early, table, ctx.clicks_of, today)       # the key pages now: they can alert
+    watch = Watch(table, inspector, rnd, ctx.key_urls, ctx.clicks_of, today, used_before,
+                  pending=[item for item in planned if item not in early], pages=pages, sitemap_urls=list(ctx.sitemap_urls),
+                  budget=budget, daily_max=daily_max)
+    watch.results = index_watch.key_results(table, ctx.key_urls, rnd, ctx.clicks_of)
     return watch
 
 
@@ -429,11 +446,19 @@ def run_technical(runs: list, deps: Deps, log=print, on_error=None) -> list:
             lines.append(f"{run.name}: failed")
     failing = [w for w in works if technical.failing_of(w.first)]
     if failing:
-        minutes = max(w.ctx.cfg.confirm_minutes for w in failing)
         log(f"technical: {sum(len(technical.failing_of(w.first)) for w in failing)} checks failed in {len(failing)} sites; "
-            f"the second check comes in {minutes} minutes")
-        if minutes and deps.sleep:
-            deps.sleep(minutes * 60)
+            f"the second check comes in {max(w.ctx.cfg.confirm_minutes for w in failing)} minutes")
+    started = deps.clock()
+    for w in works:                                   # the rest of the index watch takes the time the second check waits anyway
+        if w.watch and w.watch.pending:
+            try:
+                w.first.results += w.watch.finish()
+            except Exception as e:                    # noqa: BLE001  the findings for the owner never stop the health checks
+                log(f"technical: {w.run.name}: the index watch could not be finished ({type(e).__name__})")
+    if failing:
+        remaining = max(w.ctx.cfg.confirm_minutes for w in failing) * 60 - (deps.clock() - started)
+        if remaining > 0 and deps.sleep:
+            deps.sleep(remaining)
     good = []
     for w in works:
         try:
