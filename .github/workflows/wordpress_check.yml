@@ -1,12 +1,18 @@
 name: PulseO WordPress check
 
 # Read only: GET requests to the WordPress REST API of the installs named below, with the Application Password of the
-# account made for PulseO. It writes nothing and prints counts only. Started by hand; there is no schedule.
+# account made for PulseO. It writes nothing to WordPress and prints counts only. It also reads the logo, the site icon and the
+# theme colours of each install and lists them in the Brand tab of the site's content dashboard, for the owner to approve.
+# Started by hand; there is no schedule.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: gsc-pulse-sync       # it adds rows to the Brand tab of the content dashboards, which the sync refreshes
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -26,6 +32,9 @@ jobs:
       - name: Check the WordPress installs
         env:
           PYTHONUNBUFFERED: "1"
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
+          BRAND_GIVEN: "site-1=#8d6bff"             # a colour the owner gave in words: listed in the Brand tab with Use already yes
           SITES_JSON: ${{ secrets.SITES_JSON }}
           SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
           SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}

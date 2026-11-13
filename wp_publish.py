@@ -52,6 +52,7 @@ class Outcome:
     post_id: int = 0
     infographics: int = 0
     log: list = field(default_factory=list)          # [(action, post id)] for the WordPress Log
+    address: str = ""                                # the address a NEW post will have once it is published (not for an update)
 
 
 def plain_text(content: str) -> str:
@@ -96,7 +97,10 @@ def _build_content(conv, target: Target, slug: str, article_text: str, extra_not
         media = target.wp.upload_media(name, data, alt=spec["title"])
         outcome_log.append(("uploaded an infographic", media.get("id", 0)))
         if target.save_copy:
-            target.save_copy(name, data)
+            try:
+                target.save_copy(name, data)
+            except Exception as e:  # noqa: BLE001  a copy that cannot be saved never stops the draft
+                lines.append(f"A copy of the infographic could not be saved in the Drafts folder ({type(e).__name__}).")
         if dropped:
             lines.append(f"Numbers left out of the infographic because they are not in the article: {html.escape(', '.join(dropped))}.")
         parts.append(wp_blocks.image_block(media["id"], media.get("source_url", ""), spec["title"]))
@@ -135,7 +139,8 @@ def to_wordpress(row: dict, doc_html: str, target: Target, today: date, tab_hint
     token = (f" [wp update draft={pid} original={original['id']} modified={original['modified']} lang={language}]" if live_slug else "")
     note = (f"In WordPress as a draft{' (update)' if live_slug else ''}, {today.isoformat()}: open the preview, add images, fill the "
             f"SEO title and description, remove the boxes, then {'publish' if not live_slug else 'set To Do to Apply update'}.{token}")
-    return Outcome(True, note, {"Status": STATUS_IN_WP, "To Do": "Review", "_attach": link, "_note": note}, pid, made, log)
+    address = "" if live_slug else f"{wp.base.rstrip('/')}/{post.get('slug') or slug or pid}/"
+    return Outcome(True, note, {"Status": STATUS_IN_WP, "To Do": "Review", "_attach": link, "_note": note}, pid, made, log, address)
 
 
 def _categories(wp) -> list:

@@ -68,6 +68,7 @@ import reports
 import site_check
 import views
 import weekly_brief
+import wp_brand
 import wp_check
 import wp_run
 import history
@@ -968,10 +969,43 @@ def infographic_samples_command(site_list: list):
         print(f"  infographic sample {language}: saved in the Drafts folder")
 
 
+def wordpress_brand_command(site_list: list):
+    """Part of the WordPress check: reads the logo, the site icon and the theme colours of each install (GET requests only, nothing is
+    written to WordPress) and lists them in the Brand tab of the site's content dashboard for the owner to look at. Nothing found is used
+    until the owner writes yes in the Use column. The log holds counts only."""
+    wanted = {n.strip().lower() for n in (os.environ.get("WORDPRESS_SITES") or "").split(",") if n.strip()}
+    given = wp_brand.given_colours(os.environ)
+    try:
+        clients = auth.build_me_clients(os.environ, build)
+    except auth.AuthError:
+        clients = None
+        print("  wordpress brand: no Google access, so the findings are not saved in a sheet")
+    for site in site_list:
+        if (wanted and site.name.lower() not in wanted) or not wp_check.installs_for(site, os.environ):
+            continue
+        rows = []
+        for install in wp_check.installs_for(site, os.environ):
+            try:
+                found = wp_brand.discover(install)
+            except Exception as e:  # noqa: BLE001  one install never stops the others
+                print(f"  wordpress brand: {install.name}: could not be read ({type(e).__name__})")
+                continue
+            for line in wp_brand.lines_for(install, found):
+                print(f"  wordpress brand: {line}")
+            rows += wp_brand.rows_for(install, found, given.get(site.name.lower(), ""))
+        if not (clients and rows and site.auth == "me" and site.content.enabled):
+            continue
+        dash_id = provision.existing_content_file(clients.drive, clients.sheets, site)
+        if dash_id:
+            added = wp_brand.write_rows(clients.sheets, dash_id, rows)
+            print(f"  wordpress brand: {site.name}: {added} rows added to the Brand tab of the dashboard")
+
+
 def wordpress_publish_command(runs: list):
     """Publishing: the approved rows of the content dashboards (To Do To WordPress, Apply update) go to WordPress as drafts and
     updates. A DRY RUN unless WORDPRESS_PUBLISH_WRITE is "yes": it then only says how many rows would be sent. Never scheduled,
     never publishes; counts only in the log."""
+    import drive_files
     import gdocs
     import infographic
     import wp_api
@@ -993,13 +1027,24 @@ def wordpress_publish_command(runs: list):
         for i in installs.values():
             _SENSITIVE.extend([i.user, i.password])
 
-        def targets(language, site=site, installs=installs):
+        drafts = {}                                      # the site's Drafts folder, found (or made) the first time a copy is saved
+
+        def save_copy(language, name, data, r=r, site=site, drafts=drafts):
+            """A copy of each infographic goes into the Drafts folder of the site (the language in front of the name)."""
+            if "id" not in drafts:
+                drafts["id"] = site.content.drafts_folder_id or provision.content_folders(r.drive, site, site.deck.site_label or site.name)["drafts"]
+                _SENSITIVE.append(drafts["id"])
+            drive_files.upload_file(r.drive, drafts["id"], f"{language}-{name}", data)
+
+        def targets(language, site=site, installs=installs, save_copy=save_copy):
             install = installs.get(language.lower()) or installs.get("")
             if install is None:
                 return None
             wp = wp_api.Wp(install)
+            brand = wp_brand.apply(infographic.brand_for(site, language), wp_brand.approved(r.sheets, dash_id, site.name, language))
             return wp_publish.Target(wp, site_check.origin_of(site.site_url) + (site.content.languages.get(language, "") if site.content.languages else ""),
-                                     language, infographic.brand_for(site, language), renderer)
+                                     language, brand, renderer,
+                                     (lambda name, data, language=language: save_copy(language, name, data)))
         report = wp_run.publish_site(r, dash_id, targets, lambda doc_id, r=r: gdocs.export_html(r.drive, doc_id),
                                      date.today(), write, print)
         print(f"{r.name}: wordpress publish: {report.seen} rows asked for; {report.text()}")
@@ -1486,6 +1531,7 @@ def main():
                 _SENSITIVE.extend(v for v in (install.user, install.password) if v)
         for line in wp_check.check_lines(site_list, os.environ):
             print(f"  wordpress check: {line}")
+        wordpress_brand_command(site_list)
         return
 
     # ---- A read-only check of what the tool's Google access can open: its own command ---------------------------

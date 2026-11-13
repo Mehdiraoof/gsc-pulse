@@ -167,6 +167,101 @@ class Languages(Base):
         self.assertEqual(wp_run.doc_language("<p>short</p>", "fa"), "fa")                # too little to tell: the site's own
 
 
+class Copies(Base):
+    """A copy of every infographic that goes to WordPress is also handed to the Drafts folder."""
+
+    def with_copy(self, save):
+        def make(language):
+            target = self.target(language)
+            target.save_copy = save
+            return target
+        return make
+
+    def test_each_infographic_is_copied_once_with_its_file_name(self):
+        saved = []
+        self.add(**{content.KEY: "kitchen", content.TODO: "To WordPress", "Attachments": DOC, "Slug": "kitchen-ideas"})
+        report = self.go(targets=self.with_copy(lambda name, data: saved.append((name, data))))
+        self.assertEqual(report.drafts, 1)
+        self.assertGreaterEqual(len(saved), 1)
+        self.assertTrue(all(name.endswith(".png") and data[:8] == b"\x89PNG\r\n\x1a\n" for name, data in saved))
+        self.assertEqual(len(self.en.media), len(saved))                               # one copy for each picture sent to WordPress
+
+    def test_a_copy_that_cannot_be_saved_does_not_stop_the_draft_and_the_box_says_so(self):
+        def broken(name, data):
+            raise OSError("no room")
+        self.add(**{content.KEY: "kitchen", content.TODO: "To WordPress", "Attachments": DOC, "Slug": "kitchen-ideas"})
+        report = self.go(targets=self.with_copy(broken))
+        self.assertEqual((report.drafts, report.failed), (1, 0))
+        post = next(iter(self.en.posts.values()))
+        self.assertIn("could not be saved in the Drafts folder", post["content"]["raw"])
+        self.assertEqual(self.cell(1, content.STATUS), "In WordPress")
+
+
+class Pairs(Base):
+    """An English page and its Persian page are listed in each other's Related URLs (add only)."""
+
+    def setUp(self):
+        super().setUp()
+        self.site = make_site(sheet_id="DASH", languages={"en": "", "fa": "/fa"})
+        self.run = SimpleNamespace(site=self.site, name="site-x", sheets=self.fs, drive=None)
+
+    def test_a_persian_draft_and_its_english_page_named_in_related_urls_are_listed_in_both_rows(self):
+        en_url = f"{HOME}/kitchen-ideas/"
+        self.add(**{content.KEY: "kitchen", content.URL: en_url, content.STATUS: "Published", content.TODO: "Keep",
+                    "Related URLs": f"{HOME}/other/"})
+        self.add(**{content.KEY: "kitchen fa", content.TODO: "To WordPress", "Attachments": gdocs.doc_link("DOCFA"),
+                    "Slug": "kitchen-ideas", "Related URLs": en_url})
+        report = self.go()
+        self.assertEqual((report.drafts, report.pairs), (1, 1))
+        fa_url = f"{HOME}/fa/kitchen-ideas/"
+        self.assertEqual(self.cell(2, "Related URLs"), en_url)                       # already there: not added twice
+        self.assertEqual(self.cell(1, "Related URLs"), f"{HOME}/other/\n{fa_url}")   # added after what was there
+
+    def test_the_english_page_published_with_the_same_slug_is_found_in_wordpress(self):
+        self.en.add_post("Kitchen ideas", LIVE, "publish", "kitchen-ideas")
+        en_url = f"{HOME}/kitchen-ideas/"
+        self.add(**{content.KEY: "kitchen", content.URL: en_url, content.STATUS: "Published", content.TODO: "Keep"})
+        self.add(**{content.KEY: "kitchen fa", content.TODO: "To WordPress", "Attachments": gdocs.doc_link("DOCFA"),
+                    "Slug": "kitchen-ideas"})
+        report = self.go()
+        self.assertEqual(report.pairs, 1)
+        self.assertEqual(self.cell(2, "Related URLs"), en_url)
+        self.assertEqual(self.cell(1, "Related URLs"), f"{HOME}/fa/kitchen-ideas/")
+
+    def test_no_partner_no_pair_and_nothing_extra_is_written(self):
+        self.add(**{content.KEY: "kitchen fa", content.TODO: "To WordPress", "Attachments": gdocs.doc_link("DOCFA"),
+                    "Slug": "kitchen-ideas"})
+        report = self.go()
+        self.assertEqual((report.drafts, report.pairs), (1, 0))
+        self.assertEqual(self.cell(1, "Related URLs"), "")
+
+    def test_a_site_of_one_language_writes_no_pairs(self):
+        self.site = make_site(sheet_id="DASH")
+        self.run = SimpleNamespace(site=self.site, name="site-x", sheets=self.fs, drive=None)
+        self.add(**{content.KEY: "a", content.TODO: "To WordPress", "Attachments": DOC, "Slug": "a",
+                    "Related URLs": f"{HOME}/fa/a/"})
+        report = self.go()
+        self.assertEqual(report.pairs, 0)
+        self.assertEqual(self.cell(1, "Related URLs"), f"{HOME}/fa/a/")
+
+    def test_an_update_draft_writes_no_pair(self):
+        self.en.add_post("Kitchen ideas", LIVE, "publish", "kitchen-ideas")
+        self.add(**{content.KEY: "kitchen", content.URL: f"{HOME}/kitchen-ideas/", content.TODO: "To WordPress",
+                    "Attachments": DOC})
+        self.assertEqual(self.go().pairs, 0)
+
+    def test_the_pair_is_not_added_again_when_the_row_is_sent_twice(self):
+        en_url = f"{HOME}/kitchen-ideas/"
+        self.add(**{content.KEY: "kitchen", content.URL: en_url, content.STATUS: "Published", content.TODO: "Keep"})
+        self.add(**{content.KEY: "kitchen fa", content.TODO: "To WordPress", "Attachments": gdocs.doc_link("DOCFA"),
+                    "Slug": "kitchen-ideas", "Related URLs": en_url})
+        self.go()
+        data = self.fs.books["DASH"]["Articles"].data
+        data[2][data[0].index(content.TODO)] = "To WordPress"
+        self.go()
+        self.assertEqual(self.cell(1, "Related URLs"), f"{HOME}/fa/kitchen-ideas/")
+
+
 class Updates(Base):
 
     def make_draft(self):

@@ -18,6 +18,7 @@ document is written in. A DRY RUN (the default) reads and decides but writes not
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from urllib.parse import urlsplit
 
 import content
 import content_create
@@ -40,7 +41,8 @@ class Report:
     updates: int = 0
     refused: int = 0
     failed: int = 0
-    would: int = 0                  # in a dry run: the rows that would have been sent
+    pairs: int = 0                  # language pairs written to Related URLs
+    would: int = 0                 # in a dry run: the rows that would have been sent
     lines: list = field(default_factory=list)
 
     def text(self) -> str:
@@ -138,7 +140,82 @@ def publish_site(run, dash_id: str, targets, read_doc, today: date, write: bool 
                     values["Notes/Checklist"] = content_create.appended(notes, outcome.note)
             _write_cells(sheets, dash_id, tab, header, sheet_row, values)
             _log(sheets, dash_id, [[today.isoformat(), site.name, pid, action] for action, pid in outcome.log])
+            if outcome.ok and kind == "draft" and outcome.address:
+                try:
+                    report.pairs += write_pair(run, dash_id, info, tab, header, sheet_row, row, outcome.address, language, targets)
+                except Exception as e:  # noqa: BLE001  a pair that cannot be written never undoes the draft
+                    log(f"  wordpress: a language pair could not be written ({type(e).__name__})")
     return report
+
+
+def _added(have, address: str) -> str:
+    """Related URLs with the address added at the end, once; "" when it is there already (what is there stays)."""
+    have = str(have or "")
+    if content.url_key(address) in {content.url_key(x) for x in re.split(r"[\s,]+", have) if x}:
+        return ""
+    return (have.rstrip() + "\n" if have.strip() else "") + address
+
+
+def _folder_language(url: str, prefixes: dict) -> str:
+    """The language of an address by its folder: the language whose folder it is under, else the language without a folder."""
+    path = urlsplit(url).path
+    for code, folder in prefixes.items():
+        if folder and (path == folder or path.startswith(folder + "/")):
+            return code
+    return next((code for code, folder in prefixes.items() if not folder), "")
+
+
+def _partner(row, address: str, language: str, other: str, prefixes: dict, targets) -> str:
+    """The address of the same page in the other language: one already named in the row's Related URLs, else the page of the same
+    slug that is PUBLISHED in the other install (read only). "" when there is none."""
+    for part in re.split(r"[\s,]+", str(row.get("Related URLs", ""))):
+        if part.startswith("http") and _folder_language(part, prefixes) == other:
+            return part
+    import content_run
+    mirror = content_run.mirror_url(address, language, other, prefixes)
+    target = targets(other) if mirror else None
+    if target is None:
+        return ""
+    found = target.wp.find_by_slug(pub.slug_of(mirror), "publish")
+    return found.get("link", "") if found else ""
+
+
+def _find_row(sheets, dash_id: str, site, info: dict, url: str):
+    """(tab, header, sheet row, row) of the dashboard row whose address is `url`, or None."""
+    for tab in (t.name for t in site.content.tabs):
+        if tab not in info:
+            continue
+        header = cs.read_header(sheets, dash_id, tab)
+        _, rows = cs.table_of(cs.read_all(sheets, dash_id, tab))
+        for i, row in enumerate(rows):
+            if str(row.get(content.URL, "")).strip() and content.url_key(str(row[content.URL])) == content.url_key(url):
+                return tab, header, i + 2, row
+    return None
+
+
+def write_pair(run, dash_id: str, info: dict, tab: str, header: list, sheet_row: int, row: dict, address: str, language: str,
+               targets) -> int:
+    """A new draft of one language and its page in the other language are listed in each other's Related URLs (add only; the pair
+    is ready for hreflang). Needs a site of two languages; the partner is a page named in the row's Related URLs, else the page
+    of the same slug published in the other install. 1 when a pair was written, else 0."""
+    site, sheets = run.site, run.sheets
+    prefixes = site.content.languages or {}
+    if len(prefixes) != 2 or language not in prefixes:
+        return 0
+    other = next(code for code in prefixes if code != language)
+    partner = _partner(row, address, language, other, prefixes, targets)
+    if not partner:
+        return 0
+    here = _added(row.get("Related URLs"), partner)
+    if here:
+        _write_cells(sheets, dash_id, tab, header, sheet_row, {"Related URLs": here})
+    found = _find_row(sheets, dash_id, site, info, partner)
+    if found:
+        p_tab, p_header, p_row, p_cells = found
+        there = _added(p_cells.get("Related URLs"), address)
+        if there:
+            _write_cells(sheets, dash_id, p_tab, p_header, p_row, {"Related URLs": there})
+    return 1
 
 
 def _note(sheets, dash_id, tab, header, sheet_row, notes, text, write):
