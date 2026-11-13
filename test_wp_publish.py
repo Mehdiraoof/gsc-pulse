@@ -362,7 +362,7 @@ class Updates(Base):
         self.fake.posts[self.draft_id]["title"]["raw"] = "Update · A better title"
         self.fake.posts[self.draft_id]["excerpt"]["raw"] = "new excerpt"
         self.fake.edit_elsewhere(self.draft_id, "<p>" + "Newer text. " * 80 + "</p>")
-        self.fake.posts[self.original]["modified"] = self.notes.split("modified=")[1].split("]")[0]
+        self.fake.posts[self.original]["modified"] = self.notes.split("modified=")[1].split(" ")[0].split("]")[0]
         self.apply()
         last = [r for r in self.fake.writes() if r["route"] == f"/wp/v2/posts/{self.original}"][-1]
         self.assertEqual((last["payload"]["title"], last["payload"]["excerpt"]), ("A better title", "new excerpt"))

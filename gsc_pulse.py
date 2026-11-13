@@ -69,6 +69,7 @@ import site_check
 import views
 import weekly_brief
 import wp_check
+import wp_run
 import history
 import index_watch
 import keyword_fix
@@ -925,6 +926,43 @@ def sync_decks(sheets_service, run: SiteRun, smtp, rebuild_decks=False, mark_onl
     print()
 
 
+def wordpress_publish_command(runs: list):
+    """Publishing: the approved rows of the content dashboards (To Do To WordPress, Apply update) go to WordPress as drafts and
+    updates. A DRY RUN unless WORDPRESS_PUBLISH_WRITE is "yes": it then only says how many rows would be sent. Never scheduled,
+    never publishes; counts only in the log."""
+    import gdocs
+    import infographic
+    import wp_api
+    import wp_publish
+    write = os.environ.get("WORDPRESS_PUBLISH_WRITE", "").strip().lower() == "yes"
+    renderer = infographic.ChromiumRenderer() if os.environ.get("WORDPRESS_RENDER", "").strip().lower() == "chromium" else None
+    print(f"wordpress publish: {'WRITING (drafts and updates only)' if write else 'dry run, nothing is written'}")
+    for r in runs:
+        site = r.site
+        if r.status == "failed" or site.auth != "me" or r.drive is None or not site.content.enabled:
+            continue
+        installs = {i.label.lower(): i for i in wp_check.installs_for(site, os.environ) if i.user and i.password}
+        if not installs:
+            print(f"{r.name}: wordpress publish: no WordPress login saved for this site")
+            continue
+        dash_id = provision.existing_content_file(r.drive, r.sheets, site)
+        if not dash_id:
+            continue
+        for i in installs.values():
+            _SENSITIVE.extend([i.user, i.password])
+
+        def targets(language, site=site, installs=installs):
+            install = installs.get(language.lower()) or installs.get("")
+            if install is None:
+                return None
+            wp = wp_api.Wp(install)
+            return wp_publish.Target(wp, site_check.origin_of(site.site_url) + (site.content.languages.get(language, "") if site.content.languages else ""),
+                                     language, infographic.brand_for(site, language), renderer)
+        report = wp_run.publish_site(r, dash_id, targets, lambda doc_id, r=r: gdocs.export_html(r.drive, doc_id),
+                                     date.today(), write, print)
+        print(f"{r.name}: wordpress publish: {report.seen} rows asked for; {report.text()}")
+
+
 def sync_weekly_brief(runs: list, smtp, gate: str = ""):
     """The one weekly email for all sites (it replaces the weekly decks). In the sync (gate "") only its row for the owner's
     plan is written; at the deck checks it is sent: at the first check when the text is ready, at the second check (and the
@@ -1469,6 +1507,11 @@ def main():
     # ---- The daily technical run (health checks and alerts): its own command, nothing else runs ------------------
     if os.environ.get("TECHNICAL_RUN", "").strip().lower() in ("1", "true", "yes"):
         technical_command(enabled, owner_smtp)
+        return
+
+    # ---- Publishing to WordPress: its own command (a dry run unless it is told to write), nothing else runs --------
+    if os.environ.get("WORDPRESS_PUBLISH", "").strip().lower() in ("1", "true", "yes"):
+        wordpress_publish_command(enabled)
         return
 
     # ---- A refresh of the content dashboard on a copy of it: its own command, nothing else runs -----------------

@@ -30,7 +30,7 @@ STATUS_IN_WP, STATUS_UPDATED = "In WordPress", "Updated"
 UPDATE_PREFIX = "Update · "
 MIN_SHARE = 0.6
 INTENDED = "shorter is intended"
-TOKEN = re.compile(r"\[wp update draft=(\d+) original=(\d+) modified=([^\]\s]+)\]")
+TOKEN = re.compile(r"\[wp update draft=(\d+) original=(\d+) modified=([^\]\s]+)(?: lang=(\w+))?\]")
 
 
 @dataclass
@@ -131,7 +131,7 @@ def to_wordpress(row: dict, doc_html: str, target: Target, today: date, tab_hint
     pid = post["id"]
     log.append(("created a draft", pid))
     link = preview_link(wp.base, pid)
-    token = (f" [wp update draft={pid} original={original['id']} modified={original['modified']}]" if live_slug else "")
+    token = (f" [wp update draft={pid} original={original['id']} modified={original['modified']} lang={language}]" if live_slug else "")
     note = (f"In WordPress as a draft{' (update)' if live_slug else ''}, {today.isoformat()}: open the preview, add images, fill the "
             f"SEO title and description, remove the boxes, then {'publish' if not live_slug else 'set To Do to Apply update'}.{token}")
     return Outcome(True, note, {"Status": STATUS_IN_WP, "To Do": "Review", "_attach": link, "_note": note}, pid, made, log)

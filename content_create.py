@@ -276,6 +276,8 @@ def draft_rules(cfg: CreateConfig, item: Item, links: list, has_comparison: bool
     touch = ("[تجربه شخصی: ...] and [نظر متخصص: ...]" if cfg.language == "fa"
              else "[Personal experience: ...] and [Expert quote: ...]")
     slot = "[عکس: description | alt text | file-name.jpg]" if cfg.language == "fa" else "[Image: description | alt text | file-name.jpg]"
+    info = ("[اینفوگرافیک: template | title | point; point; point | numbers]" if cfg.language == "fa"
+            else "[Infographic: template | title | point; point; point | numbers]")
     persian = ("Write natural Persian, never a word-for-word translation. Use the Persian letters ی and ک (never ي or ك), "
                "Persian digits (۰۱۲۳۴۵۶۷۸۹) in running text, and a zero-width non-joiner where Persian spelling needs one. "
                "A number inside a Latin word (S24, 5G) stays as it is. " if cfg.language == "fa" else "")
@@ -288,6 +290,7 @@ def draft_rules(cfg: CreateConfig, item: Item, links: list, has_comparison: bool
 - Finish the article with an H2 whose text is exactly "{h['summary']}": a short summary and one next step for the reader.
 - Internal links: use 3 to 5 links, each address ONCE, only from the list of allowed addresses, written as Markdown links [anchor text](address). No other internal links.
 - Image slots: at least three paragraphs of the form {slot} where a picture belongs.
+- Infographic: at least ONE paragraph of the form {info} where an infographic fits (code draws it, so write only what it needs). The template is one of: steps, comparison, pros and cons, price table, checklist, key takeaways, facts card (the facts card fits almost any article). Give a short title and 3 to 6 short points separated by ";". Put numbers after the last "|" only if they are in the article. For a comparison write each point as "left vs right"; for pros and cons start each point with "pro:" or "con:"; for a price table write each point as "item: price".
 - Human touch: 2 to 4 markers in total, in the form {touch}, where the writer must add a real personal experience or a real expert quote. Never invent a quote or an experience: write what is needed, not a made-up story.
 - Never invent facts, prices, statistics or quotes. A number or claim that you could not verify is followed by [needs checking].
 - Do not mention AI, models, tools or the SOP in the article. No em dash and no en dash.

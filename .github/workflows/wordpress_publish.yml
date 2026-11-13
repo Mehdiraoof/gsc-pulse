@@ -1,0 +1,58 @@
+name: PulseO WordPress publishing
+
+# The rows of the content dashboards that the owner approved (To Do "To WordPress" or "Apply update") go to WordPress as DRAFTS and
+# updates. A dry run unless "write" is ticked: it then only says how many rows would be sent. It never publishes. Started by hand
+# only; there is no schedule. Nothing is written to a real site until the owner has said so.
+on:
+  workflow_dispatch:
+    inputs:
+      only_site:
+        description: "Run for this one site only (a name from SITES_JSON)"
+        required: false
+        default: ""
+      write:
+        description: "Really write the drafts and updates to WordPress (otherwise a dry run that writes nothing, anywhere)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gsc-pulse-sync       # it edits cells of the content dashboards, which the sync refreshes
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Publish the approved rows to WordPress
+        env:
+          PYTHONUNBUFFERED: "1"
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_OAUTH_JSON: ${{ secrets.GSC_OAUTH_JSON }}
+          SITES_JSON: ${{ secrets.SITES_JSON }}
+          SITES_JSON_EXTRA: ${{ secrets.SITES_JSON_EXTRA }}
+          SITES_JSON_MORE: ${{ secrets.SITES_JSON_MORE }}
+          ONLY_SITE: ${{ inputs.only_site }}
+          WORDPRESS_PUBLISH: "true"
+          WORDPRESS_PUBLISH_WRITE: ${{ inputs.write && 'yes' || '' }}
+          WP_SITE1_USER: ${{ secrets.WP_SITE1_USER }}
+          WP_SITE1_APP_PASSWORD: ${{ secrets.WP_SITE1_APP_PASSWORD }}
+          WP_SITE4_EN_USER: ${{ secrets.WP_SITE4_EN_USER }}
+          WP_SITE4_EN_APP_PASSWORD: ${{ secrets.WP_SITE4_EN_APP_PASSWORD }}
+          WP_SITE4_FA_USER: ${{ secrets.WP_SITE4_FA_USER }}
+          WP_SITE4_FA_APP_PASSWORD: ${{ secrets.WP_SITE4_FA_APP_PASSWORD }}
+        run: python gsc_pulse.py
